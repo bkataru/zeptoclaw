@@ -1,0 +1,45 @@
+.{
+  .name = .zeptoclaw,
+    .version = "0.0.0",
+  .fingerprint = 0xa6ef588ae1c4ad24,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .utcp = .{
+            .url = "git+https://github.com/bkataru/zig-utcp.git#7362240ee9ded62d10bf6a060f7c88c69ab24ef9",
+            .hash = "utcp-0.1.0-fH_2Nb4IBQCnczDwnBp33PXhap5MzN1BayLwbdfNJKg4",
+        },
+        .mcp = .{
+            .url = "git+https://github.com/bkataru/mcp.zig.git#7de378e6bf3ad972b163c8d8aa61a7e6480e15fd",
+            .hash = "mcp-0.2.1-l6WL64iTBgAgHnZcMWl3qn0Rd1B5lO2KuxtX3yXNwp0L",
+        },
+        .raikage = .{
+            .url = "git+https://github.com/bkataru/raikage.git#9797056eb0c44fa88ac26df0148eeb8bb69a0809",
+            .hash = "raikage-1.0.0-IrwqHWwQAQBTumx__OLxaMjNv0Z9VUxJCXNPy0Ldk06v",
+        },
+        .hf_hub_zig = .{
+            .url = "git+https://github.com/bkataru/hf-hub-zig.git#989e535193727ceda14567845e8b2b5629c1c77e",
+            .hash = "hf_hub_zig-0.1.0-QN2u5PMSBgBDst4qwQ23cWCt_yDqK9vJv0Hw-TjHUrRd",
+        },
+        .niza = .{
+            .url = "git+https://github.com/bkataru/niza.git#a68357e676390fb2156812d09390e0ac6cbb3e45",
+            .hash = "niza-0.1.0-2slLoibQAQDRq66AeIGFhSRNbOUqpJIVSd7jr8YfoH0B",
+        },
+        .zenmap = .{
+            .url = "git+https://github.com/bkataru/zenmap.git#0d391de5827020afd4584331e23fbceb5bd87545",
+            .hash = "zenmap-0.1.0-gCHGZMa7AAAPHZyEcMWkl4HH6eF8qFRCGRTWLkHU5bOu",
+        },
+        .zeitgeist = .{
+            .path = "vendor/zeitgeist",
+        },
+        .comprezz = .{
+            .path = "vendor/comprezz",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "vendor/zeitgeist",
+        "vendor/comprezz",
+    },
+}
