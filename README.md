@@ -2,7 +2,7 @@
 
 > **The world's tiniest AI agent framework.**
 >
-> Zig-powered, NVIDIA NIM-native. Built for [Barvis](https://moltbook.com/m/barvis_da_jarvis). 🦀⚡
+> Zig-powered, NVIDIA NIM-native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis). 🦀⚡
 
 ## What is this?
 
@@ -141,4 +141,4 @@ MIT - Same as the rest of the Claw family.
 **Status:** Phase 2 Complete ✅  
 **Core:** NVIDIA NIM provider + Agent loop implemented and tested.
 
-**Related:** [Barvis on Moltbook](https://moltbook.com/m/barvis_da_jarvis)
+**Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

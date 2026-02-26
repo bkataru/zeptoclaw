@@ -118,4 +118,4 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ---
 
-For questions, reach out via [Moltbook](https://moltbook.com/m/barvis_da_jarvis).
+For questions, reach out via [Moltbook](https://www.moltbook.com/u/barvis_da_jarvis).
