@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const config_module = @import("../config.zig");
 
+
 pub const NIMClient = struct {
     allocator: std.mem.Allocator,
     api_key: []const u8,
@@ -23,86 +24,176 @@ pub const NIMClient = struct {
         self.client.deinit();
     }
 
-    pub fn chatCompletion(self: *NIMClient, request: types.ChatCompletionRequest) !types.ChatCompletionResponse {
-        // Build request body
-        var body_buf: std.ArrayList(u8) = .{};
-        defer body_buf.deinit(self.allocator);
-        
-        var stringify: std.json.Stringify = .{ .writer = body_buf.writer(self.allocator) };
-        try stringify.write(std.json.Value{ .object = try requestToMap(request, self.allocator) });
-        
-        // Make HTTP request
-        var header_buf: [1024]u8 = undefined;
-        var req = try self.client.open(.POST, std.Uri.parse(BASE_URL), .{
-            .server_header_buffer = &header_buf,
-            .extra_headers = &.{
-                .{ .name = "Authorization", .value = "Bearer " ++ self.api_key },
-                .{ .name = "Content-Type", .value = "application/json" },
-            },
-        });
-        defer req.deinit();
-        
-        try req.send(body_buf.items);
-        try req.finish();
-        try req.wait();
-        
-        if (req.response.status != .ok) {
-            return switch (req.response.status) {
-                .unauthorized => error.Auth,
-                .too_many_requests => error.RateLimit,
-                else => error.InvalidResponse,
+    /// Send chat completion request and return response
+    pub fn chat(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
+        // Build request body as JSON string
+        var out = std.io.Writer.Allocating.init(self.allocator);
+        defer out.deinit();
+
+        var stringifier = std.json.Stringify{
+            .writer = &out.writer,
+            .options = .{},
+        };
+
+        stringifier.beginObject() catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        stringifier.objectField("model") catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        stringifier.write(self.model) catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+
+        // Add messages
+        stringifier.objectField("messages") catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        stringifier.beginArray() catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        for (messages) |msg| {
+            stringifier.beginObject() catch |err| return switch (err) {
+                error.WriteFailed => types.ProviderError.Network,
+            };
+            stringifier.objectField("role") catch |err| return switch (err) {
+                error.WriteFailed => types.ProviderError.Network,
+            };
+            stringifier.write(msg.role.toString()) catch |err| return switch (err) {
+                error.WriteFailed => types.ProviderError.Network,
+            };
+            if (msg.content) |content| {
+                stringifier.objectField("content") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write(content) catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+            }
+            stringifier.endObject() catch |err| return switch (err) {
+                error.WriteFailed => types.ProviderError.Network,
             };
         }
-        
-        // Read response
-        const response_body = try req.reader().readAllAlloc(self.allocator, 1024 * 1024);
-        defer self.allocator.free(response_body);
-        
-        // Parse JSON response
-        const parsed = try std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_body, .{});
-        return parsed.value;
-    }
+        stringifier.endArray() catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        stringifier.endObject() catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
 
-    fn requestToMap(request: types.ChatCompletionRequest, allocator: std.mem.Allocator) !std.json.ObjectMap {
-        var map = std.json.ObjectMap.init(allocator);
-        errdefer map.deinit();
-        
-        try map.put("model", std.json.Value{ .string = request.model });
-        
-        // Convert messages to JSON array
-        var messages_arr = std.json.Array.init(allocator);
-        errdefer messages_arr.deinit();
-        
-        for (request.messages) |msg| {
-            var msg_map = std.json.ObjectMap.init(allocator);
-            try msg_map.put("role", std.json.Value{ .string = msg.role.toString() });
-            if (msg.content) |c| {
-                try msg_map.put("content", std.json.Value{ .string = c });
-            }
-            try messages_arr.append(std.json.Value{ .object = msg_map });
+        const body = out.written();
+
+        // Build Authorization header value
+        var auth_buf = std.ArrayList(u8){};
+        defer auth_buf.deinit(self.allocator);
+        auth_buf.writer(self.allocator).writeAll("Bearer ") catch return types.ProviderError.Network;
+        auth_buf.writer(self.allocator).writeAll(self.api_key) catch return types.ProviderError.Network;
+
+        // Make HTTP request
+        const uri = std.Uri.parse(BASE_URL) catch return types.ProviderError.Network;
+        var req = self.client.request(.POST, uri, .{
+            .extra_headers = &.{
+                .{ .name = "Authorization", .value = auth_buf.items },
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        }) catch return types.ProviderError.Network;
+        defer req.deinit();
+
+        // Send body
+        req.sendBodyComplete(body) catch return types.ProviderError.Network;
+
+        // Receive response head
+        var redirect_buffer: [1024]u8 = undefined;
+        var response = req.receiveHead(&redirect_buffer) catch return types.ProviderError.Network;
+        // Check response status
+        if (response.head.status != .ok) {
+            return switch (response.head.status) {
+                .unauthorized => types.ProviderError.Auth,
+                .too_many_requests => types.ProviderError.RateLimit,
+                else => types.ProviderError.InvalidResponse,
+            };
         }
-        try map.put("messages", std.json.Value{ .array = messages_arr });
-        
-        if (request.temperature) |temp| {
-            try map.put("temperature", std.json.Value{ .float = @as(f64, @floatCast(temp)) });
-        }
-        if (request.max_tokens) |max| {
-            try map.put("max_tokens", std.json.Value{ .integer = @as(i64, @intCast(max)) });
-        }
-        
-        return map;
+
+        // Read response body
+        var transfer_buffer: [4096]u8 = undefined;
+        const reader = response.reader(&transfer_buffer);
+
+        // Read all remaining bytes from response
+        const response_bytes = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return types.ProviderError.Network;
+        defer self.allocator.free(response_bytes);
+
+        // Parse JSON response
+        var parsed = std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_bytes, .{}) catch return types.ProviderError.InvalidResponse;
+        defer parsed.deinit();
+        return parsed.value;
     }
 };
 
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+const TestConfig = config_module.Config;
+
 test "NIMClient initialization" {
     const allocator = std.testing.allocator;
-    const cfg = config_module.Config{
+    const cfg = TestConfig{
         .nim_api_key = "test-key",
         .nim_model = "test-model",
     };
     var client = NIMClient.init(allocator, cfg);
     defer client.deinit();
-    
+
     try std.testing.expectEqualStrings("test-key", client.api_key);
     try std.testing.expectEqualStrings("test-model", client.model);
+}
+
+test "NIMClient BASE_URL constant" {
+    // Verify the URL is correctly set to NVIDIA NIM endpoint
+    try std.testing.expectEqualStrings("https://integrate.api.nvidia.com/v1/chat/completions", NIMClient.BASE_URL);
+}
+
+test "NIMClient deinit does not crash" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .nim_api_key = "test-key",
+        .nim_model = "test-model",
+    };
+    var client = NIMClient.init(allocator, cfg);
+    client.deinit();
+}
+
+test "NIMClient handles empty API key" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .nim_api_key = "",
+        .nim_model = "test-model",
+    };
+    var client = NIMClient.init(allocator, cfg);
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings("", client.api_key);
+}
+
+test "NIMClient model name flexibility" {
+    const allocator = std.testing.allocator;
+    
+    // Test with various model names
+    const models = [_][]const u8{
+        "qwen/qwen3.5-397b-a17b",
+        "meta/llama3-70b-instruct",
+        "mistralai/mixtral-8x7b-instruct-v0.1",
+        "",
+    };
+
+    for (models) |model_name| {
+        const cfg = TestConfig{
+            .nim_api_key = "test-key",
+            .nim_model = model_name,
+        };
+        var client = NIMClient.init(allocator, cfg);
+        defer client.deinit();
+        
+        try std.testing.expectEqualStrings(model_name, client.model);
+    }
 }

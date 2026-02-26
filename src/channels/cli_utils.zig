@@ -34,9 +34,7 @@ pub fn formatError(err: []const u8, writer: anytype) !void {
 
 pub fn formatStreamingToken(token: []const u8, writer: anytype) !void {
     try writer.writeAll(token);
-    try writer.flush();
 }
-
 pub fn clearCurrentLine(writer: anytype) !void {
     try writer.writeAll("\r\x1b[K");
 }

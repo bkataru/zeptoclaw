@@ -1,2 +1,46 @@
+# Zig cache and build output
 .zig-cache/
 zig-out/
+.zig-cache-test/
+
+# Binaries and object files
+*.o
+*.o.o
+main
+
+# Build artifacts
+build.zig.zon
+build.zig.zon.bak
+
+# Environment and secrets
+.env
+*.key
+*.secret
+
+# Dependencies (submodules / vendored)
+hf-hub-zig/
+mcp.zig/
+niza/
+raikage/
+zenmap/
+zig-utcp/
+vendor/
+
+# Zig downloads
+zig*.tar.xz
+zig-linux-*/
+
+# Test files (temporary)
+src/test_api.zig
+test_nim_api.zig
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

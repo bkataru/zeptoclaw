@@ -22,6 +22,7 @@ pub const agent = struct {
 // Channels
 pub const channels = struct {
     pub const cli = @import("channels/cli.zig");
+    pub const session = @import("channels/session.zig");
 };
 
 // Configuration
@@ -31,9 +32,9 @@ pub const config = @import("config.zig");
 // BACKWARDS COMPATIBILITY (old test functions)
 // ============================================================================
 
-pub fn printAnotherMessage(writer: *std.Io.Writer) !void {
-    try writer.print("Run `zig build test` to run the tests.\n", .{});
-    try writer.flush();
+pub fn printAnotherMessage(writer: *std.fs.File) !void {
+    try writer.writeAll("Run `zig build test` to run the tests.\n");
+    try writer.writeAll("\n");
 }
 
 pub fn add(a: i32, b: i32) i32 {

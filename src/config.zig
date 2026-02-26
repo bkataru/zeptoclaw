@@ -14,9 +14,9 @@ pub const Config = struct {
             }
             return err;
         };
-        
+
         const nim_model = std.process.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch "qwen/qwen3.5-397b-a17b";
-        
+
         return .{
             .nim_api_key = nim_api_key,
             .nim_model = nim_model,
@@ -25,7 +25,11 @@ pub const Config = struct {
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.nim_api_key);
-        allocator.free(self.nim_model);
+        // nim_model might be a default string literal, check if it was allocated
+        const default_model = "qwen/qwen3.5-397b-a17b";
+        if (!std.mem.eql(u8, self.nim_model, default_model)) {
+            allocator.free(self.nim_model);
+        }
     }
 };
 

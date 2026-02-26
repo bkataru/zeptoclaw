@@ -194,6 +194,13 @@ pub const ProviderError = error{
     Timeout,
 };
 
+/// LLMProvider is the interface for LLM providers
+/// This is a vtable-style interface for provider implementations
+pub const LLMProvider = struct {
+    /// chat sends a chat completion request and returns the response
+    chat: *const fn (allocator: std.mem.Allocator, messages: []Message) ProviderError!ChatCompletionResponse,
+};
+
 test "MessageRole conversion" {
     try std.testing.expectEqualStrings("system", MessageRole.toString(.system));
     try std.testing.expectEqualStrings("user", MessageRole.toString(.user));
@@ -228,4 +235,167 @@ test "Message hasToolCalls" {
         },
     };
     defer allocator.free(message.tool_calls.?);
+}
+
+test "MessageRole fromString with invalid input" {
+    try std.testing.expectEqual(@as(?MessageRole, null), MessageRole.fromString(""));
+    try std.testing.expectEqual(@as(?MessageRole, null), MessageRole.fromString("invalid"));
+    try std.testing.expectEqual(@as(?MessageRole, null), MessageRole.fromString("SYSTEM")); // case sensitive
+}
+
+test "Message dupe and deinit" {
+    const allocator = std.testing.allocator;
+    
+    const original = Message{
+        .role = .user,
+        .content = "Hello, world!",
+        .tool_call_id = null,
+        .tool_calls = null,
+    };
+    
+    const duplicated = try original.dupe(allocator);
+    defer duplicated.deinit(allocator);
+    
+    try std.testing.expectEqual(original.role, duplicated.role);
+    try std.testing.expectEqualStrings(original.content.?, duplicated.content.?);
+}
+
+test "Message with tool_call_id" {
+    const allocator = std.testing.allocator;
+    
+    var message = Message{
+        .role = .tool,
+        .content = "Weather: 72°F",
+        .tool_call_id = try allocator.dupe(u8, "call_123"),
+        .tool_calls = null,
+    };
+    defer message.deinit(allocator);
+    
+    try std.testing.expectEqualStrings("call_123", message.tool_call_id.?);
+}
+
+test "FunctionCall dupe" {
+    const allocator = std.testing.allocator;
+    
+    const original = FunctionCall{
+        .name = "get_weather",
+        .arguments = "{\"location\": \"London\"}",
+    };
+    
+    const duplicated = try original.dupe(allocator);
+    defer duplicated.deinit(allocator);
+    
+    try std.testing.expectEqualStrings(original.name, duplicated.name);
+    try std.testing.expectEqualStrings(original.arguments, duplicated.arguments);
+}
+
+test "ToolCall dupe" {
+    const allocator = std.testing.allocator;
+    
+    const original = ToolCall{
+        .id = "call_123",
+        .@"type" = "function",
+        .function = .{
+            .name = "get_weather",
+            .arguments = "{\"location\": \"London\"}",
+        },
+    };
+    
+    const duplicated = try original.dupe(allocator);
+    defer duplicated.deinit(allocator);
+    
+    try std.testing.expectEqualStrings(original.id, duplicated.id);
+    try std.testing.expectEqualStrings(original.@"type", duplicated.@"type");
+    try std.testing.expectEqualStrings(original.function.name, duplicated.function.name);
+}
+
+test "ToolDefinition dupe" {
+    const allocator = std.testing.allocator;
+    
+    const params = std.json.parseFromSliceLenient(std.json.Value, allocator, "{}", .{}).?.value;
+    defer params.deinit(allocator);
+    
+    const original = ToolDefinition{
+        .@"type" = "function",
+        .name = "get_weather",
+        .description = "Get weather for a location",
+        .parameters = params,
+    };
+    
+    const duplicated = try original.dupe(allocator);
+    defer duplicated.deinit(allocator);
+    
+    try std.testing.expectEqualStrings(original.name, duplicated.name);
+    try std.testing.expectEqualStrings(original.description, duplicated.description);
+}
+
+test "Choice deinit" {
+    const allocator = std.testing.allocator;
+    
+    var choice = Choice{
+        .index = 0,
+        .message = Message{
+            .role = .assistant,
+            .content = "Hello!",
+            .tool_call_id = null,
+            .tool_calls = null,
+        },
+        .finish_reason = try allocator.dupe(u8, "stop"),
+    };
+    
+    choice.deinit(allocator);
+}
+
+test "ChatCompletionResponse deinit" {
+    const allocator = std.testing.allocator;
+    
+    var response = ChatCompletionResponse{
+        .id = try allocator.dupe(u8, "chatcmpl-123"),
+        .model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b"),
+        .choices = try allocator.alloc(Choice, 0),
+        .created = 1234567890,
+        .usage = .{ .prompt_tokens = 10, .completion_tokens = 20, .total_tokens = 30 },
+    };
+    
+    response.deinit(allocator);
+}
+
+test "ChatCompletionRequest deinit" {
+    const allocator = std.testing.allocator;
+    
+    var messages = try allocator.alloc(Message, 1);
+    messages[0] = Message{
+        .role = .user,
+        .content = "Hello",
+        .tool_call_id = null,
+        .tool_calls = null,
+    };
+    
+    var request = ChatCompletionRequest{
+        .model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b"),
+        .messages = messages,
+        .tools = null,
+        .tool_choice = null,
+        .temperature = 0.7,
+        .max_tokens = 100,
+    };
+    
+    request.deinit(allocator);
+}
+
+test "Message with tool_calls hasToolCalls returns true" {
+    const allocator = std.testing.allocator;
+    defer allocator.reset();
+    
+    var message = Message{
+        .role = .assistant,
+        .content = "Let me check the weather.",
+        .tool_call_id = null,
+        .tool_calls = null,
+    };
+    
+    try std.testing.expect(!message.hasToolCalls());
+    
+    message.tool_calls = try allocator.alloc(ToolCall, 1);
+    try std.testing.expect(message.hasToolCalls());
 }
