@@ -6,8 +6,8 @@ const NIMClient = zeptoclaw.providers.nim.NIMClient;
 const Message = zeptoclaw.providers.types.Message;
 const MessageRole = zeptoclaw.providers.types.MessageRole;
 
-/// Integration test: Test NIMClient chat completion with actual API
-/// This test requires NVIDIA_API_KEY environment variable to be set
+// Integration test: Test NIMClient chat completion with actual API
+// This test requires NVIDIA_API_KEY environment variable to be set
 test "integration: NIMClient chat completion" {
     const allocator = std.testing.allocator;
     
@@ -66,7 +66,7 @@ test "integration: NIMClient chat completion" {
     std.debug.print("\n[OK] Integration test passed - received response from {s}\n", .{response.model});
 }
 
-/// Integration test: Test error handling with invalid API key
+// Integration test: Test error handling with invalid API key
 test "integration: NIMClient auth error handling" {
     const allocator = std.testing.allocator;
     
@@ -98,7 +98,7 @@ test "integration: NIMClient auth error handling" {
     }
 }
 
-/// Integration test: Test rate limit handling
+// Integration test: Test rate limit handling
 test "integration: NIMClient message with tool calls" {
     const allocator = std.testing.allocator;
     
