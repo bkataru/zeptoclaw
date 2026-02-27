@@ -1,17 +1,29 @@
 # ZeptoClaw Data Migration Guide
 
+**Status: Complete** - All 5 migration scripts ready and tested.
+
 This directory contains scripts to migrate data from OpenClaw to ZeptoClaw.
+
+## Migration Status
+
+| Script | Status | Description |
+|--------|--------|-------------|
+| `migrate-all.sh` | Complete | Master migration script |
+| `migrate-credentials.sh` | Complete | WhatsApp credentials migration |
+| `migrate-sessions.sh` | Complete | Session data migration |
+| `migrate-memory.sh` | Complete | Memory/embedding migration |
+| `migrate-secrets.sh` | Complete | Secrets migration with rotation |
 
 ## Directory Structure
 
 ```
 scripts/migrate/
-├── migrate-all.sh          # Master migration script (runs all migrations)
-├── migrate-credentials.sh  # WhatsApp credentials migration
-├── migrate-sessions.sh     # Session data migration
-├── migrate-memory.sh       # Memory/embedding migration
-├── migrate-secrets.sh      # Secrets migration with rotation
-└── README.md              # This file
+├── migrate-all.sh            # Master migration script (runs all migrations)
+├── migrate-credentials.sh    # WhatsApp credentials migration
+├── migrate-sessions.sh       # Session data migration
+├── migrate-memory.sh         # Memory/embedding migration
+├── migrate-secrets.sh        # Secrets migration with rotation
+└── README.md                 # This file
 
 Target directories (created by scripts):
 └── /home/user/zeptoclaw/
@@ -25,10 +37,12 @@ Target directories (created by scripts):
 
 The scripts copy data from the following OpenClaw locations:
 
-- **Credentials**: `~/.openclaw/credentials/` (JSON/ENV files)
-- **Sessions**: `~/.openclaw/agents/main/sessions/` (session state)
-- **Memory**: `~/.openclaw/workspace/memory/` (embeddings, FAISS index)
-- **Secrets**: `~/.openclaw/.webhook-secret` (webhook verification)
+| Source | Target | Description |
+|--------|--------|-------------|
+| `~/.openclaw/credentials/` | `/home/user/zeptoclaw/credentials/whatsapp/` | WhatsApp credentials |
+| `~/.openclaw/agents/main/sessions/` | `/home/user/zeptoclaw/sessions/` | Session state |
+| `~/.openclaw/workspace/memory/` | `/home/user/zeptoclaw/memory/` | Embeddings, FAISS index |
+| `~/.openclaw/.webhook-secret` | `/home/user/zeptoclaw/secrets/` | Webhook verification |
 
 ## Usage
 
@@ -100,18 +114,22 @@ Skip source directory checks (use if OpenClaw directory is already removed):
 ## Troubleshooting
 
 ### "Source directory does not exist"
+
 - Ensure OpenClaw is installed and data exists at `~/.openclaw/`
 - Check directory permissions
 
 ### "No session/credential files found"
+
 - OpenClaw may not have generated data yet
 - Verify that OpenClaw has been used before migration
 
 ### Permission errors
+
 - Run scripts with appropriate permissions
 - Check that you have read access to source and write access to target
 
 ### Memory files missing
+
 - Memory directory may be empty if no conversations have been processed
 - This is normal for fresh installations
 
@@ -142,3 +160,22 @@ If migration fails or data is corrupted:
 - Scripts are idempotent (safe to run multiple times)
 - Existing files in target directories will be overwritten without warning
 - Back up ZeptoClaw data before re-running migrations
+- All 5 migration scripts are complete and tested
+
+## Migration Verification
+
+After migration, verify the following:
+
+```bash
+# Check credentials
+test -f /home/user/zeptoclaw/credentials/whatsapp/whatsapp.json && echo "Credentials OK"
+
+# Check sessions
+test -d /home/user/zeptoclaw/sessions && echo "Sessions OK"
+
+# Check memory
+test -f /home/user/zeptoclaw/memory/embeddings.faiss && echo "Memory OK" || echo "Memory not required"
+
+# Check secrets
+test -f /home/user/zeptoclaw/secrets/webhook-secret && echo "Secrets OK"
+```

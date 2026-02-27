@@ -17,7 +17,7 @@ A Cloudflare Worker providing resilient OpenAI-compatible API routing for ZeptoC
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │ CLOUDFLARE WORKER                                               │
-│ https://zeptoclay-router.your-subdomain.workers.dev             │
+│ https://zeptoclaw-router.your-subdomain.workers.dev             │
 │  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ │
 │  │ Gateway Router   │ │ Health Manager   │ │ State Manager    │ │
 │  │ - OpenAI API     │ │ - KV storage     │ │ - Heartbeats     │ │
@@ -150,7 +150,7 @@ npm run deploy
 ### Chat Completions
 
 ```bash
-curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/v1/chat/completions \
+curl -X POST https://zeptoclaw-router.your-subdomain.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -162,13 +162,13 @@ curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/v1/chat/complet
 ### Health Check
 
 ```bash
-curl https://zeptoclay-router.your-subdomain.workers.dev/health | jq
+curl https://zeptoclaw-router.your-subdomain.workers.dev/health | jq
 ```
 
 ### Heartbeat (from local agent)
 
 ```bash
-curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/heartbeat \
+curl -X POST https://zeptoclaw-router.your-subdomain.workers.dev/heartbeat \
   -H "Content-Type: application/json" \
   -d '{
     "timestamp": 1704067200000,
@@ -182,7 +182,7 @@ curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/heartbeat \
 ### Report Incident
 
 ```bash
-curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/gateway/incident \
+curl -X POST https://zeptoclaw-router.your-subdomain.workers.dev/gateway/incident \
   -H "Content-Type: application/json" \
   -d '{
     "type": "stuck_session",
@@ -281,13 +281,13 @@ The worker integrates with ZeptoClaw's systemd services:
 
 ```bash
 # Copy service files
-cp /home/user/zeptoclaw/cloudflare-worker/zeptoclay-heartbeat.* ~/.config/systemd/user/
+cp /home/user/zeptoclaw/cloudflare-worker/zeptoclaw-heartbeat.* ~/.config/systemd/user/
 
 # Reload systemd
 systemctl --user daemon-reload
 
 # Enable and start timer
-systemctl --user enable --now zeptoclay-heartbeat.timer
+systemctl --user enable --now zeptoclaw-heartbeat.timer
 ```
 
 ## Troubleshooting
@@ -335,15 +335,15 @@ wrangler tail
 
 ```bash
 # Health check
-curl https://zeptoclay-router.your-subdomain.workers.dev/health
+curl https://zeptoclaw-router.your-subdomain.workers.dev/health
 
 # Chat completions
-curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/v1/chat/completions \
+curl -X POST https://zeptoclaw-router.your-subdomain.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
 
 # State view
-curl https://zeptoclay-router.your-subdomain.workers.dev/state
+curl https://zeptoclaw-router.your-subdomain.workers.dev/state
 ```
 
 ## License

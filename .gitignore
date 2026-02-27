@@ -44,3 +44,5 @@ test_nim_api.zig
 # OS
 .DS_Store
 Thumbs.db
+
+*.a  # Static library build artifacts

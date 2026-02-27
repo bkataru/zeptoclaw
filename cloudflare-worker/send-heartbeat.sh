@@ -2,7 +2,7 @@
 # Send heartbeat to Cloudflare Worker
 
 # Configuration
-WORKER_URL="${ZEPTOCLAW_WORKER_URL:-https://zeptoclay-router.your-subdomain.workers.dev}"
+WORKER_URL="${ZEPTOCLAW_WORKER_URL:-https://zeptoclaw-router.your-subdomain.workers.dev}"
 
 # Get gateway info
 GATEWAY_PID=$(pgrep -f "zeptoclaw-gateway" | head -1)

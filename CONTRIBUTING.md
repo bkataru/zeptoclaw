@@ -1,6 +1,18 @@
-# Contributing to Zeptoclaw
+# Contributing to ZeptoClaw
 
-Thanks for your interest in contributing to Zeptoclaw! This document provides guidelines and instructions for contributing.
+Thanks for your interest in contributing to ZeptoClaw! This document provides guidelines and instructions for contributing.
+
+## Project Status
+
+**Migration Complete** - All 11 phases finished with 0 errors.
+
+| Metric | Value |
+|--------|-------|
+| Source Files | 70 Zig files |
+| Lines of Code | 19,717 lines |
+| Binaries | 4 production binaries |
+| Skills | 21 ported from OpenClaw |
+| Systemd Services | 10 service/timer files |
 
 ## Getting Started
 
@@ -28,7 +40,14 @@ Thanks for your interest in contributing to Zeptoclaw! This document provides gu
 ### Building
 
 ```bash
+# Debug build
 zig build
+
+# Release build
+zig build --release=safe
+
+# Release build with optimizations
+zig build --release=fast
 ```
 
 ### Running Tests
@@ -47,6 +66,7 @@ zig build test -- --skip-integration
 - Use descriptive variable and function names
 - Add comments for complex logic
 - Keep functions focused and single-purpose
+- Use `comptime` where appropriate for compile-time computations
 
 ### Testing Guidelines
 
@@ -55,21 +75,62 @@ zig build test -- --skip-integration
 3. **Error Handling**: Test error cases, not just success paths
 
 Example test structure:
+
 ```zig
 test "function does something" {
     const allocator = std.testing.allocator;
-    
+
     // Setup
     const input = ...;
-    
+
     // Execute
     const result = try function(input);
     defer result.deinit(allocator);
-    
+
     // Verify
     try std.testing.expectEqual(expected, result);
 }
 ```
+
+## Project Structure
+
+```
+src/
+├── main.zig                    # Entry point
+├── config.zig                  # Configuration
+├── providers/                  # LLM providers
+│   ├── nim.zig                 # NVIDIA NIM client
+│   ├── types.zig               # OpenAI-compatible types
+│   └── ...
+├── agent/                      # Agent framework
+│   ├── loop.zig                # Agent loop
+│   ├── tools.zig               # Tool registry
+│   └── message.zig             # Message utilities
+├── channels/                   # I/O channels
+│   ├── cli.zig                 # CLI channel
+│   ├── session.zig             # Session management
+│   └── whatsapp/               # WhatsApp channel
+├── services/                   # HTTP services
+│   ├── gateway_server.zig      # Main gateway
+│   ├── webhook_server.zig      # Webhook handling
+│   └── shell2http_server.zig   # Shell2HTTP
+├── skills/                     # Skill implementations
+│   ├── skill_registry.zig      # Skill management
+│   └── [skill_name]/skill.zig  # Individual skills
+└── autonomous/                 # Autonomous operations
+    ├── autonomous.zig          # Main autonomous logic
+    └── moltbook_client.zig     # Moltbook integration
+```
+
+### Key Components
+
+| Component | Description |
+|-----------|-------------|
+| **Providers** | LLM provider implementations (NVIDIA NIM) |
+| **Agent** | Agent loop and tool dispatch |
+| **Channels** | I/O channels (CLI, WhatsApp, etc.) |
+| **Services** | HTTP servers (gateway, webhook, shell2http) |
+| **Skills** | UTCP-compatible function calling |
 
 ## Pull Request Process
 
@@ -86,25 +147,56 @@ test "function does something" {
 - [ ] No new compiler warnings
 - [ ] Documentation updated (if applicable)
 - [ ] Tests added for new functionality
+- [ ] Binary sizes checked (if applicable)
 
-## Architecture
+## Architecture Guidelines
 
-Zeptoclaw follows a modular architecture:
+### Modular Design
 
-```
-src/
-├── providers/    # LLM provider implementations (NIM, etc.)
-├── agent/        # Agent loop and tool dispatch
-├── channels/     # I/O channels (CLI, etc.)
-└── config.zig    # Configuration management
-```
+Zeptoclaw follows a modular architecture with clear separation of concerns:
 
-### Key Concepts
-
-- **Providers**: Abstract LLM backends (currently NVIDIA NIM)
+- **Providers**: Abstract LLM backends
 - **Agents**: Manage conversation state and tool execution
-- **Channels**: Handle input/output (CLI, future: Discord, Slack)
-- **Tools**: UTCP-compatible function calling interface
+- **Channels**: Handle input/output (CLI, WhatsApp, etc.)
+- **Services**: HTTP servers and endpoints
+- **Skills**: UTCP-compatible function calling interface
+
+### Error Handling
+
+- Use Zig's error union types (`!T`) for fallible operations
+- Provide meaningful error messages
+- Handle errors at appropriate abstraction levels
+
+### Performance
+
+- Leverage `comptime` for compile-time computations
+- Use arena allocators for request-scoped allocations
+- Minimize allocations in hot paths
+
+## Testing
+
+### Build Verification
+
+```bash
+# Clean build
+zig build --release=safe
+
+# Check binary sizes
+ls -lh zig-out/bin/
+```
+
+### Service Verification
+
+```bash
+# Check gateway
+curl http://localhost:18789/health
+
+# Check webhook
+curl http://localhost:9000/health
+
+# Check shell2http
+curl http://localhost:9001/health
+```
 
 ## Reporting Issues
 

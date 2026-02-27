@@ -1,4 +1,4 @@
-name = "zeptoclay-router"
+name = "zeptoclaw-router"
 main = "worker.ts"
 compatibility_date = "2024-01-01"
 

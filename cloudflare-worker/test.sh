@@ -69,7 +69,7 @@ done
 
 echo ""
 echo "🔍 Checking wrangler.toml configuration..."
-if grep -q "name = \"zeptoclay-router\"" wrangler.toml; then
+if grep -q "name = \"zeptoclaw-router\"" wrangler.toml; then
     echo "  ✅ Worker name configured"
 else
     echo "  ❌ Worker name not configured"
