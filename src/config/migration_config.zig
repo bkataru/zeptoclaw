@@ -479,7 +479,7 @@ pub const ConfigLoader = struct {
     }
 
     /// Merge configurations with priority: CLI > env > file > defaults
-    fn mergeConfigs(self: *ConfigLoader,
+    pub fn mergeConfigs(self: *ConfigLoader,
         file_config: ?ZeptoClawConfig,
         env_config: ?ZeptoClawConfig,
         cli_args: ?CliArgs,
@@ -646,18 +646,18 @@ test "ConfigLoader initialization" {
 }
 test "ConfigLoader loadFromEnv with missing API key" {
     const allocator = std.testing.allocator;
-    const loader = ConfigLoader.init(allocator);
+    var loader = ConfigLoader.init(allocator);
 
     // This should fail if NVIDIA_API_KEY is not set
     const result = loader.loadFromEnv();
-    try std.testing.expectError(error.MissingApiKey, result);
+try std.testing.expectError(error.MissingApiKey, result);
 }
 
 test "ConfigLoader mergeConfigs with defaults" {
     const allocator = std.testing.allocator;
-    const loader = ConfigLoader.init(allocator);
+    var loader = ConfigLoader.init(allocator);
 
-    const result = try loader.mergeConfigs(null, null, null);
+    var result = try loader.mergeConfigs(null, null, null);
     defer result.deinit();
 
     try std.testing.expectEqual(ConfigSource.default, result.source);
