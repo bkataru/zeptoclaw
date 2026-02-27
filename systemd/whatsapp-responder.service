@@ -1,0 +1,14 @@
+[Unit]
+Description=ZeptoClaw WhatsApp Responder Check
+After=zeptoclaw-gateway.service
+Requires=zeptoclaw-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.zeptoclaw/scripts/whatsapp-responder.sh
+Nice=10
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=default.target

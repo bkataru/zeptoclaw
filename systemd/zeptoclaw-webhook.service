@@ -1,0 +1,13 @@
+[Unit]
+Description=ZeptoClaw Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+Environment="WEBHOOK_SECRET=%h/.zeptoclaw/.webhook-secret"
+ExecStart=%h/bin/webhook -hooks %h/.zeptoclaw/webhooks/hooks.json -port 9000 -ip 127.0.0.1 -template -verbose
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

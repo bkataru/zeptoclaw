@@ -12,7 +12,7 @@ pub fn StreamHandler(comptime WriterType: type) type {
         pub fn init(allocator: std.mem.Allocator, writer: WriterType) Self {
             return .{
                 .allocator = allocator,
-                .buffer = std.ArrayList(u8).init(allocator),
+                .buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
                 .writer = writer,
             };
         }
@@ -59,7 +59,7 @@ pub fn handleStream(
 
 test "StreamHandler accumulation" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).init(allocator);
+    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
     defer output.deinit();
 
     const Handler = StreamHandler(@TypeOf(output.writer()));
@@ -75,7 +75,7 @@ test "StreamHandler accumulation" {
 
 test "StreamHandler final newline" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).init(allocator);
+    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
     defer output.deinit();
 
     const Handler = StreamHandler(@TypeOf(output.writer()));

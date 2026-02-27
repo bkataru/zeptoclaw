@@ -27,13 +27,54 @@ pub fn build(b: *std.Build) void {
     });
     main_mod.addImport("zeptoclaw", mod);
     main_mod.addImport("zeitgeist", zeitgeist_mod);
-
     const exe = b.addExecutable(.{
         .name = "zeptoclaw",
         .root_module = main_mod,
     });
 
     b.installArtifact(exe);
+    // Webhook server executable
+    const webhook_server_mod = b.createModule(.{
+        .root_source_file = b.path("src/services/webhook_server.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    webhook_server_mod.addImport("zeptoclaw", mod);
+
+    const webhook_server_exe = b.addExecutable(.{
+        .name = "zeptoclaw-webhook",
+        .root_module = webhook_server_mod,
+    });
+    b.installArtifact(webhook_server_exe);
+
+    // Shell2HTTP server executable
+    const shell2http_server_mod = b.createModule(.{
+        .root_source_file = b.path("src/services/shell2http_server.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shell2http_server_mod.addImport("zeptoclaw", mod);
+
+    const shell2http_server_exe = b.addExecutable(.{
+        .name = "zeptoclaw-shell2http",
+        .root_module = shell2http_server_mod,
+    });
+    b.installArtifact(shell2http_server_exe);
+
+    // Gateway server executable
+    const gateway_server_mod = b.createModule(.{
+        .root_source_file = b.path("src/gateway/gateway_server.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gateway_server_mod.addImport("zeptoclaw", mod);
+    gateway_server_mod.addImport("zeitgeist", zeitgeist_mod);
+
+    const gateway_server_exe = b.addExecutable(.{
+        .name = "zeptoclaw-gateway",
+        .root_module = gateway_server_mod,
+    });
+    b.installArtifact(gateway_server_exe);
 
     // Run command
     const run_step = b.step("run", "Run Zeptoclaw agent");
@@ -61,16 +102,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_test.step);
 
     // Integration tests (optional, requires NVIDIA_API_KEY)
-    const integration_test_mod = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/integration_test.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const integration_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     integration_test_mod.addImport("zeptoclaw", mod);
     integration_test_mod.addImport("zeitgeist", zeitgeist_mod);
 
-    const run_integration_test = b.addRunArtifact(integration_test_mod);
+    const integration_test_exe = b.addExecutable(.{
+        .name = "zeptoclaw-integration-test",
+        .root_module = integration_test_mod,
+    });
+
+    const run_integration_test = b.addRunArtifact(integration_test_exe);
     test_step.dependOn(&run_integration_test.step);
 }

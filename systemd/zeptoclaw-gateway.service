@@ -1,0 +1,12 @@
+[Unit]
+Description=ZeptoClaw Gateway Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.zeptoclaw/scripts/gateway-start.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

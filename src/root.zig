@@ -23,12 +23,36 @@ pub const agent = struct {
 pub const channels = struct {
     pub const cli = @import("channels/cli.zig");
     pub const session = @import("channels/session.zig");
+    pub const whatsapp = struct {
+        pub const types = @import("channels/whatsapp/types.zig");
+        pub const WhatsAppChannel = @import("channels/whatsapp/whatsapp_channel.zig").WhatsAppChannel;
+        pub const WhatsAppSession = @import("channels/whatsapp/session.zig").WhatsAppSession;
+        pub const InboundProcessor = @import("channels/whatsapp/inbound.zig").InboundProcessor;
+        pub const OutboundProcessor = @import("channels/whatsapp/outbound.zig").OutboundProcessor;
+        pub const AccessControl = @import("channels/whatsapp/access_control.zig").AccessControl;
+    };
 };
-
 // Configuration
 pub const config = @import("config.zig");
 
-// ============================================================================
+// Autonomous Agent
+// Autonomous Agent
+pub const autonomous = struct {
+    pub const types = @import("autonomous/types.zig");
+    pub const state_store = @import("autonomous/state_store.zig");
+    pub const moltbook_client = @import("autonomous/moltbook_client.zig");
+    pub const rate_limiter = @import("autonomous/rate_limiter.zig");
+    pub const agent_framework = @import("autonomous/agent_framework.zig");
+};
+
+// Gateway
+pub const gateway = struct {
+    pub const token_auth = @import("gateway/token_auth.zig");
+    pub const session_store = @import("gateway/session_store.zig");
+    pub const http_server = @import("gateway/http_server.zig");
+    pub const control_ui = @import("gateway/control_ui.zig");
+};
+// Services
 // BACKWARDS COMPATIBILITY (old test functions)
 // ============================================================================
 

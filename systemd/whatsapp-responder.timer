@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ZeptoClaw WhatsApp Responder Check Every 15 Min
+Requires=whatsapp-responder.service
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

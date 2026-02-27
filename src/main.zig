@@ -16,7 +16,7 @@ pub fn main() !void {
         std.debug.print("Please set it and try again: export NVIDIA_API_KEY=your-key\n", .{});
         return error.MissingApiKey;
     };
-    defer cfg.deinit(allocator);
+    defer cfg.deinit();
 
     // Initialize NIM client
     var nim_client = NIMClient.init(allocator, cfg);
@@ -26,7 +26,7 @@ pub fn main() !void {
     var agent = Agent.init(allocator, &nim_client, 50);
     defer agent.deinit();
 
-    // Run interactive session
+    // Run interactive CLI session
     try zeptoclaw.channels.cli.runInteractiveSession(&agent);
 }
 

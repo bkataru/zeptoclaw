@@ -1,0 +1,10 @@
+[Unit]
+Description=ZeptoClaw Heartbeat to Cloudflare Worker Timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

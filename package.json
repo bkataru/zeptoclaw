@@ -1,0 +1,27 @@
+{
+  "name": "zeptoclaw-whatsapp",
+  "version": "1.0.0",
+  "description": "WhatsApp channel for ZeptoClaw AI agent framework",
+  "main": "src/channels/whatsapp/baileys_wrapper.js",
+  "scripts": {
+    "install": "echo 'Dependencies installed'",
+    "test": "echo 'No tests specified'"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "zeptoclaw",
+    "ai",
+    "agent"
+  ],
+  "author": "ZeptoClaw",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "pino": "^8.19.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
