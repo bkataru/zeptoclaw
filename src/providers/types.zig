@@ -253,7 +253,7 @@ test "Message dupe and deinit" {
         .tool_calls = null,
     };
     
-    const duplicated = try original.dupe(allocator);
+    var duplicated = try original.dupe(allocator);
     defer duplicated.deinit(allocator);
     
     try std.testing.expectEqual(original.role, duplicated.role);
@@ -282,7 +282,7 @@ test "FunctionCall dupe" {
         .arguments = "{\"location\": \"London\"}",
     };
     
-    const duplicated = try original.dupe(allocator);
+    var duplicated = try original.dupe(allocator);
     defer duplicated.deinit(allocator);
     
     try std.testing.expectEqualStrings(original.name, duplicated.name);
@@ -301,7 +301,7 @@ test "ToolCall dupe" {
         },
     };
     
-    const duplicated = try original.dupe(allocator);
+    var duplicated = try original.dupe(allocator);
     defer duplicated.deinit(allocator);
     
     try std.testing.expectEqualStrings(original.id, duplicated.id);
@@ -312,8 +312,8 @@ test "ToolCall dupe" {
 test "ToolDefinition dupe" {
     const allocator = std.testing.allocator;
     
-    const params = std.json.parseFromSliceLenient(std.json.Value, allocator, "{}", .{}).?.value;
-    defer params.deinit(allocator);
+const params = (try std.json.parseFromSlice(std.json.Value, allocator, "{}", .{})).value;
+    // Value doesn't need explicit deinit
     
     const original = ToolDefinition{
         .@"type" = "function",
@@ -322,7 +322,7 @@ test "ToolDefinition dupe" {
         .parameters = params,
     };
     
-    const duplicated = try original.dupe(allocator);
+    var duplicated = try original.dupe(allocator);
     defer duplicated.deinit(allocator);
     
     try std.testing.expectEqualStrings(original.name, duplicated.name);
@@ -385,7 +385,7 @@ test "ChatCompletionRequest deinit" {
 
 test "Message with tool_calls hasToolCalls returns true" {
     const allocator = std.testing.allocator;
-    defer allocator.reset();
+    // allocator used later in test
     
     var message = Message{
         .role = .assistant,

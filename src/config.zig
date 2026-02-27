@@ -167,7 +167,7 @@ test "Config load from env" {
 test "Config load with defaults" {
     const allocator = std.testing.allocator;
     var loader = migration_config.ConfigLoader.init(allocator);
-    const result = try loader.mergeConfigs(null, null, null);
+    var result = try loader.mergeConfigs(null, null, null);
     defer result.deinit();
 
     try std.testing.expectEqual(migration_config.ConfigSource.default, result.source);
@@ -178,7 +178,7 @@ test "Config load with defaults" {
 test "Config getPrimaryModel" {
     const allocator = std.testing.allocator;
     var loader = migration_config.ConfigLoader.init(allocator);
-    const zepto_config = try loader.mergeConfigs(null, null, null);
+    var zepto_config = try loader.mergeConfigs(null, null, null);
     defer zepto_config.deinit();
 
     const config = Config{
