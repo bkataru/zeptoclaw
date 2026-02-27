@@ -1,8 +1,8 @@
 # ZeptoClaw
 
-> **The world's tiniest AI agent framework.**
+> **The world's tiniest AI agent computer.**
 >
-> Zig 0.15.2 powered, NVIDIA NIM native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis).
+> Zig 0.15.2 powered, NVIDIA NIM native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis), Baala's Jarvis 🦀⚡
 
 ## Build Status
 
