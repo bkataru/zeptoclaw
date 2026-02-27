@@ -381,7 +381,7 @@ pub const ConfigLoader = struct {
     /// Load configuration from environment variables
     fn loadFromEnv(self: *ConfigLoader) !ZeptoClawConfig {
         const api_key = std.process.getEnvVarOwned(self.allocator, "NVIDIA_API_KEY") catch |err| {
-            if (err == error.EnvVarNotFound) {
+            if (err == error.EnvironmentVariableNotFound) {
                 return error.MissingApiKey;
             }
             return err;
