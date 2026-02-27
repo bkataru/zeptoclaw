@@ -448,11 +448,11 @@ pub const ControlUI = struct {
             \\
             \\    // Get auth token from localStorage or prompt
             \\    function getAuthToken() {
-            \\      let token = localStorage.getItem('zeptoclay_auth_token');
+            \\      let token = localStorage.getItem('zeptoclaw_auth_token');
             \\      if (!token) {
             \\        token = prompt('Enter your ZeptoClaw auth token:');
             \\        if (token) {
-            \\          localStorage.setItem('zeptoclay_auth_token', token);
+            \\          localStorage.setItem('zeptoclaw_auth_token', token);
             \\        }
             \\      }
             \\      return token;

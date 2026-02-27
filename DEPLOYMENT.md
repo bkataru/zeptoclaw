@@ -310,10 +310,10 @@ wrangler login
 
 ```bash
 # Health check
-curl https://zeptoclay-router.your-subdomain.workers.dev/health | jq
+curl https://zeptoclaw-router.your-subdomain.workers.dev/health | jq
 
 # Chat completion
-curl -X POST https://zeptoclay-router.your-subdomain.workers.dev/v1/chat/completions \
+curl -X POST https://zeptoclaw-router.your-subdomain.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}' | jq
 ```
