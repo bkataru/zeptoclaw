@@ -1,0 +1,14 @@
+[Unit]
+Description=ZeptoClaw Moltbook Heartbeat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/user/.zeptoclaw/workspace/skills/moltbook-heartbeat/heartbeat.sh
+StandardOutput=append:/home/user/.zeptoclaw/logs/moltbook-heartbeat.log
+StandardError=append:/home/user/.zeptoclaw/logs/moltbook-heartbeat.log
+Environment="PATH=/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=default.target

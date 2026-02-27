@@ -70,7 +70,7 @@ pub const StreamNIMClient = struct {
         // Read and parse SSE stream
         var reader = req.reader();
         var line_buf: [4096]u8 = undefined;
-        var content_buf = std.ArrayList(u8).init(self.allocator);
+        var content_buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
         defer content_buf.deinit();
 
         while (true) {

@@ -1,0 +1,12 @@
+[Unit]
+Description=ZeptoClaw Heartbeat to Cloudflare Worker
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/user/zeptoclaw/cloudflare-worker/send-heartbeat.sh
+User=%i
+WorkingDirectory=/home/user/zeptoclaw/cloudflare-worker
+
+[Install]
+WantedBy=default.target

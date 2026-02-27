@@ -1,0 +1,12 @@
+[Unit]
+Description=ZeptoClaw Shell2HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.zeptoclaw/scripts/shell2http-start.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

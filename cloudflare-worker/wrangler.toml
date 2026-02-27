@@ -1,0 +1,22 @@
+name = "zeptoclay-router"
+main = "worker.ts"
+compatibility_date = "2024-01-01"
+
+# KV namespace for gateway health state
+[[kv_namespaces]]
+binding = "GATEWAY_HEALTH"
+id = "" # TODO: Create KV namespace and add ID here
+
+# KV namespace for ZeptoClaw state (heartbeat, incidents, etc.)
+[[kv_namespaces]]
+binding = "ZEPTOCLAW_STATE"
+id = "" # TODO: Create KV namespace and add ID here
+
+[vars]
+# ZeptoClaw gateway URL (update with your actual gateway URL)
+# For local development: http://localhost:18789
+# For production: https://your-gateway-domain.com
+ZEPTOCLAW_GATEWAY_URL = "http://localhost:18789"
+
+# Secrets (set via wrangler secret):
+# - ZEPTOCLAW_API_KEY (optional, if your gateway requires authentication)

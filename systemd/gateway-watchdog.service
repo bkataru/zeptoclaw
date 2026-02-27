@@ -1,0 +1,13 @@
+[Unit]
+Description=ZeptoClaw Gateway Watchdog
+After=zeptoclaw-gateway.service
+Requires=zeptoclaw-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/user/.zeptoclaw/scripts/gateway-watchdog.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

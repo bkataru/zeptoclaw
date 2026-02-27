@@ -3,27 +3,72 @@ const types = @import("types.zig");
 const config_module = @import("../config.zig");
 
 
+
 pub const NIMClient = struct {
     allocator: std.mem.Allocator,
     api_key: []const u8,
     model: []const u8,
+    base_url: []const u8,
     client: std.http.Client,
-
-    const BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+    const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
     pub fn init(allocator: std.mem.Allocator, cfg: config_module.Config) NIMClient {
         return .{
             .allocator = allocator,
             .api_key = cfg.nim_api_key,
             .model = cfg.nim_model,
+            .base_url = DEFAULT_BASE_URL,
             .client = std.http.Client{ .allocator = allocator },
         };
     }
 
-    pub fn deinit(self: *NIMClient) void {
-        self.client.deinit();
+    /// Initialize with a specific model ID
+    pub fn initWithModel(allocator: std.mem.Allocator, cfg: config_module.Config, model_id: []const u8) NIMClient {
+        return .{
+            .allocator = allocator,
+            .api_key = cfg.nim_api_key,
+            .model = model_id,
+            .base_url = DEFAULT_BASE_URL,
+            .client = std.http.Client{ .allocator = allocator },
+        };
     }
 
+    /// Initialize with custom base URL
+    pub fn initWithBaseUrl(allocator: std.mem.Allocator, api_key: []const u8, model_id: []const u8, base_url: []const u8) NIMClient {
+        return .{
+            .allocator = allocator,
+            .api_key = api_key,
+            .model = model_id,
+            .base_url = base_url,
+            .client = std.http.Client{ .allocator = allocator },
+        };
+    }
+
+pub fn deinit(self: *NIMClient) void {
+    self.client.deinit();
+}
+
+    /// Change the model being used
+    pub fn setModel(self: *NIMClient, model_id: []const u8) void {
+        self.model = model_id;
+    }
+
+    /// Get the current model ID
+    pub fn getModel(self: *const NIMClient) []const u8 {
+        return self.model;
+    }
+
+    /// Get the API key
+    pub fn getApiKey(self: *const NIMClient) []const u8 {
+        return self.api_key;
+    }
+
+    /// Get the base URL
+    pub fn getBaseUrl(self: *const NIMClient) []const u8 {
+        return self.base_url;
+    }
+
+    /// Send chat completion request and return response
     /// Send chat completion request and return response
     pub fn chat(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
         // Build request body as JSON string
@@ -90,7 +135,8 @@ pub const NIMClient = struct {
         auth_buf.writer(self.allocator).writeAll(self.api_key) catch return types.ProviderError.Network;
 
         // Make HTTP request
-        const uri = std.Uri.parse(BASE_URL) catch return types.ProviderError.Network;
+        // Make HTTP request
+        const uri = std.Uri.parse(self.base_url) catch return types.ProviderError.Network;
         var req = self.client.request(.POST, uri, .{
             .extra_headers = &.{
                 .{ .name = "Authorization", .value = auth_buf.items },
@@ -138,26 +184,194 @@ const TestConfig = config_module.Config;
 test "NIMClient initialization" {
     const allocator = std.testing.allocator;
     const cfg = TestConfig{
+        .allocator = allocator,
         .nim_api_key = "test-key",
         .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+    .gateway_port = 18789,
+    .gateway_mode = "local",
+    .gateway_bind = "lan",
+    .gateway_auth_token = null,
+    .workspace = "/tmp/test",
+    .max_concurrent = 4,
+    .source = .default,
+};
+var client = NIMClient.init(allocator, cfg);
+defer client.deinit();
+
+try std.testing.expectEqualStrings("test-key", client.api_key);
+try std.testing.expectEqualStrings("test-model", client.model);
+}
+
+test "NIMClient initWithModel" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .allocator = allocator,
+        .nim_api_key = "test-key",
+        .nim_model = "default-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
     };
-    var client = NIMClient.init(allocator, cfg);
+    var client = NIMClient.initWithModel(allocator, cfg, "custom-model");
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings("test-key", client.api_key);
+    try std.testing.expectEqualStrings("custom-model", client.model);
+}
+
+test "NIMClient initWithBaseUrl" {
+    const allocator = std.testing.allocator;
+    var client = NIMClient.initWithBaseUrl(
+        allocator,
+        "test-key",
+        "test-model",
+        "https://custom.api.example.com/v1/chat/completions",
+    );
     defer client.deinit();
 
     try std.testing.expectEqualStrings("test-key", client.api_key);
     try std.testing.expectEqualStrings("test-model", client.model);
+    try std.testing.expectEqualStrings("https://custom.api.example.com/v1/chat/completions", client.base_url);
 }
 
-test "NIMClient BASE_URL constant" {
+test "NIMClient setModel" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .allocator = allocator,
+        .nim_api_key = "test-key",
+        .nim_model = "initial-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
+    };
+    var client = NIMClient.init(allocator, cfg);
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings("initial-model", client.getModel());
+
+    client.setModel("new-model");
+    try std.testing.expectEqualStrings("new-model", client.getModel());
+}
+
+test "NIMClient getModel" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .allocator = allocator,
+        .nim_api_key = "test-key",
+        .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
+    };
+    var client = NIMClient.init(allocator, cfg);
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings("test-model", client.getModel());
+}
+
+test "NIMClient getApiKey" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .allocator = allocator,
+        .nim_api_key = "secret-key",
+        .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
+    };
+    var client = NIMClient.init(allocator, cfg);
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings("secret-key", client.getApiKey());
+}
+
+test "NIMClient getBaseUrl" {
+    const allocator = std.testing.allocator;
+    const cfg = TestConfig{
+        .allocator = allocator,
+        .nim_api_key = "test-key",
+        .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
+    };
+    var client = NIMClient.init(allocator, cfg);
+    defer client.deinit();
+
+    try std.testing.expectEqualStrings(NIMClient.DEFAULT_BASE_URL, client.getBaseUrl());
     // Verify the URL is correctly set to NVIDIA NIM endpoint
-    try std.testing.expectEqualStrings("https://integrate.api.nvidia.com/v1/chat/completions", NIMClient.BASE_URL);
+    // Verify the URL is correctly set to NVIDIA NIM endpoint
+    try std.testing.expectEqualStrings("https://integrate.api.nvidia.com/v1/chat/completions", NIMClient.DEFAULT_BASE_URL);
 }
 
 test "NIMClient deinit does not crash" {
     const allocator = std.testing.allocator;
     const cfg = TestConfig{
+        .allocator = allocator,
         .nim_api_key = "test-key",
         .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
     };
     var client = NIMClient.init(allocator, cfg);
     client.deinit();
@@ -166,8 +380,21 @@ test "NIMClient deinit does not crash" {
 test "NIMClient handles empty API key" {
     const allocator = std.testing.allocator;
     const cfg = TestConfig{
+        .allocator = allocator,
         .nim_api_key = "",
         .nim_model = "test-model",
+        .max_iterations = 10,
+        .temperature = 0.7,
+        .max_tokens = 1024,
+        .fallback_models = &.{},
+        .image_model = "test-image-model",
+        .gateway_port = 18789,
+        .gateway_mode = "local",
+        .gateway_bind = "lan",
+        .gateway_auth_token = null,
+        .workspace = "/tmp/test",
+        .max_concurrent = 4,
+        .source = .default,
     };
     var client = NIMClient.init(allocator, cfg);
     defer client.deinit();
@@ -177,7 +404,7 @@ test "NIMClient handles empty API key" {
 
 test "NIMClient model name flexibility" {
     const allocator = std.testing.allocator;
-    
+
     // Test with various model names
     const models = [_][]const u8{
         "qwen/qwen3.5-397b-a17b",
@@ -188,12 +415,25 @@ test "NIMClient model name flexibility" {
 
     for (models) |model_name| {
         const cfg = TestConfig{
+            .allocator = allocator,
             .nim_api_key = "test-key",
             .nim_model = model_name,
+            .max_iterations = 10,
+            .temperature = 0.7,
+            .max_tokens = 1024,
+            .fallback_models = &.{},
+            .image_model = "test-image-model",
+            .gateway_port = 18789,
+            .gateway_mode = "local",
+            .gateway_bind = "lan",
+            .gateway_auth_token = null,
+            .workspace = "/tmp/test",
+            .max_concurrent = 4,
+            .source = .default,
         };
         var client = NIMClient.init(allocator, cfg);
         defer client.deinit();
-        
+
         try std.testing.expectEqualStrings(model_name, client.model);
     }
 }
