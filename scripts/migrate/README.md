@@ -1,6 +1,8 @@
 # ZeptoClaw Data Migration Guide
 
-**Status: Complete** - All 5 migration scripts ready and tested.
+**Status: Complete** - All 5 migration scripts ready and tested. **Verified with Zig 0.15.2**.
+
+**Updated**: February 2026 - Migration scripts verified against ZeptoClaw Zig 0.15.2
 
 This directory contains scripts to migrate data from OpenClaw to ZeptoClaw.
 

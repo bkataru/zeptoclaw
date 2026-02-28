@@ -6,7 +6,16 @@
 
 ## Build Status
 
-**Migration Complete** - 100% complete with 0 errors
+**Zig 0.15.2 Migration Complete** - Build and tests passing with 0 errors
+
+## Recent Updates
+
+- **Memory Leak Fixes**: Implemented `Config.deinit()` to free allocated fields
+- **ArrayList API**: Corrected `toOwnedSlice()` usage across WhatsApp channel and provider modules
+- **Test Fixes**: Resolved memory leaks in test fixtures and corrected error type expectations
+- **Knowledge Base Skill**: Updated for Zig 0.15.2 compatibility
+
+## Project Metrics
 
 | Metric | Value |
 |--------|-------|
@@ -420,6 +429,21 @@ MIT - Same as the rest of the Claw family.
 
 ---
 
+## Recent Commits
+
+The following changes were recently committed to complete the Zig 0.15.2 migration:
+
+1. **fix: Implement Config.deinit() to free allocated fields** - Prevents memory leaks by freeing all allocated Config fields
+2. **fix: Correct fallback_models allocation in migration config** - Fixes static slice allocation issues
+3. **fix: Resolve memory leaks in provider test fixtures** - Adds proper cleanup in tests
+4. **fix: Correct ArrayList API usage in provider modules** - Fixes append() and toOwnedSlice() calls
+5. **fix: Fix ArrayList.toOwnedSlice() in WhatsApp channel** - Ensures API compliance across channel files
+6. **fix: Update knowledge_base skill for Zig 0.15.2 compatibility** - Updates skill for latest Zig version
+
+---
+
 **Status:** Migration Complete - All 11 phases finished with 0 errors
+
+**Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)
