@@ -2,6 +2,8 @@
 
 A Cloudflare Worker providing resilient OpenAI-compatible API routing for ZeptoClaw with automatic failover and health tracking.
 
+**Updated**: February 2026 - Compatible with ZeptoClaw Zig 0.15.2 migration
+
 ## Features
 
 - **OpenAI-Compatible API**: `/v1/chat/completions` endpoint
