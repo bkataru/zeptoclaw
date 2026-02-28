@@ -3,6 +3,7 @@ const zeptoclaw = @import("zeptoclaw");
 const Config = zeptoclaw.config.Config;
 const NIMClient = zeptoclaw.providers.nim.NIMClient;
 const Message = zeptoclaw.providers.types.Message;
+const Agent = zeptoclaw.agent.loop.Agent;
 
 // Helper to create a Config with all required fields for testing
 fn makeTestConfig(allocator: std.mem.Allocator, api_key: []const u8, model: []const u8) !Config {
@@ -165,4 +166,34 @@ test "integration: NIMClient message with tool calls" {
 
     try std.testing.expect(response.choices.len > 0);
     std.debug.print("\n[OK] Tool call test passed\n", .{});
+}
+
+test "integration: agent startup" {
+    const allocator = std.testing.allocator;
+
+    // Get API key from env, skip if not set
+    const api_key = std.process.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
+        if (err == error.EnvironmentVariableNotFound) {
+            std.debug.print("\n[SKIP] NVIDIA_API_KEY not set, skipping agent startup test\n", .{});
+            return;
+        }
+        return err;
+    };
+    defer allocator.free(api_key);
+    const model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
+    defer allocator.free(model);
+
+    var cfg = try makeTestConfig(allocator, api_key, model);
+    defer cfg.deinit();
+
+    var nim_client = NIMClient.init(allocator, cfg);
+    defer nim_client.deinit();
+
+    var agent = Agent.init(allocator, &nim_client, 50);
+    defer agent.deinit();
+
+    const response = try agent.run("Hello");
+    defer allocator.free(response);
+
+    try std.testing.expect(response.len > 0);
 }
