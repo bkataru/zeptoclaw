@@ -282,10 +282,19 @@ pub const ConfigLoader = struct {
         }
 
         // Load from environment variables
-        const env_config = try self.loadFromEnv();
-
+        var env_config = try self.loadFromEnv();
+        errdefer {
+            if (file_config) |*fc| fc.deinit();
+            env_config.deinit();
+        }
         // Merge configurations with priority: CLI > env > file > defaults
-        return self.mergeConfigs(file_config, env_config, cli_args);
+        const result = try self.mergeConfigs(file_config, env_config, cli_args);
+        // Deinit intermediate configs after successful merge
+        if (file_config) |*fc| {
+            fc.deinit();
+        }
+        env_config.deinit();
+        return result;
     }
 
     /// Load configuration from OpenClaw-compatible JSON file
