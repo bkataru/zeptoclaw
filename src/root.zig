@@ -52,6 +52,13 @@ pub const gateway = struct {
     pub const http_server = @import("gateway/http_server.zig");
     pub const control_ui = @import("gateway/control_ui.zig");
 };
+
+// Skills
+pub const skills = struct {
+    pub const skill_sdk = @import("skills/skill_sdk.zig");
+    pub const execution_context = @import("skills/execution_context.zig");
+    pub const git_workflow = @import("skills/git_workflow/skill.zig");
+};
 // Services
 // BACKWARDS COMPATIBILITY (old test functions)
 // ============================================================================
@@ -94,3 +101,10 @@ comptime {
         _ = @import("skills/git_workflow/git_workflow_test.zig");
     }
 }
+
+
+
+
+
+
+

@@ -1,13 +1,10 @@
 const std = @import("std");
-const sdk = @import("../skill_sdk.zig");
-const execution_context = @import("../execution_context.zig");
-const providers = @import("../../providers/types.zig");
-const git_workflow = @import("skill.zig");
-
-const SkillResult = execution_context.SkillResult;
-const ExecutionContext = execution_context.ExecutionContext;
-const Message = providers.Message;
-const ToolRegistry = execution_context.ToolRegistry;
+const root = @import("../../root.zig");
+const git_workflow = root.skills.git_workflow;
+const ExecutionContext = root.skills.execution_context.ExecutionContext;
+const ToolRegistry = root.skills.execution_context.ToolRegistry;
+const Message = root.providers.types.Message;
+const SkillResult = root.skills.execution_context.SkillResult;
 
 test "git_workflow: init with default config" {
     const allocator = std.testing.allocator;
@@ -447,7 +444,7 @@ test "git_workflow: getMetadata returns correct values" {
     try std.testing.expect(metadata.enabled);
 }
 
-// Test helpers
+// Test helper
 fn testSendResponse(ctx: *ExecutionContext, response: []const u8) anyerror!void {
     _ = ctx;
     _ = response;
