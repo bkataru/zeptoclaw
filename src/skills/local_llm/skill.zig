@@ -66,7 +66,7 @@ pub const skill = struct {
     fn handleList(ctx: *ExecutionContext) !SkillResult {
         // In a real implementation, this would call the Ollama API
         // For now, return a mock response
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("Available models:\n\n", .{});
@@ -157,7 +157,7 @@ pub const skill = struct {
             }
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         if (ram) |r| {
@@ -266,7 +266,7 @@ pub const skill = struct {
         const ctx_overhead_mb = @as(f64, @floatFromInt(ctx_tokens)) * 2.0 / 1024.0;
         const total_gb = model_size_gb + (ctx_overhead_mb / 1024.0);
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("RAM estimation for {s}:\n\n", .{model});
@@ -283,7 +283,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("Local LLM Commands:\n\n", .{});
