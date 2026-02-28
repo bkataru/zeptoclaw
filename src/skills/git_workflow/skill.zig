@@ -72,7 +72,7 @@ pub const skill = struct {
             .version = "1.0.0",
             .description = "Git advanced workflows — rebase, force-push safety, branch management, PR templates",
             .homepage = null,
-            .metadata = .{ .object = std.StringHashMap(std.json.Value).init(std.heap.page_allocator) },
+            .metadata = .null,
             .enabled = true,
         };
     }
@@ -100,10 +100,12 @@ fn handleStatus(ctx: *ExecutionContext) !SkillResult {
         \\  src/skills/github-stars/
         \\
         \\no changes added to commit (use "git add" and/or "git commit -a")
-    , .{config.?.default_branch, config.?.default_branch});
+    , .{skill.config.?.default_branch, skill.config.?.default_branch});
 
     try ctx.respond(response);
-    return SkillResult.successResponse(ctx.allocator, response);
+    const result = SkillResult.successResponse(ctx.allocator, response);
+    ctx.allocator.free(response);
+    return result;
 }
 
 fn handleCommit(ctx: *ExecutionContext, message: []const u8) !SkillResult {
@@ -127,19 +129,21 @@ fn handleCommit(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\Files changed: 5
         \\Insertions: 150
         \\Deletions: 23
-    , .{commit_msg, config.?.default_branch});
+    , .{commit_msg, skill.config.?.default_branch});
 
     try ctx.respond(response);
-    return SkillResult.successResponse(ctx.allocator, response);
+    const result = SkillResult.successResponse(ctx.allocator, response);
+    ctx.allocator.free(response);
+    return result;
 }
 
 fn handlePush(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     // Extract branch name
     const branch = std.mem.trim(u8, message["/git-push".len..], " \t\r\n");
-    const target_branch = if (branch.len > 0) branch else config.?.default_branch;
+    const target_branch = if (branch.len > 0) branch else skill.config.?.default_branch;
 
     // Check for force-push protection
-    if (config.?.force_push_protection and std.mem.eql(u8, target_branch, config.?.default_branch)) {
+    if (skill.config.?.force_push_protection and std.mem.eql(u8, target_branch, skill.config.?.default_branch)) {
         const response = try std.fmt.allocPrint(ctx.allocator,
             \\⚠️ Force-push protection enabled
             \\
@@ -151,7 +155,10 @@ fn handlePush(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\Are you sure you want to push to {s}?
         , .{target_branch, target_branch, target_branch});
         try ctx.respond(response);
-        return SkillResult.stop(ctx.allocator, response);
+
+        const result = SkillResult.stop(ctx.allocator, response);
+        ctx.allocator.free(response);
+        return result;
     }
 
     // In a real implementation, this would run git push
@@ -166,7 +173,10 @@ fn handlePush(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     , .{target_branch, target_branch});
 
     try ctx.respond(response);
-    return SkillResult.successResponse(ctx.allocator, response);
+
+    const result = SkillResult.successResponse(ctx.allocator, response);
+    ctx.allocator.free(response);
+    return result;
 }
 
 fn handlePull(ctx: *ExecutionContext) !SkillResult {
@@ -181,10 +191,13 @@ fn handlePull(ctx: *ExecutionContext) !SkillResult {
         \\✅ Pull successful
         \\Updated: 3 new commits
         \\Fast-forward: origin/{s} -> {s}
-    , .{config.?.default_branch, config.?.default_branch, config.?.default_branch});
+    , .{skill.config.?.default_branch, skill.config.?.default_branch, skill.config.?.default_branch});
 
     try ctx.respond(response);
-    return SkillResult.successResponse(ctx.allocator, response);
+
+    const result = SkillResult.successResponse(ctx.allocator, response);
+    ctx.allocator.free(response);
+    return result;
 }
 
 fn handleBranch(ctx: *ExecutionContext, message: []const u8) !SkillResult {
@@ -203,9 +216,12 @@ fn handleBranch(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\Remotes:
             \\  origin/{s}
             \\  origin/feature/new-feature
-        , .{config.?.default_branch, config.?.default_branch});
+        , .{skill.config.?.default_branch, skill.config.?.default_branch});
         try ctx.respond(response);
-        return SkillResult.successResponse(ctx.allocator, response);
+
+        const result = SkillResult.successResponse(ctx.allocator, response);
+        ctx.allocator.free(response);
+        return result;
     }
 
     // Create new branch
@@ -216,8 +232,10 @@ fn handleBranch(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\Based on: {s}
         \\
         \\Switched to new branch '{s}'
-    , .{branch_name, config.?.default_branch, branch_name});
+    , .{branch_name, skill.config.?.default_branch, branch_name});
 
     try ctx.respond(response);
-    return SkillResult.successResponse(ctx.allocator, response);
+    const result = SkillResult.successResponse(ctx.allocator, response);
+    ctx.allocator.free(response);
+    return result;
 }

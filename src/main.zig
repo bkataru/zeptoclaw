@@ -23,7 +23,7 @@ pub fn main() !void {
     defer nim_client.deinit();
 
     // Initialize agent with NIM client
-    var agent = Agent.init(allocator, &nim_client, 50);
+    var agent = try Agent.init(allocator, &nim_client, 50);
     defer agent.deinit();
 
     // Run interactive CLI session

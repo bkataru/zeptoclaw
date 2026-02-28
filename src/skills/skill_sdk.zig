@@ -5,14 +5,14 @@ const std = @import("std");
 const types = @import("types.zig");
 const execution_context = @import("execution_context.zig");
 
-const SkillMetadata = types.SkillMetadata;
-const Trigger = types.Trigger;
-const TriggerType = types.TriggerType;
-const ConfigSchema = types.ConfigSchema;
-const ConfigField = types.ConfigField;
-const FieldType = types.FieldType;
-const ExecutionContext = execution_context.ExecutionContext;
-const SkillResult = execution_context.SkillResult;
+pub const SkillMetadata = types.SkillMetadata;
+pub const Trigger = types.Trigger;
+pub const TriggerType = types.TriggerType;
+pub const ConfigSchema = types.ConfigSchema;
+pub const ConfigField = types.ConfigField;
+pub const FieldType = types.FieldType;
+pub const ExecutionContext = execution_context.ExecutionContext;
+pub const SkillResult = execution_context.SkillResult;
 
 /// Skill is the interface that all skills must implement
 pub const Skill = struct {
@@ -40,10 +40,10 @@ pub const SkillBuilder = struct {
         return .{
             .allocator = allocator,
             .metadata = SkillMetadata{
-                .id = id,
-                .name = name,
+                .id = try allocator.dupe(u8, id),
+                .name = try allocator.dupe(u8, name),
                 .version = null,
-                .description = description,
+                .description = try allocator.dupe(u8, description),
                 .homepage = null,
                 .metadata = .null,
                 .enabled = true,
@@ -56,17 +56,18 @@ pub const SkillBuilder = struct {
     pub fn deinit(self: *SkillBuilder) void {
         self.metadata.deinit(self.allocator);
         for (self.triggers.items) |*t| t.deinit(self.allocator);
-        self.triggers.deinit();
+        self.triggers.deinit(self.allocator);
         self.config_schema.deinit();
     }
 
-    pub fn version(self: *SkillBuilder, version: []const u8) !*SkillBuilder {
-        self.metadata.version = try self.allocator.dupe(u8, version);
+    pub fn version(self: *SkillBuilder, new_version: []const u8) !*SkillBuilder {
+        self.metadata.version = try self.allocator.dupe(u8, new_version);
         return self;
     }
 
-    pub fn homepage(self: *SkillBuilder, homepage: []const u8) !*SkillBuilder {
-        self.metadata.homepage = try self.allocator.dupe(u8, homepage);
+
+    pub fn homepage(self: *SkillBuilder, new_homepage: []const u8) !*SkillBuilder {
+        self.metadata.homepage = try self.allocator.dupe(u8, new_homepage);
         return self;
     }
 
@@ -90,7 +91,7 @@ pub const SkillBuilder = struct {
             },
         }
 
-        try self.triggers.append(trigger);
+        try self.triggers.append(self.allocator, trigger);
         return self;
     }
 
@@ -107,11 +108,22 @@ pub const SkillBuilder = struct {
     }
 
     pub fn build(self: *SkillBuilder) !types.Skill {
+        const metadata = try self.metadata.dupe(self.allocator);
+        const path = try self.allocator.dupe(u8, "");
+
+        // Take ownership of triggers and config_schema
+        const triggers = self.triggers;
+        const config_schema = self.config_schema;
+
+        // Reset builder fields to empty so deinit is safe
+        self.triggers = try std.ArrayList(Trigger).initCapacity(self.allocator, 0);
+        self.config_schema = ConfigSchema.init(self.allocator);
+
         return types.Skill{
-            .metadata = try self.metadata.dupe(self.allocator),
-            .triggers = self.triggers,
-            .config_schema = self.config_schema,
-            .path = try self.allocator.dupe(u8, ""),
+            .metadata = metadata,
+            .triggers = triggers,
+            .config_schema = config_schema,
+            .path = path,
         };
     }
 };
@@ -173,13 +185,13 @@ pub const SkillHelpers = struct {
         var result = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         errdefer {
             for (result.items) |arg| allocator.free(arg);
-            result.deinit();
+            result.deinit(allocator);
         }
 
         var iter = std.mem.splitScalar(u8, args, ' ');
         while (iter.next()) |arg| {
             if (arg.len > 0) {
-                try result.append(try allocator.dupe(u8, arg));
+                try result.append(allocator, try allocator.dupe(u8, arg));
             }
         }
 
@@ -386,13 +398,13 @@ test "SkillBuilder basic" {
     var builder = try SkillBuilder.init(allocator, "test-skill", "Test Skill", "A test skill");
     defer builder.deinit();
 
-    try builder.version("1.0.0");
-    try builder.homepage("https://example.com");
-    try builder.addTrigger(.command, "/test");
-    try builder.addTrigger(.mention, "@test");
-    try builder.addConfigField("api_key", .string, "API key");
+    _ = try builder.version("1.0.0");
+    _ = try builder.homepage("https://example.com");
+    _ = try builder.addTrigger(.command, "/test");
+    _ = try builder.addTrigger(.mention, "@test");
+    _ = try builder.addConfigField("api_key", .string, "API key");
 
-    const skill = try builder.build();
+    var skill = try builder.build();
     defer skill.deinit(allocator);
 
     try std.testing.expectEqualStrings("test-skill", skill.metadata.id);
@@ -415,10 +427,10 @@ test "SkillHelpers commandTrigger" {
 test "SkillHelpers parseCommandArgs" {
     const allocator = std.testing.allocator;
 
-    const args = try SkillHelpers.parseCommandArgs(allocator, "arg1 arg2 arg3");
+    var args = try SkillHelpers.parseCommandArgs(allocator, "arg1 arg2 arg3");
     defer {
         for (args.items) |arg| allocator.free(arg);
-        args.deinit();
+        args.deinit(allocator);
     }
 
     try std.testing.expectEqual(@as(usize, 3), args.items.len);

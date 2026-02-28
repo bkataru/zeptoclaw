@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         repo_path: []const u8 = "~/nufast",
         zig_path: []const u8 = "~/nufast/benchmarks/zig",
@@ -17,45 +15,46 @@ pub const skill = struct {
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value == .object) {
-            if (config_value.object.get("repo_path")) |v| {
-                if (v == .string) {
-                    config.repo_path = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("zig_path")) |v| {
-                if (v == .string) {
-                    config.zig_path = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("wasm_output")) |v| {
-                if (v == .string) {
-                    config.wasm_output = try allocator.dupe(u8, v.string);
-                }
-            }
-        }
+        _ = config_value;
+        // No global state: config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = parseConfig(ctx.config);
 
         if (std.mem.eql(u8, command, "nufast-build")) {
-            return handleBuild(ctx);
+            return handleBuild(ctx, cfg);
         } else if (std.mem.eql(u8, command, "nufast-test")) {
-            return handleTest(ctx);
+            return handleTest(ctx, cfg);
         } else if (std.mem.eql(u8, command, "nufast-bench")) {
-            return handleBench(ctx);
+            return handleBench(ctx, cfg);
         } else if (std.mem.eql(u8, command, "nufast-wasm")) {
-            return handleWasm(ctx);
+            return handleWasm(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleBuild(ctx: *ExecutionContext) !SkillResult {
+    fn parseConfig(config_json: std.json.Value) Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("repo_path")) |v| {
+                if (v == .string) cfg.repo_path = v.string;
+            }
+            if (config_json.object.get("zig_path")) |v| {
+                if (v == .string) cfg.zig_path = v.string;
+            }
+            if (config_json.object.get("wasm_output")) |v| {
+                if (v == .string) cfg.wasm_output = v.string;
+            }
+        }
+        return cfg;
+    }
+
+    fn handleBuild(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -65,18 +64,19 @@ pub const skill = struct {
         try response.writer().print("    Finished release [optimized] target(s) in 2.3s\n\n", .{});
 
         try response.writer().print("Building Zig implementation...\n", .{});
-        try response.writer().print("cd {s}\n", .{config.zig_path});
+        try response.writer().print("cd {s}\n", .{cfg.zig_path});
         try response.writer().print("zig build -Doptimize=ReleaseFast\n", .{});
         try response.writer().print("Build successful!\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleTest(ctx: *ExecutionContext) !SkillResult {
+    fn handleTest(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -90,12 +90,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleBench(ctx: *ExecutionContext) !SkillResult {
+    fn handleBench(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -116,12 +117,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleWasm(ctx: *ExecutionContext) !SkillResult {
+    fn handleWasm(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -137,12 +139,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -164,21 +167,9 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
-    }
-
-    pub fn deinit(allocator: Allocator) void {
-        if (config.repo_path.len > 0 and !std.mem.eql(u8, config.repo_path, "~/nufast")) {
-            allocator.free(config.repo_path);
-        }
-        if (config.zig_path.len > 0 and !std.mem.eql(u8, config.zig_path, "~/nufast/benchmarks/zig")) {
-            allocator.free(config.zig_path);
-        }
-        if (config.wasm_output.len > 0 and !std.mem.eql(u8, config.wasm_output, "~/nufast/benchmarks/zig/wasm")) {
-            allocator.free(config.wasm_output);
-        }
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

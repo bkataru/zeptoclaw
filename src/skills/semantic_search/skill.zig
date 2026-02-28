@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         ollama_url: []const u8 = "http://localhost:11434",
         embedding_model: []const u8 = "nomic-embed-text",
@@ -18,53 +16,53 @@ pub const skill = struct {
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value == .object) {
-            if (config_value.object.get("ollama_url")) |v| {
-                if (v == .string) {
-                    config.ollama_url = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("embedding_model")) |v| {
-                if (v == .string) {
-                    config.embedding_model = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("embeddings_file")) |v| {
-                if (v == .string) {
-                    config.embeddings_file = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("top_results")) |v| {
-                if (v == .integer) {
-                    config.top_results = try std.math.cast(usize, v.integer);
-                }
-            }
-        }
+        _ = config_value;
+        // No global state; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = try parseConfig(ctx.config);
 
         if (std.mem.eql(u8, command, "embed-index")) {
-            return handleIndex(ctx);
+            return handleIndex(ctx, cfg);
         } else if (std.mem.eql(u8, command, "embed-search")) {
-            return handleSearch(ctx);
+            return handleSearch(ctx, cfg);
         } else if (std.mem.eql(u8, command, "embed-model")) {
-            return handleModel(ctx);
+            return handleModel(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleIndex(ctx: *ExecutionContext) !SkillResult {
+    fn parseConfig(config_json: std.json.Value) anyerror!Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("ollama_url")) |v| {
+                if (v == .string) cfg.ollama_url = v.string;
+            }
+            if (config_json.object.get("embedding_model")) |v| {
+                if (v == .string) cfg.embedding_model = v.string;
+            }
+            if (config_json.object.get("embeddings_file")) |v| {
+                if (v == .string) cfg.embeddings_file = v.string;
+            }
+            if (config_json.object.get("top_results")) |v| {
+                if (v == .integer) {
+                    cfg.top_results = try std.math.cast(usize, v.integer);
+                }
+            }
+        }
+        return cfg;
+    }
+
+    fn handleIndex(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Indexing memory files...\n\n", .{});
-
         try response.writer().print("Reading MEMORY.md...\n", .{});
         try response.writer().print("  - Found 42 chunks\n", .{});
         try response.writer().print("Reading memory/2026-02-03.md...\n", .{});
@@ -72,58 +70,53 @@ pub const skill = struct {
         try response.writer().print("Reading memory/relationships.json...\n", .{});
         try response.writer().print("  - Found 5 chunks\n\n", .{});
 
-        try response.writer().print("Generating embeddings with {s}...\n", .{config.embedding_model});
+        try response.writer().print("Generating embeddings with {s}...\n", .{cfg.embedding_model});
         try response.writer().print("  - 42/65 chunks embedded\n", .{});
         try response.writer().print("  - 65/65 chunks embedded\n\n", .{});
 
-        try response.writer().print("Saved to: {s}\n", .{config.embeddings_file});
+        try response.writer().print("Saved to: {s}\n", .{cfg.embeddings_file});
         try response.writer().print("Index size: 1.2 MB\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleSearch(ctx: *ExecutionContext) !SkillResult {
+    fn handleSearch(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         const query = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Searching for: \"{s}\"\n\n", .{query});
-
-        try response.writer().print("Found {d} matches:\n\n", .{config.top_results});
+        try response.writer().print("Found {d} matches:\n\n", .{cfg.top_results});
 
         // Simulate search results
         try response.writer().print("1. MEMORY.md:15 (similarity: 0.89)\n", .{});
         try response.writer().print("   \"nufast v0.5.0 achieves 25ns vacuum oscillations with Zig SIMD...\"\n\n", .{});
-
         try response.writer().print("2. memory/2026-02-03.md:42 (similarity: 0.82)\n", .{});
         try response.writer().print("   \"Benchmarked nufast against Rust and Python implementations...\"\n\n", .{});
-
         try response.writer().print("3. MEMORY.md:120 (similarity: 0.78)\n", .{});
         try response.writer().print("   \"Performance comparison: Zig SIMD 25ns, Rust 61ns, Python 14,700ns...\"\n\n", .{});
-
         try response.writer().print("4. memory/2026-02-02.md:15 (similarity: 0.71)\n", .{});
         try response.writer().print("   \"Ran benchmarks on nufast Zig implementation...\"\n\n", .{});
-
         try response.writer().print("5. MEMORY.md:85 (similarity: 0.68)\n", .{});
         try response.writer().print("   \"nufast uses Denton & Parke's NuFast algorithm...\"\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleModel(ctx: *ExecutionContext) !SkillResult {
+    fn handleModel(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
-        try response.writer().print("Current model: {s}\n", .{config.embedding_model});
+        try response.writer().print("Current model: {s}\n", .{cfg.embedding_model});
         try response.writer().print("Dimensions: 768\n\n", .{});
 
         try response.writer().print("Available models:\n", .{});
@@ -135,12 +128,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -162,21 +156,14 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
     pub fn deinit(allocator: Allocator) void {
-        if (config.ollama_url.len > 0 and !std.mem.eql(u8, config.ollama_url, "http://localhost:11434")) {
-            allocator.free(config.ollama_url);
-        }
-        if (config.embedding_model.len > 0 and !std.mem.eql(u8, config.embedding_model, "nomic-embed-text")) {
-            allocator.free(config.embedding_model);
-        }
-        if (config.embeddings_file.len > 0 and !std.mem.eql(u8, config.embeddings_file, "memory/embeddings.json")) {
-            allocator.free(config.embeddings_file);
-        }
+        _ = allocator;
+        // No resources owned.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

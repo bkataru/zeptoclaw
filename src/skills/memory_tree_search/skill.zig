@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         index_path: []const u8 = "memory/.tree-index.json",
         memory_files: []const []const u8 = &[_][]const u8{ "MEMORY.md", "memory/*.md", "memory/relationships.json" },
@@ -17,65 +15,67 @@ pub const skill = struct {
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value == .object) {
-            if (config_value.object.get("index_path")) |v| {
-                if (v == .string) {
-                    config.index_path = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("auto_reindex")) |v| {
-                if (v == .bool) {
-                    config.auto_reindex = v.bool;
-                }
-            }
-        }
+        _ = config_value;
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = try parseConfig(ctx.config);
 
         if (std.mem.eql(u8, command, "memory-index")) {
-            return handleIndex(ctx);
+            return handleIndex(ctx, cfg);
         } else if (std.mem.eql(u8, command, "memory-search")) {
-            return handleSearch(ctx);
+            return handleSearch(ctx, cfg);
         } else if (std.mem.eql(u8, command, "memory-tree")) {
-            return handleTree(ctx);
+            return handleTree(ctx, cfg);
         } else if (std.mem.eql(u8, command, "summarize-transcripts")) {
-            return handleSummarize(ctx);
+            return handleSummarize(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleIndex(ctx: *ExecutionContext) !SkillResult {
+    fn parseConfig(config_json: std.json.Value) anyerror!Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("index_path")) |v| {
+                if (v == .string) cfg.index_path = v.string;
+            }
+            if (config_json.object.get("auto_reindex")) |v| {
+                if (v == .bool) cfg.auto_reindex = v.bool;
+            }
+        }
+        return cfg;
+    }
+
+    fn handleIndex(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building memory tree index...\n\n", .{});
 
-        // Simulate indexing process
         try response.writer().print("Indexing MEMORY.md...\n", .{});
         try response.writer().print("Indexing memory/2026-02-03.md...\n", .{});
         try response.writer().print("Indexing memory/relationships.json...\n\n", .{});
 
         try response.writer().print("Indexed 3 files\n", .{});
         try response.writer().print("Found 42 sections\n", .{});
-        try response.writer().print("Saved to: {s}\n\n", .{config.index_path});
+        try response.writer().print("Saved to: {s}\n\n", .{cfg.index_path});
 
         try response.writer().print("Use 'memory-tree' to view structure\n", .{});
         try response.writer().print("Use 'memory-search <query>' to search\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleSearch(ctx: *ExecutionContext) !SkillResult {
+    fn handleSearch(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused in this placeholder
         const query = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
@@ -83,7 +83,6 @@ pub const skill = struct {
 
         try response.writer().print("Searching memory tree...\n\n", .{});
 
-        // Simulate search results based on query
         if (std.mem.indexOf(u8, query, "nufast") != null) {
             try response.writer().print("Found relevant section: MEMORY.md > \"## nufast v0.5.0\"\n\n", .{});
             try response.writer().print("Content:\n", .{});
@@ -119,12 +118,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleTree(ctx: *ExecutionContext) !SkillResult {
+    fn handleTree(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -151,12 +151,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleSummarize(ctx: *ExecutionContext) !SkillResult {
+    fn handleSummarize(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -181,12 +182,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -204,15 +206,14 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
     pub fn deinit(allocator: Allocator) void {
-        if (config.index_path.len > 0 and !std.mem.eql(u8, config.index_path, "memory/.tree-index.json")) {
-            allocator.free(config.index_path);
-        }
+        _ = allocator;
+        // No allocated resources.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

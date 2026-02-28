@@ -416,7 +416,7 @@ pub const ConfigLoader = struct {
             try self.allocator.dupe(u8, "lan");
 
         const gateway_auth_token = std.process.getEnvVarOwned(self.allocator, "GATEWAY_AUTH_TOKEN") catch |err| blk: {
-            break :blk if (err == error.EnvVarNotFound) null else return err;
+            break :blk if (err == error.EnvironmentVariableNotFound) null else return err;
         };
 
         const workspace = std.process.getEnvVarOwned(self.allocator, "WORKSPACE") catch

@@ -127,6 +127,7 @@ pub const ToolRegistry = struct {
         var iter = self.tools.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.tools.deinit();
     }
@@ -136,7 +137,7 @@ pub const ToolRegistry = struct {
         const name = try self.allocator.dupe(u8, tool.name);
         errdefer self.allocator.free(name);
 
-        const tool_copy = try tool.dupe(self.allocator);
+        var tool_copy = try tool.dupe(self.allocator);
         errdefer tool_copy.deinit(self.allocator);
 
         try self.tools.put(name, tool_copy);
@@ -231,10 +232,10 @@ test "ExecutionContext init" {
     const allocator = std.testing.allocator;
 
     var skill_metadata = types.SkillMetadata{
-        .id = "test-skill",
-        .name = "Test Skill",
+        .id = try allocator.dupe(u8, "test-skill"),
+        .name = try allocator.dupe(u8, "Test Skill"),
         .version = null,
-        .description = "A test skill",
+        .description = try allocator.dupe(u8, "A test skill"),
         .homepage = null,
         .metadata = .null,
         .enabled = true,
@@ -257,7 +258,7 @@ test "ExecutionContext init" {
         skill_metadata,
         message,
         "session-123",
-        .{ .object = std.StringHashMap(std.json.Value).init(allocator) },
+        .{ .object = std.StringArrayHashMap(std.json.Value).init(allocator) },
         &tool_registry,
         testSendResponse,
     );
@@ -269,16 +270,17 @@ test "ExecutionContext init" {
 test "ExecutionContext getConfig" {
     const allocator = std.testing.allocator;
 
-    var config_obj = std.StringHashMap(std.json.Value).init(allocator);
+    var config_obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+    defer config_obj.deinit();
     try config_obj.put("api_key", std.json.Value{ .string = "test-key" });
     try config_obj.put("timeout", std.json.Value{ .integer = 30 });
     try config_obj.put("enabled", std.json.Value{ .bool = true });
 
     var skill_metadata = types.SkillMetadata{
-        .id = "test-skill",
-        .name = "Test Skill",
+        .id = try allocator.dupe(u8, "test-skill"),
+        .name = try allocator.dupe(u8, "Test Skill"),
         .version = null,
-        .description = "A test skill",
+        .description = try allocator.dupe(u8, "A test skill"),
         .homepage = null,
         .metadata = .null,
         .enabled = true,
@@ -318,12 +320,13 @@ test "ToolRegistry register and call" {
     var registry = ToolRegistry.init(allocator);
     defer registry.deinit();
 
-    const tool = ToolDefinition{
-        .name = "test_tool",
-        .description = "A test tool",
-        .parameters = .{ .object = std.StringHashMap(std.json.Value).init(allocator) },
+    var tool = ToolDefinition{
+        .name = try allocator.dupe(u8, "test_tool"),
+        .description = try allocator.dupe(u8, "A test tool"),
+        .parameters = .null,
         .handler = testToolHandler,
     };
+    defer tool.deinit(allocator);
 
     try registry.register(tool);
 
