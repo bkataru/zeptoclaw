@@ -78,6 +78,7 @@ pub const ToolDefinition = struct {
 
     pub fn deinit(self: *ToolDefinition, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        allocator.free(self.@"type");
         allocator.free(self.description);
     }
 
@@ -319,8 +320,8 @@ test "ToolDefinition dupe" {
         .parameters = .{ .object = std.StringArrayHashMap(std.json.Value).init(allocator) },
     };
 
-    const duplicated = try original.dupe(allocator);
-    // Note: Not calling deinit to avoid double-free of shared parameters map
+    var duplicated = try original.dupe(allocator);
+    defer duplicated.deinit(allocator);
 
 
     try std.testing.expectEqualStrings(original.name, duplicated.name);
@@ -395,5 +396,6 @@ test "Message with tool_calls hasToolCalls returns true" {
     try std.testing.expect(!message.hasToolCalls());
     
     message.tool_calls = try allocator.alloc(ToolCall, 1);
+    defer allocator.free(message.tool_calls.?);
     try std.testing.expect(message.hasToolCalls());
 }
