@@ -193,6 +193,7 @@ pub const ZeptoClawConfig = struct {
     max_iterations: u32,
     temperature: f32,
     max_tokens: u32,
+    nim_timeout_ms: u32 = 30000,
     gateway_port: u32,
     gateway_mode: []const u8,
     gateway_bind: []const u8,
@@ -452,8 +453,8 @@ pub const ConfigLoader = struct {
         if (whatsapp_group_require_mention_str[0] != 't' and whatsapp_group_require_mention_str[0] != '1') {
             self.allocator.free(whatsapp_group_require_mention_str);
         }
-        var whatsapp_allow_from = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
-        var whatsapp_group_activation_commands = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var whatsapp_allow_from = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+        var whatsapp_group_activation_commands = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         try whatsapp_group_activation_commands.append(self.allocator, try self.allocator.dupe(u8, "/start"));
 
         return .{

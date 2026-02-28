@@ -82,7 +82,7 @@ pub const WhatsAppMessage = struct {
     reply_context: ?ReplyContext,
     timestamp: i64,
 
-    pub fn init(allocator: std.mem.Allocator) WhatsAppMessage {
+    pub fn init(allocator: std.mem.Allocator) !WhatsAppMessage {
         return .{
             .allocator = allocator,
             .id = "",
@@ -97,7 +97,7 @@ pub const WhatsAppMessage = struct {
             .message_type = .text,
             .media_type = null,
             .location = null,
-            .mentioned_jids = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
+            .mentioned_jids = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             .reply_context = null,
             .timestamp = 0,
         };
@@ -120,7 +120,7 @@ pub const WhatsAppMessage = struct {
         for (self.mentioned_jids.items) |jid| {
             self.allocator.free(jid);
         }
-        self.mentioned_jids.deinit();
+        self.mentioned_jids.deinit(self.allocator);
         if (self.reply_context) |*ctx| {
             self.allocator.free(ctx.message_id);
             if (ctx.participant) |p| self.allocator.free(p);
@@ -187,19 +187,19 @@ pub const WhatsAppConfig = struct {
     group_require_mention: bool,
     group_activation_commands: std.ArrayList([]const u8),
 
-    pub fn init(allocator: std.mem.Allocator) WhatsAppConfig {
+    pub fn init(allocator: std.mem.Allocator) !WhatsAppConfig {
         return .{
             .allocator = allocator,
             .enabled = false,
             .auth_dir = "",
             .dm_policy = .pairing,
-            .allow_from = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
+            .allow_from = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             .group_policy = .allowlist,
             .media_max_mb = 50,
             .debounce_ms = 0,
             .send_read_receipts = true,
             .group_require_mention = true,
-            .group_activation_commands = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
+            .group_activation_commands = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
 
@@ -208,11 +208,11 @@ pub const WhatsAppConfig = struct {
         for (self.allow_from.items) |item| {
             self.allocator.free(item);
         }
-        self.allow_from.deinit();
+        self.allow_from.deinit(self.allocator);
         for (self.group_activation_commands.items) |item| {
             self.allocator.free(item);
         }
-        self.group_activation_commands.deinit();
+        self.group_activation_commands.deinit(self.allocator);
     }
 
     pub fn isAllowedSender(self: *const WhatsAppConfig, sender_e164: []const u8) bool {
@@ -276,7 +276,7 @@ pub const Debouncer = struct {
             for (entry.value_ptr.items) |*deb| {
                 deb.message.deinit();
             }
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(self.allocator);
             self.allocator.free(entry.key_ptr.*);
         }
         self.entries.deinit();
@@ -293,10 +293,10 @@ pub const Debouncer = struct {
 
         const gop = try self.entries.getOrPut(key);
         if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(DebouncedEntry).initCapacity(self.allocator, 0) catch unreachable;
+            gop.value_ptr.* = try std.ArrayList(DebouncedEntry).initCapacity(self.allocator, 0);
         }
 
-        try gop.value_ptr.append(.{
+        try gop.value_ptr.append(self.allocator, .{
             .message = message,
             .timestamp = std.time.timestamp(),
         });
@@ -312,7 +312,7 @@ pub const Debouncer = struct {
         const entries = self.entries.fetchRemove(key) orelse return &[_]DebouncedEntry{};
         defer {
             self.allocator.free(key);
-            entries.value.deinit();
+            entries.value.deinit(self.allocator);
         }
 
         try self.last_flush.put(try self.allocator.dupe(u8, key), std.time.timestamp());
@@ -323,7 +323,7 @@ pub const Debouncer = struct {
 
 test "WhatsAppMessage init/deinit" {
     const allocator = std.testing.allocator;
-    var msg = WhatsAppMessage.init(allocator);
+    var msg = try WhatsAppMessage.init(allocator);
     defer msg.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), msg.id.len);
@@ -332,7 +332,7 @@ test "WhatsAppMessage init/deinit" {
 
 test "WhatsAppConfig init/deinit" {
     const allocator = std.testing.allocator;
-    var cfg = WhatsAppConfig.init(allocator);
+    var cfg = try WhatsAppConfig.init(allocator);
     defer cfg.deinit();
 
     try std.testing.expectEqual(false, cfg.enabled);
@@ -344,9 +344,9 @@ test "Debouncer basic" {
     var debouncer = Debouncer.init(allocator, 1000);
     defer debouncer.deinit();
 
-    var msg = WhatsAppMessage.init(allocator);
-    defer msg.deinit();
-    msg.from = "1234567890";
+    var msg = try WhatsAppMessage.init(allocator);
+    // removed: defer msg.deinit() to avoid double free with enqueue copy
+    msg.from = try allocator.dupe(u8, "1234567890");
 
     try debouncer.enqueue(msg);
     try std.testing.expect(debouncer.shouldFlush("1234567890"));

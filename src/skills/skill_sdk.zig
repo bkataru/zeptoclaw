@@ -36,7 +36,7 @@ pub const SkillBuilder = struct {
     triggers: std.ArrayList(Trigger),
     config_schema: ConfigSchema,
 
-    pub fn init(allocator: std.mem.Allocator, id: []const u8, name: []const u8, description: []const u8) SkillBuilder {
+    pub fn init(allocator: std.mem.Allocator, id: []const u8, name: []const u8, description: []const u8) !SkillBuilder {
         return .{
             .allocator = allocator,
             .metadata = SkillMetadata{
@@ -48,7 +48,7 @@ pub const SkillBuilder = struct {
                 .metadata = .null,
                 .enabled = true,
             },
-            .triggers = std.ArrayList(Trigger).initCapacity(allocator, 0) catch unreachable,
+            .triggers = try std.ArrayList(Trigger).initCapacity(allocator, 0),
             .config_schema = ConfigSchema.init(allocator),
         };
     }
@@ -170,7 +170,7 @@ pub const SkillHelpers = struct {
 
     /// Parse command arguments
     pub fn parseCommandArgs(allocator: std.mem.Allocator, args: []const u8) !std.ArrayList([]const u8) {
-        var result = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        var result = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         errdefer {
             for (result.items) |arg| allocator.free(arg);
             result.deinit();
@@ -383,7 +383,7 @@ pub const SkillHelpers = struct {
 test "SkillBuilder basic" {
     const allocator = std.testing.allocator;
 
-    var builder = SkillBuilder.init(allocator, "test-skill", "Test Skill", "A test skill");
+    var builder = try SkillBuilder.init(allocator, "test-skill", "Test Skill", "A test skill");
     defer builder.deinit();
 
     try builder.version("1.0.0");

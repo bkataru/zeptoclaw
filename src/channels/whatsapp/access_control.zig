@@ -233,9 +233,9 @@ pub const AccessControl = struct {
     }
 
     /// Clean up expired pairings
-    pub fn cleanupExpiredPairings(self: *AccessControl) void {
+    pub fn cleanupExpiredPairings(self: *AccessControl) !void {
         const now = std.time.timestamp();
-        var keys_to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {
                 self.allocator.free(key);
@@ -260,7 +260,7 @@ pub const AccessControl = struct {
 
     /// Get list of paired senders
     pub fn getPairedSenders(self: *AccessControl) ![][]const u8 {
-        var senders = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var senders = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
 
         var iter = self.paired_senders.iterator();
         while (iter.next()) |entry| {
@@ -272,7 +272,7 @@ pub const AccessControl = struct {
 
     /// Get list of allowed groups
     pub fn getAllowedGroups(self: *AccessControl) ![][]const u8 {
-        var groups = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var groups = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
 
         var iter = self.group_allowlist.iterator();
         while (iter.next()) |entry| {
@@ -292,7 +292,7 @@ const PendingPairing = struct {
 /// E.164 normalizer
 pub const E164Normalizer = struct {
     pub fn normalize(allocator: Allocator, input: []const u8) ![]const u8 {
-        var result = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+        var result = try std.ArrayList(u8).initCapacity(allocator, 0);
         errdefer result.deinit();
 
         // Remove all non-digit characters
@@ -334,7 +334,7 @@ pub const E164Normalizer = struct {
 
 test "AccessControl basic" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     config.dm_policy = .pairing;
@@ -351,7 +351,7 @@ test "AccessControl basic" {
 
 test "AccessControl pairing code" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     var access = AccessControl.init(allocator, config);

@@ -85,7 +85,7 @@ pub fn main() !void {
     // Initialize HTTP server
     var server = try HttpServer.init(
         allocator,
-        @intCast(cfg.gateway_port),
+        std.math.cast(u16, cfg.gateway_port) orelse return error.InvalidPort,
         cfg.gateway_bind,
         &auth,
         &session_store,

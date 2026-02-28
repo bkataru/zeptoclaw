@@ -183,7 +183,7 @@ pub const SkillRegistry = struct {
 
     /// Export registry state as JSON
     pub fn exportState(self: *SkillRegistry) !std.json.Value {
-        var skills_array = std.ArrayList(std.json.Value).initCapacity(self.allocator, 0) catch unreachable;
+        var skills_array = try std.ArrayList(std.json.Value).initCapacity(self.allocator, 0);
         defer skills_array.deinit();
 
         var iter = self.skills.iterator();
@@ -220,7 +220,7 @@ test "SkillRegistry register and get" {
     var registry = SkillRegistry.init(allocator);
     defer registry.deinit();
 
-    const skill = createTestSkill(allocator);
+    const skill = try createTestSkill(allocator);
 
     try registry.register(skill);
     // Don't deinit skill since registry now owns a copy
@@ -238,7 +238,7 @@ test "SkillRegistry enable and disable" {
     var registry = SkillRegistry.init(allocator);
     defer registry.deinit();
 
-    const skill = createTestSkill(allocator);
+    const skill = try createTestSkill(allocator);
 
     try registry.register(skill);
     // Don't deinit skill since registry now owns a copy
@@ -259,8 +259,8 @@ test "SkillRegistry getAll" {
     var registry = SkillRegistry.init(allocator);
     defer registry.deinit();
 
-    const skill1 = createTestSkill(allocator);
-    const skill2 = createTestSkill2(allocator);
+    const skill1 = try createTestSkill(allocator);
+    const skill2 = try createTestSkill2(allocator);
 
     try registry.register(skill1);
     try registry.register(skill2);
@@ -280,8 +280,8 @@ test "SkillRegistry getEnabled" {
     var registry = SkillRegistry.init(allocator);
     defer registry.deinit();
 
-    const skill1 = createTestSkill(allocator);
-    const skill2 = createTestSkill2(allocator);
+    const skill1 = try createTestSkill(allocator);
+    const skill2 = try createTestSkill2(allocator);
 
     try registry.register(skill1);
     try registry.register(skill2);
@@ -304,7 +304,7 @@ test "SkillRegistry unregister" {
     var registry = SkillRegistry.init(allocator);
     defer registry.deinit();
 
-    const skill = createTestSkill(allocator);
+    const skill = try createTestSkill(allocator);
 
     try registry.register(skill);
     // Don't deinit skill since registry now owns a copy
@@ -316,7 +316,7 @@ test "SkillRegistry unregister" {
 }
 
 // Test helpers
-fn createTestSkill(allocator: std.mem.Allocator) Skill {
+fn createTestSkill(allocator: std.mem.Allocator) !Skill {
     const triggers = std.ArrayList(types.Trigger){};
 
     const metadata = SkillMetadata{
@@ -333,11 +333,11 @@ fn createTestSkill(allocator: std.mem.Allocator) Skill {
         .metadata = metadata,
         .triggers = triggers,
         .config_schema = types.ConfigSchema.init(allocator),
-        .path = allocator.dupe(u8, "/test/path") catch unreachable,
+        .path = try allocator.dupe(u8, "/test/path"),
     };
 }
 
-fn createTestSkill2(allocator: std.mem.Allocator) Skill {
+fn createTestSkill2(allocator: std.mem.Allocator) !Skill {
     const triggers = std.ArrayList(types.Trigger){};
 
     const metadata = SkillMetadata{
@@ -354,6 +354,6 @@ fn createTestSkill2(allocator: std.mem.Allocator) Skill {
         .metadata = metadata,
         .triggers = triggers,
         .config_schema = types.ConfigSchema.init(allocator),
-        .path = allocator.dupe(u8, "/test/path2") catch unreachable,
+        .path = try allocator.dupe(u8, "/test/path2"),
     };
 }

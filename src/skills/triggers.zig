@@ -178,7 +178,7 @@ pub const TriggerScheduler = struct {
         const month = month_day.month;
         // Calculate weekday: epoch day 0 (Jan 1, 1970) was Thursday (4)
         // Weekday: 0=Sunday, 1=Monday, ..., 6=Saturday
-        const weekday = std.math.cast(u3, @mod(epoch_day.day + 4, 7)) catch unreachable;
+        const weekday = std.math.cast(u3, @mod(epoch_day.day + 4, 7)) catch unreachable; // unreachable: modulo 7 result guaranteed to fit in u3
 
         // Check each part
         if (!self.matchCronPart(minute_str, minute)) return false;

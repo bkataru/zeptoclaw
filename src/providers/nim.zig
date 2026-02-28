@@ -4,11 +4,13 @@ const config_module = @import("../config.zig");
 
 
 
+
 pub const NIMClient = struct {
     allocator: std.mem.Allocator,
     api_key: []const u8,
     model: []const u8,
     base_url: []const u8,
+    timeout_ms: u32,
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
@@ -18,6 +20,7 @@ pub const NIMClient = struct {
             .api_key = cfg.nim_api_key,
             .model = cfg.nim_model,
             .base_url = DEFAULT_BASE_URL,
+            .timeout_ms = 30000,
             .client = std.http.Client{ .allocator = allocator },
         };
     }
@@ -29,6 +32,7 @@ pub const NIMClient = struct {
             .api_key = cfg.nim_api_key,
             .model = model_id,
             .base_url = DEFAULT_BASE_URL,
+            .timeout_ms = 30000,
             .client = std.http.Client{ .allocator = allocator },
         };
     }
@@ -40,6 +44,7 @@ pub const NIMClient = struct {
             .api_key = api_key,
             .model = model_id,
             .base_url = base_url,
+            .timeout_ms = 30000,
             .client = std.http.Client{ .allocator = allocator },
         };
     }
@@ -127,6 +132,8 @@ pub fn deinit(self: *NIMClient) void {
         };
 
         const body = out.written();
+        var timer = std.time.Timer.start() catch return types.ProviderError.Network;
+        const overall_timeout_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms;
 
         // Build Authorization header value
         var auth_buf = std.ArrayList(u8){};
@@ -144,13 +151,30 @@ pub fn deinit(self: *NIMClient) void {
             },
         }) catch return types.ProviderError.Network;
         defer req.deinit();
-
+        // Enforce request timeout via timer checks below
         // Send body
-        req.sendBodyComplete(body) catch return types.ProviderError.Network;
+        // Send body with timeout enforcement
+        req.sendBodyComplete(body) catch {
+            if (timer.read() > overall_timeout_ns) {
+                return types.ProviderError.Timeout;
+            }
+            return types.ProviderError.Network;
+        };
+        if (timer.read() > overall_timeout_ns) {
+            return types.ProviderError.Timeout;
+        }
 
         // Receive response head
         var redirect_buffer: [1024]u8 = undefined;
-        var response = req.receiveHead(&redirect_buffer) catch return types.ProviderError.Network;
+        var response = req.receiveHead(&redirect_buffer) catch {
+            if (timer.read() > overall_timeout_ns) {
+                return types.ProviderError.Timeout;
+            }
+            return types.ProviderError.Network;
+        };
+        if (timer.read() > overall_timeout_ns) {
+            return types.ProviderError.Timeout;
+        }
         // Check response status
         if (response.head.status != .ok) {
             return switch (response.head.status) {
@@ -165,9 +189,16 @@ pub fn deinit(self: *NIMClient) void {
         const reader = response.reader(&transfer_buffer);
 
         // Read all remaining bytes from response
-        const response_bytes = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return types.ProviderError.Network;
+        const response_bytes = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch {
+            if (timer.read() > overall_timeout_ns) {
+                return types.ProviderError.Timeout;
+            }
+            return types.ProviderError.Network;
+        };
+        if (timer.read() > overall_timeout_ns) {
+            return types.ProviderError.Timeout;
+        }
         defer self.allocator.free(response_bytes);
-
         // Parse JSON response
         var parsed = std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_bytes, .{}) catch return types.ProviderError.InvalidResponse;
         defer parsed.deinit();

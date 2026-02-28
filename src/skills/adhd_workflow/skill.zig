@@ -71,7 +71,7 @@ pub const skill = struct {
         const task = ctx.args orelse return error.MissingArgument;
 
         // Analyze the task and break it down
-        var steps = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var steps = try std.ArrayList([]const u8).initCapacity(ctx.allocator, 0);
         defer {
             for (steps.items) |step| {
                 ctx.allocator.free(step);
@@ -110,7 +110,7 @@ pub const skill = struct {
         }
 
         // Format response
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Task: \"{s}\"\n\n", .{task});
@@ -147,7 +147,7 @@ pub const skill = struct {
             first_step = "Open the relevant file and read it";
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Focus mode: \"{s}\"\n\n", .{task});
@@ -165,7 +165,7 @@ pub const skill = struct {
     fn handleSimplify(ctx: *ExecutionContext) !SkillResult {
         const task = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Simplified:\n", .{});
@@ -197,7 +197,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("ADHD-Friendly Workflow Commands:\n\n", .{});

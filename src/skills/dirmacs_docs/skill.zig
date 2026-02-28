@@ -121,7 +121,7 @@ pub const skill = struct {
                     "";
 
                 const topics_val = doc_val.object.get("topics");
-                var topics = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                var topics = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
                 if (topics_val != null and topics_val.?. == .array) {
                     for (topics_val.?.array.items) |topic| {
@@ -228,7 +228,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Found {d} match(es):\n\n", .{matches.items.len});
@@ -316,7 +316,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         var repo_iter = index.?.repositories.iterator();
@@ -326,7 +326,7 @@ pub const skill = struct {
 
             try response.writer().print("{s}:\n", .{repo_name});
 
-            var doc_names = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+            var doc_names = try std.ArrayList([]const u8).initCapacity(ctx.allocator, 0);
             defer {
                 for (doc_names.items) |name| {
                     ctx.allocator.free(name);
@@ -378,7 +378,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("dirmacs-docs-index.json\n", .{});
@@ -392,7 +392,7 @@ pub const skill = struct {
             const prefix = if (repo_count == index.?.repositories.count() - 1) "└── " else "├── ";
             try response.writer().print("{s}{s}\n", .{ prefix, repo_name });
 
-            var doc_names = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+            var doc_names = try std.ArrayList([]const u8).initCapacity(ctx.allocator, 0);
             defer {
                 for (doc_names.items) |name| {
                     ctx.allocator.free(name);
@@ -431,7 +431,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Dirmacs Documentation Search Commands:\n\n", .{});

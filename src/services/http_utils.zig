@@ -324,7 +324,7 @@ test "validateBasicAuth - valid credentials" {
     const credentials = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ username, password });
     defer std.testing.allocator.free(credentials);
 
-    const encoded = std.base64.standard.Encoder.encode(&std.heap.page_allocator, credentials) catch unreachable;
+    const encoded = try std.base64.standard.Encoder.encode(&std.heap.page_allocator, credentials);
     defer std.heap.page_allocator.free(encoded);
 
     const header = try std.fmt.allocPrint(std.testing.allocator, "Basic {s}", .{encoded});

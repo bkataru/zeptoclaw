@@ -51,7 +51,7 @@ pub const skill = struct {
     }
 
     fn handleIndex(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building memory tree index...\n\n", .{});
@@ -78,7 +78,7 @@ pub const skill = struct {
     fn handleSearch(ctx: *ExecutionContext) !SkillResult {
         const query = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Searching memory tree...\n\n", .{});
@@ -125,7 +125,7 @@ pub const skill = struct {
     }
 
     fn handleTree(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("MEMORY.md\n", .{});
@@ -157,7 +157,7 @@ pub const skill = struct {
     }
 
     fn handleSummarize(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Summarizing sessions older than 7 days...\n\n", .{});
@@ -187,7 +187,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Memory Tree Search Commands:\n\n", .{});

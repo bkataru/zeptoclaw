@@ -26,13 +26,13 @@ pub fn loadFromZeptoConfig(allocator: std.mem.Allocator, zepto_config: anytype) 
         return error.InvalidGroupPolicy;
 
     // Duplicate allow_from list
-    var allow_from = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var allow_from = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     for (zepto_config.whatsapp_allow_from) |item| {
         try allow_from.append(try allocator.dupe(u8, item));
     }
 
     // Duplicate group_activation_commands list
-    var group_activation_commands = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var group_activation_commands = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     for (zepto_config.whatsapp_group_activation_commands) |item| {
         try group_activation_commands.append(try allocator.dupe(u8, item));
     }

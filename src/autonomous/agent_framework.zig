@@ -206,7 +206,7 @@ pub const AutonomousAgent = struct {
         }
 
         // Filter out posts we've already seen
-        var new_posts = std.ArrayList(*const types.MoltbookPost).initCapacity(self.allocator, 0) catch unreachable;
+        var new_posts = try std.ArrayList(*const types.MoltbookPost).initCapacity(self.allocator, 0);
         defer new_posts.deinit(self.allocator);
 
         for (posts) |*post| {
@@ -424,10 +424,10 @@ pub const AutonomousAgent = struct {
             self.allocator.free(posts);
         }
 
-        result.posts_found = @intCast(posts.len);
+        result.posts_found = std.math.lossyCast(u32, posts.len);
 
         // Filter out seen posts
-        var new_posts = std.ArrayList(*const types.MoltbookPost).initCapacity(self.allocator, 0) catch unreachable;
+        var new_posts = try std.ArrayList(*const types.MoltbookPost).initCapacity(self.allocator, 0);
         defer new_posts.deinit(self.allocator);
 
         for (posts) |*post| {
@@ -500,7 +500,7 @@ pub const AutonomousAgent = struct {
         var state = &self.state_store.state;
         const agent_id = self.moltbook_client.agent_id;
 
-        var unreplied = std.ArrayList(types.MoltbookComment).initCapacity(self.allocator, 0) catch unreachable;
+        var unreplied = try std.ArrayList(types.MoltbookComment).initCapacity(self.allocator, 0);
 
         for (comments) |comment| {
             // Skip our own comments

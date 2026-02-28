@@ -207,7 +207,7 @@ pub const HealthTracker = struct {
 
     /// Get all available models (not in cooldown and healthy)
     pub fn getAvailableModels(self: *HealthTracker, models: []const *provider_pool.ModelMetadata) ![]*provider_pool.ModelMetadata {
-        var available = std.ArrayList(*provider_pool.ModelMetadata).initCapacity(self.allocator, 0) catch unreachable;
+        var available = try std.ArrayList(*provider_pool.ModelMetadata).initCapacity(self.allocator, 0);
 
         for (models) |model| {
             if (self.isModelAvailable(model.id)) {

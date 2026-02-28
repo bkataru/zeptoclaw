@@ -61,7 +61,7 @@ pub const InboundProcessor = struct {
 
         if (self.seen_messages.get(key)) |timestamp| {
             const now = std.time.timestamp();
-            const elapsed_ms = @as(u64, @intCast(now - timestamp)) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
             return elapsed_ms < self.dedupe_ttl_ms;
         }
 
@@ -77,9 +77,9 @@ pub const InboundProcessor = struct {
     }
 
     /// Clean up old entries from deduplication cache
-    pub fn cleanup(self: *InboundProcessor) void {
+    pub fn cleanup(self: *InboundProcessor) !void {
         const now = std.time.timestamp();
-        var keys_to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {
                 self.allocator.free(key);
@@ -89,7 +89,7 @@ pub const InboundProcessor = struct {
 
         var iter = self.seen_messages.iterator();
         while (iter.next()) |entry| {
-            const elapsed_ms = @as(u64, @intCast(now - entry.value_ptr.*)) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - entry.value_ptr.*) catch 0) * 1000;
             if (elapsed_ms >= self.dedupe_ttl_ms) {
                 keys_to_remove.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
             }
@@ -135,7 +135,7 @@ pub const InboundProcessor = struct {
 
     /// Format message for agent
     pub fn formatForAgent(msg: *const WhatsAppMessage, allocator: Allocator) ![]const u8 {
-        var buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+        var buffer = try std.ArrayList(u8).initCapacity(allocator, 0);
         defer buffer.deinit();
 
         // Add sender info
@@ -198,7 +198,7 @@ pub const MessageDeduper = struct {
     pub fn isDuplicate(self: *MessageDeduper, key: []const u8) bool {
         if (self.cache.get(key)) |timestamp| {
             const now = std.time.timestamp();
-            const elapsed_ms = @as(u64, @intCast(now - timestamp)) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
             return elapsed_ms < self.ttl_ms;
         }
         return false;
@@ -209,9 +209,9 @@ pub const MessageDeduper = struct {
         try self.cache.put(key_copy, std.time.timestamp());
     }
 
-    pub fn cleanup(self: *MessageDeduper) void {
+    pub fn cleanup(self: *MessageDeduper) !void {
         const now = std.time.timestamp();
-        var keys_to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {
                 self.allocator.free(key);
@@ -221,7 +221,7 @@ pub const MessageDeduper = struct {
 
         var iter = self.cache.iterator();
         while (iter.next()) |entry| {
-            const elapsed_ms = @as(u64, @intCast(now - entry.value_ptr.*)) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - entry.value_ptr.*) catch 0) * 1000;
             if (elapsed_ms >= self.ttl_ms) {
                 keys_to_remove.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
             }
@@ -235,16 +235,16 @@ pub const MessageDeduper = struct {
 
 test "InboundProcessor basic" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
-    var whatsapp_session = WhatsAppSession.init(allocator, config, 50);
+    var whatsapp_session = try WhatsAppSession.init(allocator, config, 50);
     defer whatsapp_session.deinit();
 
     var processor = InboundProcessor.init(allocator, config, &whatsapp_session);
     defer processor.deinit();
 
-    var msg = WhatsAppMessage.init(allocator);
+    var msg = try WhatsAppMessage.init(allocator);
     defer msg.deinit();
     msg.id = "test123";
     msg.chat_id = "1234567890@s.whatsapp.net";

@@ -45,7 +45,7 @@ test "formatMessagePrefix returns colors" {
 }
 
 test "formatToolCall formats correctly" {
-    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch unreachable;
+    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
     defer buf.deinit();
     const writer = buf.writer();
     
@@ -56,7 +56,7 @@ test "formatToolCall formats correctly" {
 }
 
 test "formatError formats correctly" {
-    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch unreachable;
+    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
     defer buf.deinit();
     const writer = buf.writer();
     
