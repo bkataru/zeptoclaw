@@ -68,7 +68,7 @@ pub const skill = struct {
                 index = Index{
                     .vault_path = try allocator.dupe(u8, config.vault_path),
                     .indexed_at = "",
-                    .files = std.ArrayList(Index.File).initCapacity(allocator, 0) catch unreachable,
+                    .files = std.ArrayList(Index.File).initCapacity(allocator, 0) catch unreachable,  // unreachable: zero-capacity allocation cannot fail
                 };
                 return;
             }
@@ -92,7 +92,7 @@ pub const skill = struct {
 
         if (files_val != .array) return error.InvalidFilesFormat;
 
-        var files = std.ArrayList(Index.File).initCapacity(allocator, 0) catch unreachable;
+        var files = std.ArrayList(Index.File).initCapacity(allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
 
         for (files_val.array.items) |file_val| {
             if (file_val != .object) continue;
@@ -103,7 +103,7 @@ pub const skill = struct {
             const name = if (file_obj.get("name")) |n| if (n == .string) n.string else "" else "";
             const folder = if (file_obj.get("folder")) |f| if (f == .string) f.string else "" else "";
 
-            var headers = std.ArrayList(Index.Header).initCapacity(allocator, 0) catch unreachable;
+            var headers = std.ArrayList(Index.Header).initCapacity(allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
             const headers_val = file_obj.get("headers");
             if (headers_val != null and headers_val.?. == .array) {
                 for (headers_val.?.array.items) |header_val| {
@@ -185,7 +185,7 @@ pub const skill = struct {
             };
         }
 
-        var matches = std.ArrayList(usize).initCapacity(ctx.allocator, 0) catch unreachable;
+        var matches = std.ArrayList(usize).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
 
         for (index.?.files.items, 0..) |file, i| {
             var found = false;
@@ -216,7 +216,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("Found {d} match(es):\n\n", .{matches.items.len});
@@ -292,11 +292,11 @@ pub const skill = struct {
             }
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         var count: usize = 0;
-        var files = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var files = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer {
             for (files.items) |f| {
                 ctx.allocator.free(f);
@@ -344,7 +344,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("Obsidian Vault/\n", .{});
@@ -367,7 +367,7 @@ pub const skill = struct {
             const folder = if (file.folder.len > 0) file.folder else "(root)";
             const entry = try folders.getOrPut(try ctx.allocator.dupe(u8, folder));
             if (!entry.found_existing) {
-                entry.value_ptr.* = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+                entry.value_ptr.* = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
             }
             try entry.value_ptr.append(ctx.allocator, try ctx.allocator.dupe(u8, file.name));
         }
@@ -428,7 +428,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
         defer response.deinit();
 
         try response.writer().print("Knowledge Base Commands:\n\n", .{});
