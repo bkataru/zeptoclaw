@@ -121,7 +121,7 @@ pub const skill = struct {
                     else
                         0;
 
-                    try headers.append(Index.Header{
+                    try headers.append(allocator, Index.Header{
                         .level = level,
                         .text = try allocator.dupe(u8, text),
                         .line = line,
@@ -129,7 +129,7 @@ pub const skill = struct {
                 }
             }
 
-            try files.append(Index.File{
+            try files.append(allocator, Index.File{
                 .path = try allocator.dupe(u8, path),
                 .name = try allocator.dupe(u8, name),
                 .folder = try allocator.dupe(u8, folder),
@@ -205,7 +205,7 @@ pub const skill = struct {
                 }
             }
 
-            if (found) try matches.append(i);
+            try matches.append(ctx.allocator, i);
         }
 
         if (matches.items.len == 0) {
@@ -369,7 +369,7 @@ pub const skill = struct {
             if (!entry.found_existing) {
                 entry.value_ptr.* = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
             }
-            try entry.value_ptr.append(try ctx.allocator.dupe(u8, file.name));
+            try entry.value_ptr.append(ctx.allocator, try ctx.allocator.dupe(u8, file.name));
         }
 
         var folder_list = std.ArrayList(struct {
