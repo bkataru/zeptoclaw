@@ -172,3 +172,65 @@
 **Rationale**:
 Zero-capacity `ArrayList.initCapacity` does not allocate and cannot fail. Using `catch unreachable` is correct and intentional. Adding comments prevents future over-cautious refactoring.
 
+
+## Task 20 & 13: WhatsApp Channel Thread Safety
+
+**Key decisions**:
+
+1. Implement mutex for all shared state:
+   - Added mutex field and used it for every access to `connected`, `self_jid`, `self_e164`.
+   - Explicitly avoided holding lock during allocations; minimized critical section.
+
+2. Memory leak prevention:
+   - Frees old `self_jid`/`self_e164` before overwriting in connection event.
+   - Set new_jid to null after successful assignment to avoid double free via `errdefer`.
+
+3. Testability:
+   - Made `processLine` public to allow stress test to directly simulate inbound events.
+
+4. Stress test design:
+   - Use multiple threads to call `processLine` concurrently (both connect/disconnect and message events).
+   - Use `GeneralPurposeAllocator` with `.{}` to get thread-safe allocator.
+   - Use atomic flags and a message handler that deinit's messages to avoid leaks.
+   - Run for a fixed duration (5s) rather than a fixed number of operations to allow natural scheduling.
+
+5. Remove old flawed test:
+   - The previous stress test directly manipulated fields without synchronization; replaced entirely.
+
+**Rationale**:
+- Mutex implementation is prerequisite for any realistic concurrency test.
+- Very short lock durations are essential to avoid contention deadlocks in tests.
+- Using `processLine` directly is the only way to simulate concurrent inbound lines without modifying the source.
+- Allowing the test to set its own message handler ensures cleanup even if the channel's default behavior changes.
+
+
+## Task 20 & 13: WhatsApp Channel Thread Safety
+
+**Key decisions**:
+
+1. Implement mutex for all shared state:
+   - Added mutex field and used it for every access to `connected`, `self_jid`, `self_e164`.
+   - Explicitly avoided holding lock during allocations; minimized critical section.
+
+2. Memory leak prevention:
+   - Frees old `self_jid`/`self_e164` before overwriting in connection event.
+   - Set new_jid to null after successful assignment to avoid double free via `errdefer`.
+
+3. Testability:
+   - Made `processLine` public to allow stress test to directly simulate inbound events.
+
+4. Stress test design:
+   - Use multiple threads to call `processLine` concurrently (both connect/disconnect and message events).
+   - Use `GeneralPurposeAllocator` with `.{}` to get thread-safe allocator.
+   - Use atomic flags and a message handler that deinit's messages to avoid leaks.
+   - Run for a fixed duration (5s) rather than a fixed number of operations to allow natural scheduling.
+
+5. Remove old flawed test:
+   - The previous stress test directly manipulated fields without synchronization; replaced entirely.
+
+**Rationale**:
+- Mutex implementation is prerequisite for any realistic concurrency test.
+- Very short lock durations are essential to avoid contention deadlocks in tests.
+- Using `processLine` directly is the only way to simulate concurrent inbound lines without modifying the source.
+- Allowing the test to set its own message handler ensures cleanup even if the channel's default behavior changes.
+

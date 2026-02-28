@@ -119,10 +119,10 @@ pub const WhatsAppChannel = struct {
         self.mutex.unlock();
         if (!was_connected) return;
 
-        try self.sendRequest(.{ .method = "disconnect" });
+        _ = try self.sendRequest(.{ .method = "disconnect", .params = .{ .object = std.json.ObjectMap.init(self.allocator) } });
 
         // Wait a bit for graceful shutdown
-        std.time.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
 
         if (self.node_process) |*proc| {
             _ = proc.kill() catch {};
@@ -134,8 +134,6 @@ pub const WhatsAppChannel = struct {
             thread.join();
             self.reader_thread = null;
         }
-
-
     }
 
     /// Wait for connection to be established
@@ -152,9 +150,9 @@ pub const WhatsAppChannel = struct {
             if (now - start >= timeout_sec) {
                 return error.ConnectionTimeout;
             }
-            std.time.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+        }
     }
-
     /// Send a text message
     pub fn sendMessage(self: *WhatsAppChannel, to: []const u8, text: []const u8) ![]const u8 {
         const response = try self.sendRequest(.{
@@ -318,7 +316,7 @@ pub const WhatsAppChannel = struct {
     fn sendRequest(self: *WhatsAppChannel, request: Request) !Response {
         if (self.node_stdin == null) return error.NotConnected;
 
-        const json_str = try std.json.stringifyAlloc(self.allocator, request, .{});
+        const json_str = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(request, .{})});
         defer self.allocator.free(json_str);
 
         const line = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_str});
@@ -418,15 +416,16 @@ pub const WhatsAppChannel = struct {
                     }
                     if (self.connection_handler) |handler| {
                         try handler(update);
-                }
-        } else if (std.mem.eql(u8, method.string, "qr")) {
-                if (value.object.get("params")) |params| {
-                    if (params.object.get("qr")) |qr| {
-                        const event = QrEvent{
-                            .qr = try self.allocator.dupe(u8, qr.string),
-                        };
-                        if (self.qr_handler) |handler| {
-                            try handler(event);
+                    }
+                } else if (std.mem.eql(u8, method.string, "qr")) {
+                    if (value.object.get("params")) |params| {
+                        if (params.object.get("qr")) |qr| {
+                            const event = QrEvent{
+                                .qr = try self.allocator.dupe(u8, qr.string),
+                            };
+                            if (self.qr_handler) |handler| {
+                                try handler(event);
+                            }
                         }
                     }
                 }
@@ -434,7 +433,6 @@ pub const WhatsAppChannel = struct {
         }
     }
 
-    /// Parse message from JSON
     fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
         var msg = WhatsAppMessage.init(allocator);
 

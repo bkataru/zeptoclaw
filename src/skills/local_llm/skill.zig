@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         ollama_host: []const u8 = "http://localhost:11434",
         default_model: []const u8 = "qwen3:4b",
@@ -17,55 +15,54 @@ pub const skill = struct {
     };
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
-        if (config_value == .object) {
-            if (config_value.object.get("ollama_host")) |v| {
-                if (v == .string) {
-                    config.ollama_host = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("default_model")) |v| {
-                if (v == .string) {
-                    config.default_model = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("num_threads")) |v| {
-                if (v == .integer) {
-                    config.num_threads = try std.math.cast(usize, v.integer);
-                }
-            }
-            if (config_value.object.get("num_ctx")) |v| {
-                if (v == .integer) {
-                    config.num_ctx = try std.math.cast(usize, v.integer);
-                }
-            }
-        }
+        _ = allocator;
+        _ = config_value;
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = try parseConfig(ctx.config);
 
         if (std.mem.eql(u8, command, "list")) {
-            return handleList(ctx);
+            return handleList(ctx, cfg);
         } else if (std.mem.eql(u8, command, "run")) {
-            return handleRun(ctx);
+            return handleRun(ctx, cfg);
         } else if (std.mem.eql(u8, command, "chat")) {
-            return handleChat(ctx);
+            return handleChat(ctx, cfg);
         } else if (std.mem.eql(u8, command, "pull")) {
-            return handlePull(ctx);
+            return handlePull(ctx, cfg);
         } else if (std.mem.eql(u8, command, "recommend")) {
-            return handleRecommend(ctx);
+            return handleRecommend(ctx, cfg);
         } else if (std.mem.eql(u8, command, "estimate")) {
-            return handleEstimate(ctx);
+            return handleEstimate(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleList(ctx: *ExecutionContext) !SkillResult {
-        // In a real implementation, this would call the Ollama API
-        // For now, return a mock response
+    fn parseConfig(config_json: std.json.Value) anyerror!Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("ollama_host")) |v| {
+                if (v == .string) cfg.ollama_host = v.string;
+            }
+            if (config_json.object.get("default_model")) |v| {
+                if (v == .string) cfg.default_model = v.string;
+            }
+            if (config_json.object.get("num_threads")) |v| {
+                if (v == .integer) cfg.num_threads = try std.math.cast(usize, v.integer);
+            }
+            if (config_json.object.get("num_ctx")) |v| {
+                if (v == .integer) cfg.num_ctx = try std.math.cast(usize, v.integer);
+            }
+        }
+        return cfg;
+    }
+
+    fn handleList(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -85,17 +82,16 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleRun(ctx: *ExecutionContext) !SkillResult {
+    fn handleRun(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         const args = ctx.args orelse return error.MissingArgument;
 
-        // Parse model and prompt
         var iter = std.mem.splitScalar(u8, args, ' ');
-        const model = iter.next() orelse config.default_model;
+        const model = iter.next() orelse cfg.default_model;
         const prompt = iter.rest();
 
         if (prompt.len == 0) {
@@ -106,17 +102,15 @@ pub const skill = struct {
             };
         }
 
-        // In a real implementation, this would call the Ollama API
-        // For now, return a message indicating what would happen
         return SkillResult{
             .success = true,
-            .message = try std.fmt.allocPrint(ctx.allocator, "Running model '{s}' with prompt: \"{s}\"\n\n[In a real implementation, this would call the Ollama API at {s}/api/generate]", .{ model, prompt, config.ollama_host }),
+            .message = try std.fmt.allocPrint(ctx.allocator, "Running model '{s}' with prompt: \"{s}\"\n\n[In a real implementation, this would call the Ollama API at {s}/api/generate]", .{ model, prompt, cfg.ollama_host }),
             .data = null,
         };
     }
 
-    fn handleChat(ctx: *ExecutionContext) !SkillResult {
-        const model = ctx.args orelse config.default_model;
+    fn handleChat(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        const model = ctx.args orelse cfg.default_model;
 
         return SkillResult{
             .success = true,
@@ -125,7 +119,8 @@ pub const skill = struct {
         };
     }
 
-    fn handlePull(ctx: *ExecutionContext) !SkillResult {
+    fn handlePull(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const model = ctx.args orelse return error.MissingArgument;
 
         return SkillResult{
@@ -135,8 +130,8 @@ pub const skill = struct {
         };
     }
 
-    fn handleRecommend(ctx: *ExecutionContext) !SkillResult {
-        // Parse flags
+    fn handleRecommend(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var ram: ?usize = null;
         var task: ?[]const u8 = null;
 
@@ -219,26 +214,25 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleEstimate(ctx: *ExecutionContext) !SkillResult {
+    fn handleEstimate(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         const args = ctx.args orelse return error.MissingArgument;
 
-        // Parse model and ctx
         var iter = std.mem.splitScalar(u8, args, ' ');
         const model = iter.next() orelse return error.MissingArgument;
 
-        var ctx_tokens: usize = config.num_ctx;
+        var ctx_tokens: usize = cfg.num_ctx;
         const ctx_flag = iter.rest();
         if (std.mem.indexOf(u8, ctx_flag, "--ctx") != null) {
             const ctx_start = std.mem.indexOf(u8, ctx_flag, "--ctx ") orelse return error.InvalidFlag;
             const ctx_val = ctx_flag[ctx_start + "--ctx ".len ..];
             const ctx_end = std.mem.indexOf(u8, ctx_val, " ");
             const ctx_str = if (ctx_end != null) ctx_val[0..ctx_end.?] else ctx_val;
-            ctx_tokens = std.fmt.parseInt(usize, ctx_str, 10) catch config.num_ctx;
+            ctx_tokens = std.fmt.parseInt(usize, ctx_str, 10) catch cfg.num_ctx;
         }
 
         // Estimate model size based on model name
@@ -277,12 +271,12 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -294,26 +288,23 @@ pub const skill = struct {
         try response.writer().print("recommend --ram <GB>              - Recommend by RAM\n", .{});
         try response.writer().print("recommend --task <task>           - Recommend by task\n", .{});
         try response.writer().print("estimate <model> [--ctx <tokens>] - Estimate RAM usage\n\n", .{});
+
         try response.writer().print("Configuration:\n", .{});
-        try response.writer().print("  ollama_host: {s}\n", .{config.ollama_host});
-        try response.writer().print("  default_model: {s}\n", .{config.default_model});
-        try response.writer().print("  num_threads: {d}\n", .{config.num_threads});
-        try response.writer().print("  num_ctx: {d}\n", .{config.num_ctx});
+        try response.writer().print("  ollama_host: {s}\n", .{cfg.ollama_host});
+        try response.writer().print("  default_model: {s}\n", .{cfg.default_model});
+        try response.writer().print("  num_threads: {d}\n", .{cfg.num_threads});
+        try response.writer().print("  num_ctx: {d}\n", .{cfg.num_ctx});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
     pub fn deinit(allocator: Allocator) void {
-        if (!std.mem.eql(u8, config.ollama_host, "http://localhost:11434")) {
-            allocator.free(config.ollama_host);
-        }
-        if (!std.mem.eql(u8, config.default_model, "qwen3:4b")) {
-            allocator.free(config.default_model);
-        }
+        _ = allocator;
+        // No owned resources.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

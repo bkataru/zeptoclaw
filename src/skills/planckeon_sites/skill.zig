@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         sites_dir: []const u8 = "~/planckeon",
         gh_pages_branch: []const u8 = "gh-pages",
@@ -16,53 +14,54 @@ pub const skill = struct {
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value == .object) {
-            if (config_value.object.get("sites_dir")) |v| {
-                if (v == .string) {
-                    config.sites_dir = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("gh_pages_branch")) |v| {
-                if (v == .string) {
-                    config.gh_pages_branch = try allocator.dupe(u8, v.string);
-                }
-            }
-        }
+        _ = config_value;
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = try parseConfig(ctx.config);
 
         if (std.mem.eql(u8, command, "deploy-site")) {
-            return handleDeploy(ctx);
+            return handleDeploy(ctx, cfg);
         } else if (std.mem.eql(u8, command, "build-site")) {
-            return handleBuild(ctx);
+            return handleBuild(ctx, cfg);
         } else if (std.mem.eql(u8, command, "zola-serve")) {
-            return handleZolaServe(ctx);
+            return handleZolaServe(ctx, cfg);
         } else if (std.mem.eql(u8, command, "zola-build")) {
-            return handleZolaBuild(ctx);
+            return handleZolaBuild(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleDeploy(ctx: *ExecutionContext) !SkillResult {
+    fn parseConfig(config_json: std.json.Value) anyerror!Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("sites_dir")) |v| {
+                if (v == .string) cfg.sites_dir = v.string;
+            }
+            if (config_json.object.get("gh_pages_branch")) |v| {
+                if (v == .string) cfg.gh_pages_branch = v.string;
+            }
+        }
+        return cfg;
+    }
+
+    fn handleDeploy(ctx: *ExecutionContext, cfg: Config) !SkillResult {
         const site_name = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Deploying {s}...\n\n", .{site_name});
-
         try response.writer().print("Building with Zola...\n", .{});
         try response.writer().print("zola build\n", .{});
         try response.writer().print("Building site...\n", .{});
         try response.writer().print("Done in 0.23s.\n\n", .{});
 
-        try response.writer().print("Deploying to {s}...\n", .{config.gh_pages_branch});
+        try response.writer().print("Deploying to {s}...\n", .{cfg.gh_pages_branch});
         try response.writer().print("bunx gh-pages -d public\n", .{});
         try response.writer().print("Published to https://planckeon.github.io/{s}/\n\n", .{site_name});
 
@@ -70,77 +69,76 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleBuild(ctx: *ExecutionContext) !SkillResult {
+    fn handleBuild(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const site_name = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building {s}...\n\n", .{site_name});
-
         try response.writer().print("zola build\n", .{});
         try response.writer().print("Building site...\n", .{});
         try response.writer().print("Done in 0.23s.\n\n", .{});
-
         try response.writer().print("Output: public/\n", .{});
+        try response.writer().print("Ready to deploy!\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleZolaServe(ctx: *ExecutionContext) !SkillResult {
+    fn handleZolaServe(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const site_name = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Serving {s}...\n\n", .{site_name});
-
         try response.writer().print("zola serve\n", .{});
         try response.writer().print("Building site...\n", .{});
         try response.writer().print("Done in 0.23s.\n", .{});
         try response.writer().print("Listening at http://127.0.0.1:1111\n\n", .{});
-
         try response.writer().print("Press Ctrl+C to stop.\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleZolaBuild(ctx: *ExecutionContext) !SkillResult {
+    fn handleZolaBuild(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const site_name = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building {s} for production...\n\n", .{site_name});
-
         try response.writer().print("zola build\n", .{});
         try response.writer().print("Building site...\n", .{});
         try response.writer().print("Done in 0.23s.\n\n", .{});
-
         try response.writer().print("Output: public/\n", .{});
         try response.writer().print("Ready to deploy!\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -158,23 +156,18 @@ pub const skill = struct {
 
         try response.writer().print("Important Notes:\n", .{});
         try response.writer().print("• Watch for LaTeX underscore issue in Zola\n", .{});
-        try response.writer().print("• Use $P&#95;{\\mu\\mu}$ instead of $P_{\\mu\\mu}$\n", .{});
+        try response.writer().print("• Use $P\\_{\\mu\\mu}$ instead of $P_{\\mu\\mu}$\n", .{});
         try response.writer().print("• Add Citation section to all planckeon repos\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
     pub fn deinit(allocator: Allocator) void {
-        if (config.sites_dir.len > 0 and !std.mem.eql(u8, config.sites_dir, "~/planckeon")) {
-            allocator.free(config.sites_dir);
-        }
-        if (config.gh_pages_branch.len > 0 and !std.mem.eql(u8, config.gh_pages_branch, "gh-pages")) {
-            allocator.free(config.gh_pages_branch);
-        }
+        _ = allocator;
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

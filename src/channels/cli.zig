@@ -31,11 +31,16 @@ pub fn runInteractiveSession(agent: anytype) !void {
         if (trimmed.len == 0) continue;
 
         // Handle commands
+        // Handle built-in commands (starts with /)
         if (trimmed[0] == '/') {
-            const should_continue = try handleCommand(agent, trimmed, stdout_file);
-            if (!should_continue) return;
-            continue;
+            if (std.mem.eql(u8, trimmed, "/help") or std.mem.eql(u8, trimmed, "/exit") or std.mem.eql(u8, trimmed, "/quit") or std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/session")) {
+                const should_continue = try handleCommand(agent, trimmed, stdout_file);
+                if (!should_continue) return;
+                continue;
+            }
+            // Unknown command, fall through to agent.run
         }
+
 
         // Regular message - run through agent
         try stdout_file.writeAll(cli_utils.formatMessagePrefix(.user));

@@ -7,8 +7,6 @@ const SkillResult = sdk.SkillResult;
 const ExecutionContext = sdk.ExecutionContext;
 
 pub const skill = struct {
-    var config: Config = .{};
-
     const Config = struct {
         user_name: []const u8 = "Baala",
         focus_protection: bool = true,
@@ -19,67 +17,58 @@ pub const skill = struct {
 
     pub fn init(allocator: Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value == .object) {
-            if (config_value.object.get("user_name")) |v| {
-                if (v == .string) {
-                    config.user_name = try allocator.dupe(u8, v.string);
-                }
-            }
-            if (config_value.object.get("focus_protection")) |v| {
-                if (v == .bool) {
-                    config.focus_protection = v.bool;
-                }
-            }
-            if (config_value.object.get("auto_chunk")) |v| {
-                if (v == .bool) {
-                    config.auto_chunk = v.bool;
-                }
-            }
-            if (config_value.object.get("brevity_mode")) |v| {
-                if (v == .bool) {
-                    config.brevity_mode = v.bool;
-                }
-            }
-            if (config_value.object.get("memory_file")) |v| {
-                if (v == .string) {
-                    config.memory_file = try allocator.dupe(u8, v.string);
-                }
-            }
-        }
+        _ = config_value;
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const command = ctx.command orelse return error.NoCommand;
+        const cfg = try parseConfig(ctx.config);
 
-        if (std.mem.eql(u8, command, "breakdown")) {
-            return handleBreakdown(ctx);
-        } else if (std.mem.eql(u8, command, "chunk")) {
-            return handleBreakdown(ctx);
+        if (std.mem.eql(u8, command, "breakdown") or std.mem.eql(u8, command, "chunk")) {
+            return handleBreakdown(ctx, cfg);
         } else if (std.mem.eql(u8, command, "focus")) {
-            return handleFocus(ctx);
+            return handleFocus(ctx, cfg);
         } else if (std.mem.eql(u8, command, "simplify")) {
-            return handleSimplify(ctx);
+            return handleSimplify(ctx, cfg);
         } else if (std.mem.eql(u8, command, "help")) {
-            return handleHelp(ctx);
+            return handleHelp(ctx, cfg);
         } else {
             return error.UnknownCommand;
         }
     }
 
-    fn handleBreakdown(ctx: *ExecutionContext) !SkillResult {
+    fn parseConfig(config_json: std.json.Value) anyerror!Config {
+        var cfg: Config = .{};
+        if (config_json == .object) {
+            if (config_json.object.get("user_name")) |v| {
+                if (v == .string) cfg.user_name = v.string;
+            }
+            if (config_json.object.get("focus_protection")) |v| {
+                if (v == .bool) cfg.focus_protection = v.bool;
+            }
+            if (config_json.object.get("auto_chunk")) |v| {
+                if (v == .bool) cfg.auto_chunk = v.bool;
+            }
+            if (config_json.object.get("brevity_mode")) |v| {
+                if (v == .bool) cfg.brevity_mode = v.bool;
+            }
+            if (config_json.object.get("memory_file")) |v| {
+                if (v == .string) cfg.memory_file = v.string;
+            }
+        }
+        return cfg;
+    }
+
+    fn handleBreakdown(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // currently unused
         const task = ctx.args orelse return error.MissingArgument;
 
-        // Analyze the task and break it down
         var steps = try std.ArrayList([]const u8).initCapacity(ctx.allocator, 0);
         defer {
-            for (steps.items) |step| {
-                ctx.allocator.free(step);
-            }
+            for (steps.items) |step| ctx.allocator.free(step);
             steps.deinit();
         }
 
-        // Simple heuristic-based breakdown
         if (std.mem.indexOf(u8, task, "CI") != null or std.mem.indexOf(u8, task, "ci") != null) {
             try steps.append(try ctx.allocator.dupe(u8, "Create .github/workflows directory"));
             try steps.append(try ctx.allocator.dupe(u8, "Write basic test workflow (copy from template)"));
@@ -102,50 +91,46 @@ pub const skill = struct {
             try steps.append(try ctx.allocator.dupe(u8, "Add usage example"));
             try steps.append(try ctx.allocator.dupe(u8, "Review and refine"));
         } else {
-            // Generic breakdown
             try steps.append(try ctx.allocator.dupe(u8, "Identify the first small step"));
             try steps.append(try ctx.allocator.dupe(u8, "Do that step"));
             try steps.append(try ctx.allocator.dupe(u8, "Identify the next step"));
             try steps.append(try ctx.allocator.dupe(u8, "Repeat until done"));
         }
 
-        // Format response
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Task: \"{s}\"\n\n", .{task});
         try response.writer().print("Break down:\n", .{});
-
         for (steps.items, 0..) |step, i| {
             try response.writer().print("{d}. [ ] {s}\n", .{ i + 1, step });
         }
-
         try response.writer().print("\nStart with step 1?\n", .{});
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleFocus(ctx: *ExecutionContext) !SkillResult {
+    fn handleFocus(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const task = ctx.args orelse return error.MissingArgument;
 
-        // Find the tiniest first step
-        var first_step: []const u8 = undefined;
-
-        if (std.mem.indexOf(u8, task, "document") != null or std.mem.indexOf(u8, task, "docs") != null) {
-            first_step = "Open README.md and write one sentence describing what it does";
-        } else if (std.mem.indexOf(u8, task, "test") != null) {
-            first_step = "Write one simple test case";
-        } else if (std.mem.indexOf(u8, task, "deploy") != null) {
-            first_step = "Run the build command";
-        } else if (std.mem.indexOf(u8, task, "fix") != null) {
-            first_step = "Identify the exact error message";
-        } else {
-            first_step = "Open the relevant file and read it";
-        }
+        const first_step = blk: {
+            if (std.mem.indexOf(u8, task, "document") != null or std.mem.indexOf(u8, task, "docs") != null) {
+                break :blk "Open README.md and write one sentence describing what it does";
+            } else if (std.mem.indexOf(u8, task, "test") != null) {
+                break :blk "Write one simple test case";
+            } else if (std.mem.indexOf(u8, task, "deploy") != null) {
+                break :blk "Run the build command";
+            } else if (std.mem.indexOf(u8, task, "fix") != null) {
+                break :blk "Identify the exact error message";
+            } else {
+                break :blk "Open the relevant file and read it";
+            }
+        };
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
@@ -157,12 +142,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleSimplify(ctx: *ExecutionContext) !SkillResult {
+    fn handleSimplify(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         const task = ctx.args orelse return error.MissingArgument;
 
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
@@ -170,7 +156,6 @@ pub const skill = struct {
 
         try response.writer().print("Simplified:\n", .{});
 
-        // Simple pattern matching for common scenarios
         if (std.mem.indexOf(u8, task, "SSL") != null or std.mem.indexOf(u8, task, "ssl") != null) {
             try response.writer().print("1. Deploy to Vercel (handles SSL)\n", .{});
             try response.writer().print("2. Add Vercel Analytics (monitoring)\n", .{});
@@ -191,12 +176,13 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
-    fn handleHelp(ctx: *ExecutionContext) !SkillResult {
+    fn handleHelp(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+        _ = cfg; // unused
         var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
@@ -205,6 +191,7 @@ pub const skill = struct {
         try response.writer().print("chunk <task>      - Alias for breakdown\n", .{});
         try response.writer().print("focus <task>      - Enter focus mode for a task\n", .{});
         try response.writer().print("simplify <task>   - Simplify a complex task\n\n", .{});
+
         try response.writer().print("Core Principles:\n", .{});
         try response.writer().print("• Break it down — Big tasks paralyze. Small steps flow.\n", .{});
         try response.writer().print("• Reduce friction — Every extra step is a dropout point.\n", .{});
@@ -214,18 +201,14 @@ pub const skill = struct {
 
         return SkillResult{
             .success = true,
-            .message = response.toOwnedSlice(),
+            .message = try response.toOwnedSlice(),
             .data = null,
         };
     }
 
     pub fn deinit(allocator: Allocator) void {
-        if (config.user_name.len > 0 and !std.mem.eql(u8, config.user_name, "Baala")) {
-            allocator.free(config.user_name);
-        }
-        if (config.memory_file.len > 0 and !std.mem.eql(u8, config.memory_file, "memory/YYYY-MM-DD.md")) {
-            allocator.free(config.memory_file);
-        }
+        _ = allocator;
+        // No owned resources.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {

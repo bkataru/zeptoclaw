@@ -1782,7 +1782,7 @@ Max Concurrent: 9 (Wave 1) + 4 (FINAL) = 13 agents
   - Pre-commit: `git build` (just build, not needed for docs)
 
 
-- [ ] 30. Add runbooks for deployment
+- [x] 30. Add runbooks for deployment
 
   **What to do**:
   - Create `docs/runbooks/` directory if not exists

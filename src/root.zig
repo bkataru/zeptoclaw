@@ -80,3 +80,17 @@ test "config module loads" {
 test "agent.message module loads" {
     _ = agent.message;
 }
+
+// Include WhatsApp channel stress tests in test builds.
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("channels/whatsapp/whatsapp_channel_test.zig");
+    }
+}
+
+// Include git_workflow tests in test builds.
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("skills/git_workflow/git_workflow_test.zig");
+    }
+}

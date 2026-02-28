@@ -179,9 +179,9 @@ test "integration: agent startup" {
         }
         return err;
     };
-    defer allocator.free(api_key);
+
     const model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
-    defer allocator.free(model);
+
 
     var cfg = try makeTestConfig(allocator, api_key, model);
     defer cfg.deinit();
@@ -189,7 +189,7 @@ test "integration: agent startup" {
     var nim_client = NIMClient.init(allocator, cfg);
     defer nim_client.deinit();
 
-    var agent = Agent.init(allocator, &nim_client, 50);
+    var agent = try Agent.init(allocator, &nim_client, 50);
     defer agent.deinit();
 
     const response = try agent.run("Hello");
