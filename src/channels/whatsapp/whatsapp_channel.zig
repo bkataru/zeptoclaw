@@ -3,7 +3,7 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const WhatsAppMessage = types.WhatsAppMessage;
-const WhatsAppConfig = types.WhatsAppConfig;
+pub const WhatsAppConfig = types.WhatsAppConfig;
 const ConnectionUpdate = types.ConnectionUpdate;
 const QrEvent = types.QrEvent;
 const ConnectionStatus = types.ConnectionStatus;
@@ -31,6 +31,7 @@ pub const WhatsAppChannel = struct {
 
     // Reader thread
     reader_thread: ?std.Thread,
+    mutex: std.Thread.Mutex,
 
     pub fn init(allocator: Allocator, config: WhatsAppConfig) WhatsAppChannel {
         return .{
@@ -47,6 +48,7 @@ pub const WhatsAppChannel = struct {
             .connection_handler = null,
             .qr_handler = null,
             .reader_thread = null,
+            .mutex = .{},
         };
     }
 
@@ -59,7 +61,10 @@ pub const WhatsAppChannel = struct {
 
     /// Connect to WhatsApp
     pub fn connect(self: *WhatsAppChannel) !void {
-        if (self.connected) return;
+        self.mutex.lock();
+        const already_connected = self.connected;
+        self.mutex.unlock();
+        if (already_connected) return;
 
         // Get path to Node.js wrapper
         const wrapper_path = try std.fs.path.join(self.allocator, &[_][]const u8{
@@ -108,7 +113,11 @@ pub const WhatsAppChannel = struct {
 
     /// Disconnect from WhatsApp
     pub fn disconnect(self: *WhatsAppChannel) !void {
-        if (!self.connected) return;
+        self.mutex.lock();
+        const was_connected = self.connected;
+        if (was_connected) self.connected = false;
+        self.mutex.unlock();
+        if (!was_connected) return;
 
         try self.sendRequest(.{ .method = "disconnect" });
 
@@ -126,7 +135,7 @@ pub const WhatsAppChannel = struct {
             self.reader_thread = null;
         }
 
-        self.connected = false;
+
     }
 
     /// Wait for connection to be established
@@ -134,14 +143,16 @@ pub const WhatsAppChannel = struct {
         const start = std.time.timestamp();
         const timeout_sec = timeout_ms / 1000;
 
-        while (!self.connected) {
+        while (true) {
+            self.mutex.lock();
+            const is_connected = self.connected;
+            self.mutex.unlock();
+            if (is_connected) break;
             const now = std.time.timestamp();
             if (now - start >= timeout_sec) {
                 return error.ConnectionTimeout;
             }
-
             std.time.sleep(100 * std.time.ns_per_ms);
-        }
     }
 
     /// Send a text message
@@ -367,7 +378,7 @@ pub const WhatsAppChannel = struct {
     }
 
     /// Process a line of JSON output
-    fn processLine(self: *WhatsAppChannel, line: []const u8) !void {
+    pub fn processLine(self: *WhatsAppChannel, line: []const u8) !void {
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, line, .{});
         defer parsed.deinit();
 
@@ -385,18 +396,28 @@ pub const WhatsAppChannel = struct {
             } else if (std.mem.eql(u8, method.string, "connection")) {
                 if (value.object.get("params")) |params| {
                     const update = try parseConnectionUpdate(self.allocator, params);
-                    if (update.status == .connected) {
+                    const status = update.status;
+                    if (status == .connected) {
+                        var new_jid = if (update.self_jid) |jid| try self.allocator.dupe(u8, jid) else null;
+                        errdefer if (new_jid) |nj| self.allocator.free(nj);
+                        var new_e164 = if (update.self_e164) |e164| try self.allocator.dupe(u8, e164) else null;
+                        errdefer if (new_e164) |ne| self.allocator.free(ne);
+                        self.mutex.lock();
+                        if (self.self_jid) |old| self.allocator.free(old);
+                        self.self_jid = new_jid;
+                        new_jid = null;
+                        if (self.self_e164) |old| self.allocator.free(old);
+                        self.self_e164 = new_e164;
+                        new_e164 = null;
                         self.connected = true;
-                        if (update.self_jid) |jid| {
-                            self.self_jid = try self.allocator.dupe(u8, jid);
-                        }
-                        if (update.self_e164) |e164| {
-                            self.self_e164 = try self.allocator.dupe(u8, e164);
-                        }
+                        self.mutex.unlock();
+                    } else if (status == .disconnected) {
+                        self.mutex.lock();
+                        self.connected = false;
+                        self.mutex.unlock();
                     }
                     if (self.connection_handler) |handler| {
                         try handler(update);
-                    }
                 }
         } else if (std.mem.eql(u8, method.string, "qr")) {
                 if (value.object.get("params")) |params| {
@@ -488,7 +509,7 @@ const Response = struct {
 
 test "WhatsAppChannel init/deinit" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     var channel = WhatsAppChannel.init(allocator, config);
