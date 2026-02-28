@@ -1,0 +1,31 @@
+test
++- run test
+   +- compile test Debug native 3 errors
+src/integration_test.zig:77:19: error: expected type '*providers.types.ChatCompletionResponse', found '*const providers.types.ChatCompletionResponse'
+    defer response.deinit(allocator);
+          ~~~~~~~~^~~~~~~
+src/integration_test.zig:77:19: note: cast discards const qualifier
+src/providers/types.zig:159:25: note: parameter type declared here
+    pub fn deinit(self: *ChatCompletionResponse, allocator: std.mem.Allocator) void {
+                        ^~~~~~~~~~~~~~~~~~~~~~~
+src/integration_test.zig:117:58: error: type 'error{ProviderError}' does not support field access
+        try std.testing.expect(err == error.ProviderError.Auth);
+                                      ~~~~~~~~~~~~~~~~~~~^~~~~
+src/integration_test.zig:164:19: error: expected type '*providers.types.ChatCompletionResponse', found '*const providers.types.ChatCompletionResponse'
+    defer response.deinit(allocator);
+          ~~~~~~~~^~~~~~~
+src/integration_test.zig:164:19: note: cast discards const qualifier
+src/providers/types.zig:159:25: note: parameter type declared here
+    pub fn deinit(self: *ChatCompletionResponse, allocator: std.mem.Allocator) void {
+                        ^~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 3 compilation errors:
+/home/user/.local/zig-x86_64-linux-0.15.2/zig test -ODebug --dep zeptoclaw --dep zeitgeist -Mroot=/home/user/zeptoclaw/src/integration_test.zig -ODebug --dep zeitgeist -Mzeptoclaw=/home/user/zeptoclaw/src/root.zig -ODebug -Mzeitgeist=/home/user/zeptoclaw/vendor/zeitgeist/src/lib/lib.zig --cache-dir .zig-cache --global-cache-dir /home/user/.cache/zig --name test --zig-lib-dir /home/user/.local/zig-x86_64-linux-0.15.2/lib/ --listen=-
+
+Build Summary: 4/7 steps succeeded; 1 failed; 26/26 tests passed
+test transitive failure
++- run test transitive failure
+   +- compile test Debug native 3 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/5297fe107c5d74939c38b72cfd23cd91/build /home/user/.local/zig-x86_64-linux-0.15.2/zig /home/user/.local/zig-x86_64-linux-0.15.2/lib /home/user/zeptoclaw .zig-cache /home/user/.cache/zig --seed 0x1e099129 -Z877002606135b08c test
+Exit code: 0

@@ -118,7 +118,7 @@ pub const SessionStore = struct {
 
     /// List all active sessions
     pub fn listActiveSessions(self: *SessionStore) ![]Session {
-        var active = std.ArrayList(Session).initCapacity(self.allocator, 0) catch unreachable;
+        var active = try std.ArrayList(Session).initCapacity(self.allocator, 0);
         errdefer active.deinit(self.allocator);
 
         var iter = self.sessions.iterator();
@@ -134,7 +134,7 @@ pub const SessionStore = struct {
 
     /// List all sessions (including terminated)
     pub fn listAllSessions(self: *SessionStore) ![]Session {
-        var all = std.ArrayList(Session).initCapacity(self.allocator, 0) catch unreachable;
+        var all = try std.ArrayList(Session).initCapacity(self.allocator, 0);
         errdefer all.deinit(self.allocator);
 
         var iter = self.sessions.iterator();
@@ -201,7 +201,7 @@ const writer = file.deprecatedWriter();
         const now = std.time.timestamp();
         const cutoff = now - (24 * 60 * 60); // 24 hours ago
 
-        var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (to_remove.items) |id| self.allocator.free(id);
             to_remove.deinit(self.allocator);

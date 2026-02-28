@@ -52,7 +52,7 @@ pub const skill = struct {
     fn handleDeploy(ctx: *ExecutionContext) !SkillResult {
         const site_name = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Deploying {s}...\n\n", .{site_name});
@@ -78,7 +78,7 @@ pub const skill = struct {
     fn handleBuild(ctx: *ExecutionContext) !SkillResult {
         const site_name = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building {s}...\n\n", .{site_name});
@@ -99,7 +99,7 @@ pub const skill = struct {
     fn handleZolaServe(ctx: *ExecutionContext) !SkillResult {
         const site_name = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Serving {s}...\n\n", .{site_name});
@@ -121,7 +121,7 @@ pub const skill = struct {
     fn handleZolaBuild(ctx: *ExecutionContext) !SkillResult {
         const site_name = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Building {s} for production...\n\n", .{site_name});
@@ -141,7 +141,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Planckeon Sites Deployment Commands:\n\n", .{});

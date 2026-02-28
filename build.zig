@@ -101,18 +101,16 @@ pub fn build(b: *std.Build) void {
     const run_exe_test = b.addRunArtifact(exe_test);
     test_step.dependOn(&run_exe_test.step);
 
-    // Integration tests disabled - requires manual fixing due to Config struct changes
-    // TODO: Fix integration test to use Config.load() or update Config initialization
-    // const integration_test_mod = b.createModule(.{
-    //     .root_source_file = b.path("src/integration_test.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // integration_test_mod.addImport("zeptoclaw", mod);
-    // integration_test_mod.addImport("zeitgeist", zeitgeist_mod);
-    // const integration_test_test = b.addTest(.{
-    //     .root_module = integration_test_mod,
-    // });
-    // const run_integration_test = b.addRunArtifact(integration_test_test);
-    // test_step.dependOn(&run_integration_test.step);
+    const integration_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    integration_test_mod.addImport("zeptoclaw", mod);
+    integration_test_mod.addImport("zeitgeist", zeitgeist_mod);
+    const integration_test_test = b.addTest(.{
+        .root_module = integration_test_mod,
+    });
+    const run_integration_test = b.addRunArtifact(integration_test_test);
+    test_step.dependOn(&run_integration_test.step);
 }

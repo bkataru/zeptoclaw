@@ -55,7 +55,7 @@ pub const HttpServer = struct {
             .control_ui_enabled = control_ui_enabled,
             .allow_insecure_auth = allow_insecure_auth,
             .running = false,
-            .websocket_clients = std.ArrayList(*WebSocketClient).initCapacity(allocator, 0) catch unreachable,
+            .websocket_clients = try std.ArrayList(*WebSocketClient).initCapacity(allocator, 0),
             .autonomous_agent = autonomous_agent,
         };
     }
@@ -292,7 +292,7 @@ pub const HttpServer = struct {
         const sessions = try self.session_store.listActiveSessions();
         defer self.allocator.free(sessions);
 
-        var response = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         defer response.deinit(self.allocator);
 
         try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n");
@@ -559,7 +559,7 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             const discoveries = try agent.state_store.getDiscoveries();
             defer self.allocator.free(discoveries);
 
-            var response = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer response.deinit(self.allocator);
 
             try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n");
@@ -610,7 +610,7 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             const state = agent.state_store.state;
             const rate_limiter_status = agent.rate_limiter.getStatus(std.time.timestamp());
 
-            var response = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer response.deinit(self.allocator);
 
             try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n");
@@ -669,7 +669,7 @@ fn handleGatewayIncident(_self: *HttpServer, _stream: std.net.Stream, _body: []c
 fn handleGetGatewayIncidents(self: *HttpServer, stream: std.net.Stream) !void {
     if (self.autonomous_agent) |agent| {
         const incidents = try agent.state_store.getGatewayIncidents();
-        var response = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         defer response.deinit(self.allocator);
         try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"incidents\":[");
         for (incidents, 0..) |incident, i| {

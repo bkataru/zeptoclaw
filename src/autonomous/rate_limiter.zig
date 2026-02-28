@@ -168,7 +168,7 @@ test "RateLimiter daily limit" {
     // Record 50 comments
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
-        limiter.recordComment(now + @as(i64, @intCast(i)) * RateLimiter.COMMENT_COOLDOWN_MS);
+        limiter.recordComment(now + @as(i64, i) * RateLimiter.COMMENT_COOLDOWN_MS);
     }
 
     // Should not be able to comment after hitting daily limit

@@ -147,7 +147,7 @@ pub const TokenAuth = struct {
 
     /// Generate a random 40-character hex token
     fn generateToken(self: *TokenAuth) ![]const u8 {
-        var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp()));
+        var rng = std.rand.DefaultPrng.init(@as(u64, std.time.timestamp()));
         const random = rng.random();
         var token: [40]u8 = undefined;
 
@@ -166,7 +166,7 @@ pub const TokenAuth = struct {
 
     /// List all active tokens
     pub fn listActiveTokens(self: *TokenAuth) ![][]const u8 {
-        var active_tokens = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var active_tokens = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         errdefer {
             for (active_tokens.items) |t| self.allocator.free(t);
             active_tokens.deinit();

@@ -43,7 +43,7 @@ pub const OutboundProcessor = struct {
             chunks.deinit();
         }
 
-        var message_ids = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var message_ids = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (message_ids.items) |id| {
                 self.allocator.free(id);
@@ -128,7 +128,7 @@ pub const OutboundProcessor = struct {
 
     /// Chunk text into smaller pieces
     fn chunkText(self: *OutboundProcessor, text: []const u8) !std.ArrayList([]const u8) {
-        var chunks = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var chunks = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
 
         if (text.len <= self.text_chunk_limit) {
             try chunks.append(try self.allocator.dupe(u8, text));
@@ -166,7 +166,7 @@ pub const OutboundProcessor = struct {
     /// Convert markdown tables to WhatsApp-compatible format
     fn convertMarkdownTables(self: *OutboundProcessor, text: []const u8) ![]const u8 {
         // Simple table conversion: replace | with spaces
-        var result = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         errdefer result.deinit();
 
         var i: usize = 0;
@@ -266,7 +266,7 @@ pub const MarkdownTableConverter = struct {
 
     /// Convert markdown table to plain text
     pub fn convert(self: *MarkdownTableConverter, markdown: []const u8) ![]const u8 {
-        var result = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         errdefer result.deinit();
 
         var lines = std.mem.splitScalar(u8, markdown, '\n');
@@ -303,7 +303,7 @@ pub const MarkdownTableConverter = struct {
 
     /// Convert a table row
     fn convertTableRow(self: *MarkdownTableConverter, line: []const u8) ![]const u8 {
-        var result = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         errdefer result.deinit();
 
         var cells = std.mem.splitScalar(u8, line, '|');
@@ -324,7 +324,7 @@ pub const MarkdownTableConverter = struct {
 
 test "OutboundProcessor chunking" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     var processor = OutboundProcessor.init(allocator, config);
@@ -341,7 +341,7 @@ test "OutboundProcessor chunking" {
 
 test "OutboundProcessor table conversion" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     var processor = OutboundProcessor.init(allocator, config);

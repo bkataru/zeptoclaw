@@ -60,7 +60,7 @@ pub const skill = struct {
     }
 
     fn handleIndex(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Indexing memory files...\n\n", .{});
@@ -89,7 +89,7 @@ pub const skill = struct {
     fn handleSearch(ctx: *ExecutionContext) !SkillResult {
         const query = ctx.args orelse return error.MissingArgument;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Searching for: \"{s}\"\n\n", .{query});
@@ -120,7 +120,7 @@ pub const skill = struct {
     }
 
     fn handleModel(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Current model: {s}\n", .{config.embedding_model});
@@ -141,7 +141,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;  // unreachable: zero-capacity allocation cannot fail
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Semantic Search Commands:\n\n", .{});

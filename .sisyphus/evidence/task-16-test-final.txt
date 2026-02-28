@@ -1,0 +1,7 @@
+test
++- run test stderr
+[SKIP] NVIDIA_API_KEY not set, skipping integration test
+
+[OK] Auth error correctly caught
+
+[SKIP] NVIDIA_API_KEY not set, skipping tool call test

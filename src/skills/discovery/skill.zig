@@ -72,7 +72,7 @@ pub const skill = struct {
             if (err == error.FileNotFound) {
                 // Data file doesn't exist yet, create empty data
                 data = Data{
-                    .finds = std.ArrayList(Data.Find).initCapacity(allocator, 0) catch unreachable,
+                    .finds = try std.ArrayList(Data.Find).initCapacity(allocator, 0),
                     .config = Data.DataConfig{
                         .max_finds = config.max_finds,
                         .auto_share_threshold = config.auto_share_threshold,
@@ -99,7 +99,7 @@ pub const skill = struct {
 
         if (finds_val != .array or config_val != .object) return error.InvalidDataFormat;
 
-        var finds = std.ArrayList(Data.Find).initCapacity(allocator, 0) catch unreachable;
+        var finds = try std.ArrayList(Data.Find).initCapacity(allocator, 0);
 
         for (finds_val.array.items) |find_val| {
             if (find_val != .object) continue;
@@ -119,7 +119,7 @@ pub const skill = struct {
             else
                 null;
 
-            var tags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            var tags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             const tags_val = find_obj.get("tags");
             if (tags_val != null and tags_val.?. == .array) {
                 for (tags_val.?.array.items) |tag| {
@@ -264,7 +264,7 @@ pub const skill = struct {
         const uuid = try generateUuid(ctx.allocator);
 
         // Parse tags
-        var tags = std.ArrayList([]const u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var tags = try std.ArrayList([]const u8).initCapacity(ctx.allocator, 0);
         var tag_iter = std.mem.splitScalar(u8, tags_str, ',');
         while (tag_iter.next()) |tag| {
             const trimmed = std.mem.trim(u8, tag, " ");
@@ -322,7 +322,7 @@ pub const skill = struct {
     fn handleList(ctx: *ExecutionContext) !SkillResult {
         const unshared_only = ctx.flags != null and std.mem.indexOf(u8, ctx.flags.?, "unshared") != null;
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         var count: usize = 0;
@@ -362,7 +362,7 @@ pub const skill = struct {
     fn handleSearch(ctx: *ExecutionContext) !SkillResult {
         const query = ctx.args orelse return error.MissingArgument;
 
-        var matches = std.ArrayList(usize).initCapacity(ctx.allocator, 0) catch unreachable;
+        var matches = try std.ArrayList(usize).initCapacity(ctx.allocator, 0);
 
         for (data.?.finds.items, 0..) |find, i| {
             var found = false;
@@ -385,7 +385,7 @@ pub const skill = struct {
             };
         }
 
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Found {d} match(es):\n\n", .{matches.items.len});
@@ -475,7 +475,7 @@ pub const skill = struct {
     }
 
     fn handleStats(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         var total: usize = data.?.finds.items.len;
@@ -594,7 +594,7 @@ pub const skill = struct {
     }
 
     fn handleHelp(ctx: *ExecutionContext) !SkillResult {
-        var response = std.ArrayList(u8).initCapacity(ctx.allocator, 0) catch unreachable;
+        var response = try std.ArrayList(u8).initCapacity(ctx.allocator, 0);
         defer response.deinit();
 
         try response.writer().print("Discovery Commands:\n\n", .{});

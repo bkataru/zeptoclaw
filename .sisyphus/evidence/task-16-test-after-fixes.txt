@@ -1,0 +1,16 @@
+test
++- run test
+   +- compile test Debug native 1 errors
+src/integration_test.zig:117:39: error: use of undeclared identifier 'ProviderError'
+        try std.testing.expect(err == ProviderError.Auth);
+                                      ^~~~~~~~~~~~~
+error: the following command failed with 1 compilation errors:
+/home/user/.local/zig-x86_64-linux-0.15.2/zig test -ODebug --dep zeptoclaw --dep zeitgeist -Mroot=/home/user/zeptoclaw/src/integration_test.zig -ODebug --dep zeitgeist -Mzeptoclaw=/home/user/zeptoclaw/src/root.zig -ODebug -Mzeitgeist=/home/user/zeptoclaw/vendor/zeitgeist/src/lib/lib.zig --cache-dir .zig-cache --global-cache-dir /home/user/.cache/zig --name test --zig-lib-dir /home/user/.local/zig-x86_64-linux-0.15.2/lib/ --listen=-
+
+Build Summary: 4/7 steps succeeded; 1 failed; 26/26 tests passed
+test transitive failure
++- run test transitive failure
+   +- compile test Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/5297fe107c5d74939c38b72cfd23cd91/build /home/user/.local/zig-x86_64-linux-0.15.2/zig /home/user/.local/zig-x86_64-linux-0.15.2/lib /home/user/zeptoclaw .zig-cache /home/user/.cache/zig --seed 0x338b7c1 -Z10f06c366caa0522 test

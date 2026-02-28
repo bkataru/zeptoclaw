@@ -26,11 +26,11 @@ pub const WhatsAppSession = struct {
     // Group state
     group_participants: std.StringHashMap(std.ArrayList([]const u8)),
 
-    pub fn init(allocator: Allocator, config: WhatsAppConfig, max_messages: usize) WhatsAppSession {
+    pub fn init(allocator: Allocator, config: WhatsAppConfig, max_messages: usize) !WhatsAppSession {
         return .{
             .allocator = allocator,
             .config = config,
-            .messages = std.ArrayList(WhatsAppMessage).initCapacity(allocator, 0) catch unreachable,
+            .messages = try std.ArrayList(WhatsAppMessage).initCapacity(allocator, 0),
             .max_messages = max_messages,
             .message_count = 0,
             .debouncer = Debouncer.init(allocator, config.debounce_ms),
@@ -270,7 +270,7 @@ pub const WhatsAppSession = struct {
         const last = &entries[entries.len - 1].message;
 
         // Combine bodies
-        var combined_body = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var combined_body = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         defer combined_body.deinit();
 
         for (entries) |entry| {
@@ -284,7 +284,7 @@ pub const WhatsAppSession = struct {
 
         // Create combined message
         const combined_msg = try self.allocator.create(WhatsAppMessage);
-        combined_msg.* = WhatsAppMessage.init(self.allocator);
+        combined_msg.* = try WhatsAppMessage.init(self.allocator);
         combined_msg.id = try self.allocator.dupe(u8, last.id);
         combined_msg.from = try self.allocator.dupe(u8, last.from);
         combined_msg.to = try self.allocator.dupe(u8, last.to);
@@ -330,7 +330,7 @@ pub const WhatsAppSession = struct {
     pub fn updateGroupParticipants(self: *WhatsAppSession, group_jid: []const u8, participants: []const []const u8) !void {
         const gop = try self.group_participants.getOrPut(group_jid);
         if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+            gop.value_ptr.* = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         } else {
             // Clear existing
             for (gop.value_ptr.items) |p| {
@@ -367,10 +367,10 @@ pub const ProcessResult = struct {
 
 test "WhatsAppSession init/deinit" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
-    var session = WhatsAppSession.init(allocator, config, 50);
+    var session = try WhatsAppSession.init(allocator, config, 50);
     defer session.deinit();
 
     try std.testing.expectEqual(@as(usize, 50), session.max_messages);
@@ -379,10 +379,10 @@ test "WhatsAppSession init/deinit" {
 
 test "WhatsAppSession pairing" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
-    var session = WhatsAppSession.init(allocator, config, 50);
+    var session = try WhatsAppSession.init(allocator, config, 50);
     defer session.deinit();
 
     const sender = "1234567890";
@@ -396,15 +396,15 @@ test "WhatsAppSession pairing" {
 
 test "WhatsAppSession access control" {
     const allocator = std.testing.allocator;
-    var config = WhatsAppConfig.init(allocator);
+    var config = try WhatsAppConfig.init(allocator);
     defer config.deinit();
 
     config.dm_policy = .pairing;
 
-    var session = WhatsAppSession.init(allocator, config, 50);
+    var session = try WhatsAppSession.init(allocator, config, 50);
     defer session.deinit();
 
-    var msg = WhatsAppMessage.init(allocator);
+    var msg = try WhatsAppMessage.init(allocator);
     defer msg.deinit();
     msg.chat_type = .direct;
     msg.sender_e164 = try allocator.dupe(u8, "1234567890");

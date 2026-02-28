@@ -9,10 +9,10 @@ pub fn StreamHandler(comptime WriterType: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, writer: WriterType) Self {
+        pub fn init(allocator: std.mem.Allocator, writer: WriterType) !Self {
             return .{
                 .allocator = allocator,
-                .buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
+                .buffer = try std.ArrayList(u8).initCapacity(allocator, 0),
                 .writer = writer,
             };
         }
@@ -50,7 +50,7 @@ pub fn handleStream(
     writer: anytype,
 ) ![]const u8 {
     const Handler = StreamHandler(@TypeOf(writer));
-    var handler = Handler.init(allocator, writer);
+    var handler = try Handler.init(allocator, writer);
     defer handler.deinit();
 
     try client.streamCompletion(request, handler.handleChunk);
@@ -59,11 +59,11 @@ pub fn handleStream(
 
 test "StreamHandler accumulation" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    var output = try std.ArrayList(u8).initCapacity(allocator, 0);
     defer output.deinit();
 
     const Handler = StreamHandler(@TypeOf(output.writer()));
-    var handler = Handler.init(allocator, output.writer());
+    var handler = try Handler.init(allocator, output.writer());
     defer handler.deinit();
 
     try handler.handleChunk("Hello");
@@ -75,11 +75,11 @@ test "StreamHandler accumulation" {
 
 test "StreamHandler final newline" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    var output = try std.ArrayList(u8).initCapacity(allocator, 0);
     defer output.deinit();
 
     const Handler = StreamHandler(@TypeOf(output.writer()));
-    var handler = Handler.init(allocator, output.writer());
+    var handler = try Handler.init(allocator, output.writer());
     defer handler.deinit();
 
     try handler.handleChunk("test");
