@@ -431,7 +431,7 @@ pub const WhatsAppChannel = struct {
         if (value.object.get("senderE164")) |sender_e164| msg.sender_e164 = try allocator.dupe(u8, sender_e164.string);
         if (value.object.get("senderName")) |sender_name| msg.sender_name = try allocator.dupe(u8, sender_name.string);
         if (value.object.get("body")) |body| msg.body = try allocator.dupe(u8, body.string);
-        if (value.object.get("timestamp")) |timestamp| msg.timestamp = @intCast(timestamp.integer);
+        if (value.object.get("timestamp")) |timestamp| msg.timestamp = timestamp.integer;
 
         return msg;
     }

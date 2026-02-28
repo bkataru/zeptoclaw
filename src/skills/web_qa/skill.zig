@@ -34,7 +34,7 @@ pub const skill = struct {
 
         const virtual_time_budget = if (config_value != .object) 8000
         else if (config_value.object.get("virtual_time_budget")) |v|
-            if (v == .integer) @intCast(v.integer) else 8000
+            if (v == .integer) try std.math.cast(u32, v.integer) else 8000
         else
             8000;
 

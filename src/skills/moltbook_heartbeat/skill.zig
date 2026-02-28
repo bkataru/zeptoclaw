@@ -35,13 +35,13 @@ pub const skill = struct {
 
         const check_interval = if (config_value != .object) 30
         else if (config_value.object.get("check_interval_minutes")) |v|
-            if (v == .integer) @intCast(v.integer) else 30
+            if (v == .integer) try std.math.cast(u32, v.integer) else 30
         else
             30;
 
         const reply_threshold = if (config_value != .object) 24
         else if (config_value.object.get("reply_threshold_hours")) |v|
-            if (v == .integer) @intCast(v.integer) else 24
+            if (v == .integer) try std.math.cast(u32, v.integer) else 24
         else
             24;
 
@@ -152,7 +152,7 @@ fn handleStatus(ctx: *ExecutionContext) !SkillResult {
         config.?.reply_threshold_hours,
         if (last_heartbeat > 0) formatTimestamp(last_heartbeat) else "Never",
         time_since,
-        @max(0, config.?.check_interval_minutes * 60 - @as(u32, @intCast(time_since))),
+        @max(0, config.?.check_interval_minutes * 60 - (try std.math.cast(u32, time_since))),
     });
 
     try ctx.respond(response);

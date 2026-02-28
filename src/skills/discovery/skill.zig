@@ -48,12 +48,12 @@ pub const skill = struct {
             }
             if (config_value.object.get("max_finds")) |v| {
                 if (v == .integer) {
-                    config.max_finds = @intCast(v.integer);
+                    config.max_finds = try std.math.cast(usize, v.integer);
                 }
             }
             if (config_value.object.get("auto_share_threshold")) |v| {
                 if (v == .integer) {
-                    config.auto_share_threshold = @intCast(v.integer);
+                    config.auto_share_threshold = try std.math.cast(usize, v.integer);
                 } else if (v == .null) {
                     config.auto_share_threshold = null;
                 }
@@ -145,11 +145,11 @@ pub const skill = struct {
 
         const config_obj = config_val.object;
         const max_finds = if (config_obj.get("maxFinds")) |v|
-            if (v == .integer) @intCast(v.integer) else config.max_finds
+            if (v == .integer) try std.math.cast(usize, v.integer) else config.max_finds
         else
             config.max_finds;
         const auto_share_threshold = if (config_obj.get("autoShareThreshold")) |v|
-            if (v == .integer) @intCast(v.integer) else null
+            if (v == .integer) try std.math.cast(usize, v.integer) else null
         else
             config.auto_share_threshold;
 

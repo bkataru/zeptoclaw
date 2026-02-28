@@ -23,13 +23,13 @@ pub const skill = struct {
 
         const sync_interval = if (config_value != .object) 24
         else if (config_value.object.get("sync_interval_hours")) |v|
-            if (v == .integer) @intCast(v.integer) else 24
+            if (v == .integer) try std.math.cast(u32, v.integer) else 24
         else
             24;
 
         const max_results = if (config_value != .object) 10
         else if (config_value.object.get("max_results")) |v|
-            if (v == .integer) @intCast(v.integer) else 10
+            if (v == .integer) try std.math.cast(u32, v.integer) else 10
         else
             10;
 

@@ -16,13 +16,13 @@ pub const skill = struct {
 
         const webhook_port = if (config_value != .object) 9000
         else if (config_value.object.get("webhook_port")) |v|
-            if (v == .integer) @intCast(v.integer) else 9000
+            if (v == .integer) try std.math.cast(u16, v.integer) else 9000
         else
             9000;
 
         const shell2http_port = if (config_value != .object) 9001
         else if (config_value.object.get("shell2http_port")) |v|
-            if (v == .integer) @intCast(v.integer) else 9001
+            if (v == .integer) try std.math.cast(u16, v.integer) else 9001
         else
             9001;
 

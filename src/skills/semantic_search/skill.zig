@@ -37,7 +37,7 @@ pub const skill = struct {
             }
             if (config_value.object.get("top_results")) |v| {
                 if (v == .integer) {
-                    config.top_results = @intCast(v.integer);
+                    config.top_results = try std.math.cast(usize, v.integer);
                 }
             }
         }

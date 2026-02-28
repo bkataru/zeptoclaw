@@ -30,12 +30,12 @@ pub const skill = struct {
             }
             if (config_value.object.get("num_threads")) |v| {
                 if (v == .integer) {
-                    config.num_threads = @intCast(v.integer);
+                    config.num_threads = try std.math.cast(usize, v.integer);
                 }
             }
             if (config_value.object.get("num_ctx")) |v| {
                 if (v == .integer) {
-                    config.num_ctx = @intCast(v.integer);
+                    config.num_ctx = try std.math.cast(usize, v.integer);
                 }
             }
         }

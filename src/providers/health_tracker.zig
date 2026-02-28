@@ -125,7 +125,7 @@ pub const ModelHealth = struct {
 
         // Set cooldown based on error type
         const duration = cooldown_duration.getDuration(error_type);
-        self.cooldown_until = current_time + @as(i64, @intCast(duration));
+        self.cooldown_until = current_time + @as(i64, duration);
 
         self.calculateHealthScore();
     }

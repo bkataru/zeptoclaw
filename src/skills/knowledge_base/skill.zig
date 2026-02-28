@@ -112,12 +112,12 @@ pub const skill = struct {
                     const header_obj = header_val.object;
 
                     const level = if (header_obj.get("level")) |l|
-                        if (l == .integer) @intCast(l.integer) else 1
+                        if (l == .integer) try std.math.cast(u8, l.integer) else 1
                     else
                         1;
                     const text = if (header_obj.get("text")) |t| if (t == .string) t.string else "" else "";
                     const line = if (header_obj.get("line")) |ln|
-                        if (ln == .integer) @intCast(ln.integer) else 0
+                        if (ln == .integer) try std.math.cast(usize, ln.integer) else 0
                     else
                         0;
 
