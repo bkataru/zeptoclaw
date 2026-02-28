@@ -139,7 +139,7 @@ pub const StreamNIMClient = struct {
             if (msg.content) |c| {
                 try msg_map.put("content", std.json.Value{ .string = c });
             }
-            try messages_arr.append(std.json.Value{ .object = msg_map });
+            try messages_arr.append(allocator, std.json.Value{ .object = msg_map });
         }
         try map.put("messages", std.json.Value{ .array = messages_arr });
 

@@ -179,7 +179,7 @@ pub const TokenAuth = struct {
             }
         }
 
-        return active_tokens.toOwnedSlice();
+        return active_tokens.toOwnedSlice(self.allocator);
     }
 };
 

@@ -211,11 +211,11 @@ pub const HealthTracker = struct {
 
         for (models) |model| {
             if (self.isModelAvailable(model.id)) {
-                try available.append(model);
+                try available.append(self.allocator, model);
             }
         }
 
-        return available.toOwnedSlice();
+        return available.toOwnedSlice(self.allocator);
     }
 
     /// Get models sorted by health score (best first)
