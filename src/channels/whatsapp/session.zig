@@ -297,7 +297,7 @@ pub const WhatsAppSession = struct {
         if (last.sender_name) |name| {
             combined_msg.sender_name = try self.allocator.dupe(u8, name);
         }
-        combined_msg.body = try combined_body.toOwnedSlice();
+        combined_msg.body = try combined_body.toOwnedSlice(self.allocator);
         combined_msg.message_type = last.message_type;
         combined_msg.timestamp = last.timestamp;
 

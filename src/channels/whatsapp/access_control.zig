@@ -267,7 +267,7 @@ pub const AccessControl = struct {
             try senders.append(try self.allocator.dupe(u8, entry.key_ptr.*));
         }
 
-        return senders.toOwnedSlice();
+        return senders.toOwnedSlice(self.allocator);
     }
 
     /// Get list of allowed groups
@@ -279,7 +279,7 @@ pub const AccessControl = struct {
             try groups.append(try self.allocator.dupe(u8, entry.key_ptr.*));
         }
 
-        return groups.toOwnedSlice();
+        return groups.toOwnedSlice(self.allocator);
     }
 };
 
@@ -308,7 +308,7 @@ pub const E164Normalizer = struct {
             try result.insert(0, '+');
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn isValid(input: []const u8) bool {

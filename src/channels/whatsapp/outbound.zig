@@ -191,7 +191,7 @@ pub const OutboundProcessor = struct {
             i += 1;
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(self.allocator);
     }
 
     /// Send with retry logic
@@ -283,7 +283,7 @@ pub const MarkdownTableConverter = struct {
             try result.append('\n');
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(self.allocator);
     }
 
     /// Check if line is a separator line
@@ -318,7 +318,7 @@ pub const MarkdownTableConverter = struct {
             }
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(self.allocator);
     }
 };
 

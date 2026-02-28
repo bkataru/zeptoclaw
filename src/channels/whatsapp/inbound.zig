@@ -91,7 +91,7 @@ pub const InboundProcessor = struct {
         while (iter.next()) |entry| {
             const elapsed_ms = @as(u64, @intCast(now - entry.value_ptr.*)) * 1000;
             if (elapsed_ms >= self.dedupe_ttl_ms) {
-                keys_to_remove.append(try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
+                keys_to_remove.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
             }
         }
 
@@ -141,7 +141,7 @@ pub const InboundProcessor = struct {
         // Add sender info
         if (msg.sender_name) |name| {
             try buffer.appendSlice(name);
-            try buffer.append(' ');
+            try buffer.append(allocator, ' ');
         }
 
         if (msg.sender_e164) |e164| {
@@ -169,7 +169,7 @@ pub const InboundProcessor = struct {
             }
         }
 
-        return buffer.toOwnedSlice();
+        return buffer.toOwnedSlice(allocator);
     }
 };
 
@@ -223,7 +223,7 @@ pub const MessageDeduper = struct {
         while (iter.next()) |entry| {
             const elapsed_ms = @as(u64, @intCast(now - entry.value_ptr.*)) * 1000;
             if (elapsed_ms >= self.ttl_ms) {
-                keys_to_remove.append(try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
+                keys_to_remove.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*)) catch continue;
             }
         }
 
