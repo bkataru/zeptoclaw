@@ -176,7 +176,7 @@ pub fn executeCommand(allocator: std.mem.Allocator, argv: []const []const u8, wo
     result.stdout = process_result.stdout;
     result.stderr = process_result.stderr;
     result.exit_code = switch (process_result.term) {
-        .Exited => |code| @intCast(code),
+        .Exited => |code| code,
         else => 1,
     };
 

@@ -147,7 +147,7 @@ pub const StreamNIMClient = struct {
             try map.put("temperature", std.json.Value{ .float = @as(f64, @floatCast(temp)) });
         }
         if (request.max_tokens) |max| {
-            try map.put("max_tokens", std.json.Value{ .integer = @as(i64, @intCast(max)) });
+            try map.put("max_tokens", std.json.Value{ .integer = try std.math.cast(i64, max) });
         }
 
         return map;

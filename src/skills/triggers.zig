@@ -166,7 +166,7 @@ pub const TriggerScheduler = struct {
         const weekday_str = parts.next() orelse return false;
 
         // Parse current time
-        const epoch_time = @import("std").time.epoch.EpochSeconds{ .secs = @intCast(current_time) };
+        const epoch_time = @import("std").time.epoch.EpochSeconds{ .secs = current_time };
         const epoch_day = epoch_time.getEpochDay();
         const year_day = epoch_day.calculateYearDay();
         const month_day = year_day.calculateMonthDay();
@@ -178,7 +178,7 @@ pub const TriggerScheduler = struct {
         const month = month_day.month;
         // Calculate weekday: epoch day 0 (Jan 1, 1970) was Thursday (4)
         // Weekday: 0=Sunday, 1=Monday, ..., 6=Saturday
-        const weekday = @as(u3, @intCast((epoch_day.day + 4) % 7));
+        const weekday = std.math.cast(u3, @mod(epoch_day.day + 4, 7)) catch unreachable;
 
         // Check each part
         if (!self.matchCronPart(minute_str, minute)) return false;
