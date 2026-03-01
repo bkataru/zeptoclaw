@@ -1,0 +1,39 @@
+Error: Failed to load configuration
+Please ensure NVIDIA_API_KEY is set and config file exists
+error(gpa): memory address 0x7fd36f760000 leaked: 
+
+error(gpa): memory address 0x7fd36f740000 leaked: 
+
+error(gpa): memory address 0x7fd36f740008 leaked: 
+
+error(gpa): memory address 0x7fd36f780000 leaked: 
+
+error(gpa): memory address 0x7fd36f780010 leaked: 
+
+error(gpa): memory address 0x7fd36f780020 leaked: 
+
+error(gpa): memory address 0x7fd36f780030 leaked: 
+
+error(gpa): memory address 0x7fd36f780040 leaked: 
+
+error(gpa): memory address 0x7fd36f640020 leaked: 
+
+error(gpa): memory address 0x7fd36f640040 leaked: 
+
+error(gpa): memory address 0x7fd36f720000 leaked: 
+
+error(gpa): memory address 0x7fd36f720040 leaked: 
+
+error(gpa): memory address 0x7fd36f720080 leaked: 
+
+error(gpa): memory address 0x7fd36f7200c0 leaked: 
+
+error(gpa): memory address 0x7fd36f720100 leaked: 
+
+error(gpa): memory address 0x7fd36f720140 leaked: 
+
+error(gpa): memory address 0x7fd36f720180 leaked: 
+
+error(gpa): memory address 0x7fd36f700000 leaked: 
+
+error: ConfigLoadFailed

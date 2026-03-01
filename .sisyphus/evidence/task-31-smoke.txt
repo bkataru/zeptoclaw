@@ -1,0 +1,45 @@
+
+╔════════════════════════════════════════════════════════════╗
+║         ZeptoClaw Gateway Server v1.0.0                   ║
+╚════════════════════════════════════════════════════════════╝
+
+Configuration:
+  Port: 18789
+  Bind: lan
+  Control UI: enabled
+  Allow Insecure Auth: false
+  Sessions Directory: /home/user/zeptoclaw/sessions
+
+API Endpoints:
+  GET  /health          - Health check
+  GET  /status          - Gateway status
+  GET  /sessions        - List active sessions
+  POST /sessions/:id/terminate - Terminate a session
+  GET  /config          - Get configuration
+  POST /config          - Update configuration
+  GET  /logs            - Recent logs
+  WS   /ws              - WebSocket for real-time updates
+  GET  /                - Control UI (if enabled)
+
+Autonomous Endpoints:
+  POST /autonomous/run  - Execute next autonomous action
+  POST /autonomous/browse - Browse feed and engage
+  POST /autonomous/search - Search topics of interest
+  POST /autonomous/post - Create an autonomous post
+  POST /autonomous/idea - Add post idea to queue
+  GET  /discoveries     - View recent discoveries
+  POST /discoveries/clear - Clear discoveries
+  POST /heartbeat       - Local agent health report
+  GET  /state           - Full state + health metrics
+  POST /gateway/incident - Report gateway incident
+  GET  /gateway/incidents - View recent incidents
+
+Authentication:
+  Main Token: 317ef50c19fa20b485b377785d3ccb8d6af318dd1534b2a4
+  Workspace Token: df95d386c47ca68bf705ce7d22432752df25c3ad24eefb49
+
+Use X-Auth-Token header for authentication
+
+Press Ctrl+C to stop the server
+
+Gateway server listening on .{ .any = .{ .family = 2, .data = { 73, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } }, .in = .{ .sa = .{ .family = 2, .port = 25929, .addr = 0, .zero = { ... } } }, .in6 = .{ .sa = .{ .family = 2, .port = 25929, .flowinfo = 0, .addr = { ... }, .scope_id = 2863311530 } }, .un = .{ .family = 2, .path = { 73, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170 } } }
