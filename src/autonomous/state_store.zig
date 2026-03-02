@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const log = std.log.scoped(.state_store);
 
 /// Barvis state - persistent state for the autonomous agent
 pub const BarvisState = struct {
@@ -184,8 +185,78 @@ pub const StateStore = struct {
 
 
     pub fn save(self: *StateStore) !void {
-        // Simplified save - just update timestamps
-        _ = self;
+        // Serialize state to JSON with atomic write
+        const StateJSON = struct {
+            last_check: i64,
+            last_reply: i64,
+            last_post: i64,
+            last_browse: i64,
+            local_last_seen: i64,
+            last_heartbeat: ?types.HeartbeatData,
+            total_replies: u32,
+            total_posts: u32,
+            total_comments: u32,
+            total_upvotes: u32,
+            incident_count: u32,
+            replied_comments: []const []const u8,
+            seen_posts: []const []const u8,
+            upvoted_posts: []const []const u8,
+            commented_posts: []const []const u8,
+            interesting_moltys: []const []const u8,
+            post_ideas: []const []const u8,
+            downtime_alerts_sent: []const u32,
+            discoveries: []const types.Discovery,
+            heartbeat_history: []const types.HeartbeatData,
+            gateway_incidents: []const types.GatewayIncident,
+            last_action: ?types.AutonomousAction,
+        };
+
+        const json_state = StateJSON{
+            .last_check = self.state.last_check,
+            .last_reply = self.state.last_reply,
+            .last_post = self.state.last_post,
+            .last_browse = self.state.last_browse,
+            .local_last_seen = self.state.local_last_seen,
+            .last_heartbeat = self.state.last_heartbeat,
+            .total_replies = self.state.total_replies,
+            .total_posts = self.state.total_posts,
+            .total_comments = self.state.total_comments,
+            .total_upvotes = self.state.total_upvotes,
+            .incident_count = self.state.incident_count,
+            .replied_comments = self.state.replied_comments.items,
+            .seen_posts = self.state.seen_posts.items,
+            .upvoted_posts = self.state.upvoted_posts.items,
+            .commented_posts = self.state.commented_posts.items,
+            .interesting_moltys = self.state.interesting_moltys.items,
+            .post_ideas = self.state.post_ideas.items,
+            .downtime_alerts_sent = self.state.downtime_alerts_sent.items,
+            .discoveries = self.state.discoveries.items,
+            .heartbeat_history = self.state.heartbeat_history.items,
+            .gateway_incidents = self.state.gateway_incidents.items,
+            .last_action = self.state.last_action,
+        };
+
+        const json_str = try std.json.Stringify.valueAlloc(self.allocator, json_state, .{ .whitespace = .indent_2 });
+        defer self.allocator.free(json_str);
+
+        const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.file_path});
+        defer self.allocator.free(temp_path);
+
+        const cwd = std.fs.cwd();
+        var tmp_file = try cwd.createFile(temp_path, .{});
+        defer tmp_file.close();
+        try tmp_file.writeAll(json_str);
+
+        const bak_path = try std.fmt.allocPrint(self.allocator, "{s}.bak", .{self.file_path});
+        defer self.allocator.free(bak_path);
+        cwd.copyFile(cwd, bak_path, cwd, self.file_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {}, // nothing to backup
+            else => {
+                log.warn("Failed to backup state file: {}", .{err});
+            },
+        };
+
+        try cwd.rename(temp_path, self.file_path);
     }
 
     pub fn updateLastPost(self: *StateStore, timestamp: i64) !void {
