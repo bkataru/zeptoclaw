@@ -1,5 +1,5 @@
 //! Web App QA & Troubleshooting Skill
-//! Web app debugging — Chrome headless screenshots, CDN issues, SRI hash fixes
+//! Web app debugging — Chrome headless screenshots, CDN issues, SRI hash fixes, Canvas quirks
 
 const std = @import("std");
 const sdk = @import("../skill_sdk.zig");
@@ -9,55 +9,25 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        const chrome_path = if (config_value != .object) "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-        else if (config_value.object.get("chrome_path")) |v|
-            if (v == .string) v.string else "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-        else
-            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-
-        const screenshot_dir = if (config_value != .object) "/mnt/c/Users/user/Pictures/Screenshots"
-        else if (config_value.object.get("screenshot_dir")) |v|
-            if (v == .string) v.string else "/mnt/c/Users/user/Pictures/Screenshots"
-        else
-            "/mnt/c/Users/user/Pictures/Screenshots";
-
-        const default_viewport = if (config_value != .object) "1920x1080"
-        else if (config_value.object.get("default_viewport")) |v|
-            if (v == .string) v.string else "1920x1080"
-        else
-            "1920x1080";
-
-        const virtual_time_budget = if (config_value != .object) 8000
-        else if (config_value.object.get("virtual_time_budget")) |v|
-            if (v == .integer) try std.math.cast(u32, v.integer) else 8000
-        else
-            8000;
-
-        config = Config{
-            .chrome_path = chrome_path,
-            .screenshot_dir = screenshot_dir,
-            .default_viewport = default_viewport,
-            .virtual_time_budget = virtual_time_budget,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Parse command
         if (std.mem.startsWith(u8, message, "/web-screenshot")) {
-            return handleScreenshot(ctx, message);
+            return handleScreenshot(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/web-check-cdn")) {
-            return handleCheckCDN(ctx, message);
+            return handleCheckCDN(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/web-check-sri")) {
-            return handleCheckSRI(ctx, message);
+            return handleCheckSRI(ctx, message, cfg);
         }
 
         return SkillResult.successResponse(ctx.allocator, "");
@@ -65,7 +35,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -79,6 +49,32 @@ pub const skill = struct {
             .enabled = true,
         };
     }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const chrome_path = if (config_json != .object) "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" else if (config_json.object.get("chrome_path")) |v|
+            if (v == .string) v.string else "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        else
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+        const screenshot_dir = if (config_json != .object) "/mnt/c/Users/user/Pictures/Screenshots" else if (config_json.object.get("screenshot_dir")) |v|
+            if (v == .string) v.string else "/mnt/c/Users/user/Pictures/Screenshots"
+        else
+            "/mnt/c/Users/user/Pictures/Screenshots";
+        const default_viewport = if (config_json != .object) "1920x1080" else if (config_json.object.get("default_viewport")) |v|
+            if (v == .string) v.string else "1920x1080"
+        else
+            "1920x1080";
+        const virtual_time_budget = if (config_json != .object) 8000 else if (config_json.object.get("virtual_time_budget")) |v|
+            if (v == .integer) try std.math.cast(u32, v.integer) else 8000
+        else
+            8000;
+        return Config{
+            .chrome_path = chrome_path,
+            .screenshot_dir = screenshot_dir,
+            .default_viewport = default_viewport,
+            .virtual_time_budget = virtual_time_budget,
+        };
+    }
 };
 
 const Config = struct {
@@ -88,7 +84,7 @@ const Config = struct {
     virtual_time_budget: u32,
 };
 
-fn handleScreenshot(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleScreenshot(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract URL
     const url = std.mem.trim(u8, message["/web-screenshot".len..], " \t\r\n");
 
@@ -103,7 +99,7 @@ fn handleScreenshot(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     const filename = try std.fmt.allocPrint(ctx.allocator, "screenshot_{d}.png", .{timestamp});
     defer ctx.allocator.free(filename);
 
-    const output_path = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{config.?.screenshot_dir, filename});
+    const output_path = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ cfg.screenshot_dir, filename });
     defer ctx.allocator.free(output_path);
 
     // In a real implementation, this would run Chrome headless
@@ -118,13 +114,14 @@ fn handleScreenshot(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\Output: {s}
         \\
         \\✅ Screenshot saved successfully!
-    , .{url, config.?.chrome_path, config.?.default_viewport, config.?.virtual_time_budget, output_path});
+    , .{ url, cfg.chrome_path, cfg.default_viewport, cfg.virtual_time_budget, output_path });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleCheckCDN(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleCheckCDN(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
+    _ = cfg; // unused
     // Extract CDN URL
     const cdn_url = std.mem.trim(u8, message["/web-check-cdn".len..], " \t\r\n");
 
@@ -156,7 +153,8 @@ fn handleCheckCDN(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleCheckSRI(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleCheckSRI(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
+    _ = cfg; // unused
     // Extract site URL and resource name
     var iter = std.mem.splitScalar(u8, message["/web-check-sri".len..], ' ');
     const site_url = iter.next() orelse {
@@ -186,7 +184,7 @@ fn handleCheckSRI(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\
         \\✅ SRI hash matches!
         \\Resource integrity verified.
-    , .{site_url, resource_name});
+    , .{ site_url, resource_name });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);

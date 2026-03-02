@@ -13,6 +13,11 @@ fn makeTestConfig(allocator: std.mem.Allocator, api_key: []const u8, model: []co
     const gateway_bind = try allocator.dupe(u8, "lan");
     const workspace = try allocator.dupe(u8, "/tmp/zeptoclaw_test");
     const fallback_models = try allocator.alloc([]const u8, 0);
+    const whatsapp_auth_dir = try allocator.dupe(u8, "/tmp/zeptoclaw_whatsapp");
+    const whatsapp_dm_policy = try allocator.dupe(u8, "pairing");
+    const whatsapp_group_policy = try allocator.dupe(u8, "allowlist");
+    const whatsapp_allow_from = try allocator.alloc([]const u8, 0);
+    const whatsapp_group_activation_commands = try allocator.alloc([]const u8, 0);
 
     return Config{
         .allocator = allocator,
@@ -32,6 +37,16 @@ fn makeTestConfig(allocator: std.mem.Allocator, api_key: []const u8, model: []co
         .workspace = workspace,
         .max_concurrent = 4,
         .source = .default,
+        .whatsapp_enabled = false,
+        .whatsapp_auth_dir = whatsapp_auth_dir,
+        .whatsapp_dm_policy = whatsapp_dm_policy,
+        .whatsapp_allow_from = whatsapp_allow_from,
+        .whatsapp_group_policy = whatsapp_group_policy,
+        .whatsapp_media_max_mb = 50,
+        .whatsapp_debounce_ms = 0,
+        .whatsapp_send_read_receipts = true,
+        .whatsapp_group_require_mention = true,
+        .whatsapp_group_activation_commands = whatsapp_group_activation_commands,
     };
 }
 

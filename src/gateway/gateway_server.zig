@@ -13,6 +13,17 @@ const AutonomousAgent = zeptoclaw.autonomous.agent_framework.AutonomousAgent;
 const StateStore = zeptoclaw.autonomous.state_store.StateStore;
 const MoltbookClient = zeptoclaw.autonomous.moltbook_client.MoltbookClient;
 const RateLimiter = zeptoclaw.autonomous.rate_limiter.RateLimiter;
+
+// Global server reference for signal handler
+var global_server: *HttpServer = undefined;
+
+// Signal handler for graceful shutdown
+fn sigHandler(sig: i32) callconv(.c) void {
+    _ = sig;
+    if (global_server.shutdown_requested.load(.seq_cst) == false) {
+        global_server.shutdown_requested.store(true, .seq_cst);
+    }
+}
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -93,6 +104,15 @@ pub fn main() !void {
         cfg.gateway_allow_insecure_auth,
         autonomous_agent,
     );
+
+    global_server = &server;
+    const act = std.os.linux.Sigaction{
+        .handler = .{ .handler = sigHandler },
+        .mask = std.os.linux.sigemptyset(),
+        .flags = 0,
+    };
+    _ = std.os.linux.sigaction(2, &act, null);
+    _ = std.os.linux.sigaction(15, &act, null);
     defer server.deinit();
 
     // Print startup information
@@ -143,6 +163,12 @@ pub fn main() !void {
 
     // Start the server
     try server.start();
+
+    if (server.autonomous_agent) |agent| {
+        agent.state_store.save() catch |err| {
+            std.log.warn("Failed to save state on shutdown: {}", .{err});
+        };
+    }
 }
 
 test "gateway server main" {

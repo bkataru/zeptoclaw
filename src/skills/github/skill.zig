@@ -9,43 +9,20 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        const github_token = if (config_value != .object) ""
-        else if (config_value.object.get("github_token")) |v|
-            if (v == .string) v.string else ""
-        else
-            "";
-
-        const default_owner = if (config_value != .object) ""
-        else if (config_value.object.get("default_owner")) |v|
-            if (v == .string) v.string else ""
-        else
-            "";
-
-        const default_repo = if (config_value != .object) ""
-        else if (config_value.object.get("default_repo")) |v|
-            if (v == .string) v.string else ""
-        else
-            "";
-
-        config = Config{
-            .github_token = github_token,
-            .default_owner = default_owner,
-            .default_repo = default_repo,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Check if GitHub token is configured
-        if (config.?.github_token.len == 0) {
+        if (cfg.github_token.len == 0) {
             const response = try std.fmt.allocPrint(ctx.allocator,
                 \\🐙 GitHub - Not Configured
                 \\
@@ -61,13 +38,13 @@ pub const skill = struct {
 
         // Parse command
         if (std.mem.startsWith(u8, message, "/gh-issue")) {
-            return handleIssue(ctx, message);
+            return handleIssue(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/gh-pr")) {
-            return handlePR(ctx, message);
+            return handlePR(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/gh-repo")) {
-            return handleRepo(ctx, message);
+            return handleRepo(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/gh-release")) {
-            return handleRelease(ctx, message);
+            return handleRelease(ctx, message, cfg);
         }
 
         return SkillResult.successResponse(ctx.allocator, "");
@@ -75,7 +52,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -89,6 +66,27 @@ pub const skill = struct {
             .enabled = true,
         };
     }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const github_token = if (config_json != .object) "" else if (config_json.object.get("github_token")) |v|
+            if (v == .string) v.string else ""
+        else
+            "";
+        const default_owner = if (config_json != .object) "" else if (config_json.object.get("default_owner")) |v|
+            if (v == .string) v.string else ""
+        else
+            "";
+        const default_repo = if (config_json != .object) "" else if (config_json.object.get("default_repo")) |v|
+            if (v == .string) v.string else ""
+        else
+            "";
+        return Config{
+            .github_token = github_token,
+            .default_owner = default_owner,
+            .default_repo = default_repo,
+        };
+    }
 };
 
 const Config = struct {
@@ -97,7 +95,7 @@ const Config = struct {
     default_repo: []const u8,
 };
 
-fn handleIssue(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleIssue(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract subcommand and args
     var iter = std.mem.splitScalar(u8, message["/gh-issue".len..], ' ');
     const subcommand = iter.next() orelse {
@@ -124,7 +122,7 @@ fn handleIssue(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\✅ Issue created successfully!
             \\Issue #123: {s}
             \\URL: https://github.com/{s}/{s}/issues/123
-        , .{title, config.?.default_owner, config.?.default_repo, title, config.?.default_owner, config.?.default_repo});
+        , .{ title, cfg.default_owner, cfg.default_repo, title, cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -141,7 +139,7 @@ fn handleIssue(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\#121: Documentation update (opened 1 week ago)
             \\
             \\Total: 3 open issues
-        , .{config.?.default_owner, config.?.default_repo});
+        , .{ cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -152,7 +150,7 @@ fn handleIssue(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     return SkillResult.errorResponse(ctx.allocator, response);
 }
 
-fn handlePR(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handlePR(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract subcommand and args
     var iter = std.mem.splitScalar(u8, message["/gh-pr".len..], ' ');
     const subcommand = iter.next() orelse {
@@ -180,7 +178,7 @@ fn handlePR(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\✅ Pull request created successfully!
             \\PR #456: {s}
             \\URL: https://github.com/{s}/{s}/pull/456
-        , .{title, config.?.default_owner, config.?.default_repo, config.?.default_repo, title, config.?.default_owner, config.?.default_repo});
+        , .{ title, cfg.default_owner, cfg.default_repo, cfg.default_repo, title, cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -196,7 +194,7 @@ fn handlePR(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\#455: Fix bug in X (opened 3 days ago)
             \\
             \\Total: 2 open PRs
-        , .{config.?.default_owner, config.?.default_repo});
+        , .{ cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -207,7 +205,7 @@ fn handlePR(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     return SkillResult.errorResponse(ctx.allocator, response);
 }
 
-fn handleRepo(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleRepo(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract subcommand
     const subcommand = std.mem.trim(u8, message["/gh-repo".len..], " \t\r\n");
 
@@ -224,7 +222,7 @@ fn handleRepo(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\Open PRs: 2
             \\
             \\URL: https://github.com/{s}/{s}
-        , .{config.?.default_owner, config.?.default_repo, config.?.default_owner, config.?.default_repo});
+        , .{ cfg.default_owner, cfg.default_repo, cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -235,7 +233,7 @@ fn handleRepo(ctx: *ExecutionContext, message: []const u8) !SkillResult {
     return SkillResult.errorResponse(ctx.allocator, response);
 }
 
-fn handleRelease(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleRelease(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract subcommand and args
     var iter = std.mem.splitScalar(u8, message["/gh-release".len..], ' ');
     const subcommand = iter.next() orelse {
@@ -261,7 +259,7 @@ fn handleRelease(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\✅ Release created successfully!
             \\Release: {s}
             \\URL: https://github.com/{s}/{s}/releases/tag/{s}
-        , .{tag, config.?.default_owner, config.?.default_repo, tag, config.?.default_owner, config.?.default_repo, tag});
+        , .{ tag, cfg.default_owner, cfg.default_repo, tag, cfg.default_owner, cfg.default_repo, tag });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
@@ -278,7 +276,7 @@ fn handleRelease(ctx: *ExecutionContext, message: []const u8) !SkillResult {
             \\v0.8.0 (2026-02-15)
             \\
             \\Total: 3 releases
-        , .{config.?.default_owner, config.?.default_repo});
+        , .{ cfg.default_owner, cfg.default_repo });
 
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);

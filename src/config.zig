@@ -23,6 +23,17 @@ pub const Config = struct {
     workspace: []const u8,
     max_concurrent: u32,
     source: migration_config.ConfigSource,
+    // WhatsApp configuration
+    whatsapp_enabled: bool,
+    whatsapp_auth_dir: []const u8,
+    whatsapp_dm_policy: []const u8,
+    whatsapp_allow_from: [][]const u8,
+    whatsapp_group_policy: []const u8,
+    whatsapp_media_max_mb: u32,
+    whatsapp_debounce_ms: u32,
+    whatsapp_send_read_receipts: bool,
+    whatsapp_group_require_mention: bool,
+    whatsapp_group_activation_commands: [][]const u8,
 
     /// Load configuration from all sources with priority: CLI > env > file > defaults
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -48,6 +59,16 @@ pub const Config = struct {
             .workspace = zepto_config.workspace,
             .max_concurrent = zepto_config.max_concurrent,
             .source = zepto_config.source,
+.whatsapp_enabled = zepto_config.whatsapp_enabled,
+            .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
+            .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
+            .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
+            .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
+            .whatsapp_debounce_ms = zepto_config.whatsapp_debounce_ms,
+            .whatsapp_send_read_receipts = zepto_config.whatsapp_send_read_receipts,
+            .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
+            .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
         };
     }
 
@@ -79,6 +100,16 @@ pub const Config = struct {
             .workspace = zepto_config.workspace,
             .max_concurrent = zepto_config.max_concurrent,
             .source = zepto_config.source,
+.whatsapp_enabled = zepto_config.whatsapp_enabled,
+            .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
+            .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
+            .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
+            .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
+            .whatsapp_debounce_ms = zepto_config.whatsapp_debounce_ms,
+            .whatsapp_send_read_receipts = zepto_config.whatsapp_send_read_receipts,
+            .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
+            .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
         };
     }
 
@@ -106,6 +137,16 @@ pub const Config = struct {
             .workspace = zepto_config.workspace,
             .max_concurrent = zepto_config.max_concurrent,
             .source = zepto_config.source,
+.whatsapp_enabled = zepto_config.whatsapp_enabled,
+            .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
+            .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
+            .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
+            .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
+            .whatsapp_debounce_ms = zepto_config.whatsapp_debounce_ms,
+            .whatsapp_send_read_receipts = zepto_config.whatsapp_send_read_receipts,
+            .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
+            .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
         };
 }
 
@@ -124,6 +165,17 @@ pub const Config = struct {
             a.free(token);
         }
         a.free(self.workspace);
+        a.free(self.whatsapp_auth_dir);
+        a.free(self.whatsapp_dm_policy);
+        for (self.whatsapp_allow_from) |item| {
+            a.free(item);
+        }
+        a.free(self.whatsapp_allow_from);
+        a.free(self.whatsapp_group_policy);
+        for (self.whatsapp_group_activation_commands) |item| {
+            a.free(item);
+        }
+        a.free(self.whatsapp_group_activation_commands);
     }
 
     /// Get the primary model ID
@@ -218,6 +270,16 @@ test "Config getPrimaryModel" {
         .workspace = zepto_config.workspace,
         .max_concurrent = zepto_config.max_concurrent,
         .source = zepto_config.source,
+        .whatsapp_enabled = zepto_config.whatsapp_enabled,
+        .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
+        .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+        .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
+        .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
+        .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
+        .whatsapp_debounce_ms = zepto_config.whatsapp_debounce_ms,
+        .whatsapp_send_read_receipts = zepto_config.whatsapp_send_read_receipts,
+        .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
+        .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
     };
     try std.testing.expectEqualStrings("qwen/qwen3.5-397b-a17b", config.getPrimaryModel());
     try std.testing.expectEqualStrings("qwen/qwen3.5-397b-a17b", config.getPrimaryModel());

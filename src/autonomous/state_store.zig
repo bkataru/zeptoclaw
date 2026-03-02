@@ -247,14 +247,22 @@ pub const StateStore = struct {
         defer tmp_file.close();
         try tmp_file.writeAll(json_str);
 
-        const bak_path = try std.fmt.allocPrint(self.allocator, "{s}.bak", .{self.file_path});
-        defer self.allocator.free(bak_path);
-        cwd.copyFile(cwd, bak_path, cwd, self.file_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => {}, // nothing to backup
-            else => {
-                log.warn("Failed to backup state file: {}", .{err});
-            },
-        };
+
+
+    // Create backup before overwriting (use top-level copyFile, not dir.copyFile)
+    const bak_path = try std.fmt.allocPrint(self.allocator, "{s}.bak", .{self.file_path});
+    defer self.allocator.free(bak_path);
+    std.fs.copyFileAbsolute(bak_path, self.file_path, std.fs.Dir.CopyFileOptions{}) catch |err| switch (err) {
+        error.FileNotFound => {}, // nothing to backup
+        else => {
+            log.warn("Failed to backup state file: {}", .{err});
+        },
+    };
+
+
+
+
+
 
         try cwd.rename(temp_path, self.file_path);
     }

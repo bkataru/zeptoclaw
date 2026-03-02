@@ -9,26 +9,20 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
         _ = config_value;
-        config = Config{
-            .trusted_whatsapp_number = "+919182065182",
-            .enable_prompt_injection_detection = true,
-            .log_privileged_operations = true,
-            .require_explicit_auth = true,
-        };
+        // No global state to initialize; config is constant.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Check for prompt injection patterns
-        if (config.?.enable_prompt_injection_detection) {
+        if (cfg.enable_prompt_injection_detection) {
             if (detectPromptInjection(message)) {
                 const response = try std.fmt.allocPrint(ctx.allocator,
                     \\🚨 Potential prompt injection detected
@@ -43,7 +37,7 @@ pub const skill = struct {
 
         // Parse command
         if (std.mem.startsWith(u8, message, "/safety-check")) {
-            return handleSafetyCheck(ctx);
+            return handleSafetyCheck(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/verify-identity")) {
             return handleVerifyIdentity(ctx);
         } else if (std.mem.startsWith(u8, message, "/auth-status")) {
@@ -57,7 +51,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -69,6 +63,17 @@ pub const skill = struct {
             .homepage = null,
             .metadata = .{ .object = std.StringHashMap(std.json.Value).init(std.heap.page_allocator) },
             .enabled = true,
+        };
+    }
+
+    // Parse configuration from JSON (per-execution) - constants, ignores input
+    fn parseConfig(config_json: std.json.Value) Config {
+        _ = config_json;
+        return Config{
+            .trusted_whatsapp_number = "+919182065182",
+            .enable_prompt_injection_detection = true,
+            .log_privileged_operations = true,
+            .require_explicit_auth = true,
         };
     }
 };
@@ -95,7 +100,7 @@ const injection_patterns = [_]PromptInjectionPattern{
     .{ .pattern = "pretend to be", .description = "Pretend command" },
 };
 
-const dangerous_commands = [_][]const u8{
+const dangerous_commands = [][]const u8{
     "sudo rm -rf",
     "chmod 777",
     "rm -rf /",
@@ -129,7 +134,7 @@ fn toLower(s: []const u8) []const u8 {
     return s;
 }
 
-fn handleSafetyCheck(ctx: *ExecutionContext) !SkillResult {
+fn handleSafetyCheck(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\🛡️ Operational Safety Status
         \\
@@ -147,10 +152,10 @@ fn handleSafetyCheck(ctx: *ExecutionContext) !SkillResult {
         \\
         \\✅ All security systems operational
     , .{
-        config.?.trusted_whatsapp_number,
-        config.?.enable_prompt_injection_detection,
-        config.?.log_privileged_operations,
-        config.?.require_explicit_auth,
+        cfg.trusted_whatsapp_number,
+        cfg.enable_prompt_injection_detection,
+        cfg.log_privileged_operations,
+        cfg.require_explicit_auth,
     });
 
     try ctx.respond(response);

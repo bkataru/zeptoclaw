@@ -9,56 +9,20 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        if (config_value != .object) {
-            config = Config{
-                .api_key = "",
-                .agent_name = "barvis_da_jarvis",
-                .agent_id = "",
-                .api_base = "https://www.moltbook.com/api/v1",
-            };
-            return;
-        }
-
-        const api_key = if (config_value.object.get("api_key")) |v|
-            if (v == .string) v.string else ""
-        else
-            "";
-
-        const agent_name = if (config_value.object.get("agent_name")) |v|
-            if (v == .string) v.string else "barvis_da_jarvis"
-        else
-            "barvis_da_jarvis";
-
-        const agent_id = if (config_value.object.get("agent_id")) |v|
-            if (v == .string) v.string else ""
-        else
-            "";
-
-        const api_base = if (config_value.object.get("api_base")) |v|
-            if (v == .string) v.string else "https://www.moltbook.com/api/v1"
-        else
-            "https://www.moltbook.com/api/v1";
-
-        config = Config{
-            .api_key = api_key,
-            .agent_name = agent_name,
-            .agent_id = agent_id,
-            .api_base = api_base,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Check if API key is configured
-        if (config.?.api_key.len == 0) {
+        if (cfg.api_key.len == 0) {
             const response = try std.fmt.allocPrint(ctx.allocator,
                 \\🦞 Moltbook - Not Configured
                 \\
@@ -82,7 +46,7 @@ pub const skill = struct {
         } else if (std.mem.startsWith(u8, message, "/moltbook feed")) {
             return handleFeed(ctx);
         } else if (std.mem.startsWith(u8, message, "/moltbook profile")) {
-            return handleProfile(ctx);
+            return handleProfile(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/moltbook")) {
             return handleHelp(ctx);
         }
@@ -92,7 +56,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -104,6 +68,32 @@ pub const skill = struct {
             .homepage = "https://www.moltbook.com",
             .metadata = .{ .object = std.StringHashMap(std.json.Value).init(std.heap.page_allocator) },
             .enabled = true,
+        };
+    }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const api_key = if (config_json != .object) "" else if (config_json.object.get("api_key")) |v|
+            if (v == .string) v.string else ""
+        else
+            "";
+        const agent_name = if (config_json != .object) "barvis_da_jarvis" else if (config_json.object.get("agent_name")) |v|
+            if (v == .string) v.string else "barvis_da_jarvis"
+        else
+            "barvis_da_jarvis";
+        const agent_id = if (config_json != .object) "" else if (config_json.object.get("agent_id")) |v|
+            if (v == .string) v.string else ""
+        else
+            "";
+        const api_base = if (config_json != .object) "https://www.moltbook.com/api/v1" else if (config_json.object.get("api_base")) |v|
+            if (v == .string) v.string else "https://www.moltbook.com/api/v1"
+        else
+            "https://www.moltbook.com/api/v1";
+        return Config{
+            .api_key = api_key,
+            .agent_name = agent_name,
+            .agent_id = agent_id,
+            .api_base = api_base,
         };
     }
 };
@@ -163,7 +153,7 @@ fn handleComment(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\Comment: {s}
         \\
         \\✅ Comment added successfully!
-    , .{post_id, comment});
+    , .{ post_id, comment });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
@@ -213,9 +203,9 @@ fn handleFeed(ctx: *ExecutionContext) !SkillResult {
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleProfile(ctx: *ExecutionContext) !SkillResult {
-    const agent_name = config.?.agent_name;
-    const agent_id = if (config.?.agent_id.len > 0) config.?.agent_id else "Not registered";
+fn handleProfile(ctx: *ExecutionContext, cfg: Config) !SkillResult {
+    const agent_name = cfg.agent_name;
+    const agent_id = if (cfg.agent_id.len > 0) cfg.agent_id else "Not registered";
 
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\🦞 Moltbook Profile
@@ -230,7 +220,7 @@ fn handleProfile(ctx: *ExecutionContext) !SkillResult {
         \\- Upvotes received: 0
         \\
         \\Visit https://www.moltbook.com to see your profile!
-    , .{agent_name, agent_id});
+    , .{ agent_name, agent_id });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);

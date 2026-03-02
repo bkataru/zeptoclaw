@@ -9,55 +9,25 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        const zig_path = if (config_value != .object) "zig"
-        else if (config_value.object.get("zig_path")) |v|
-            if (v == .string) v.string else "zig"
-        else
-            "zig";
-
-        const optimize_mode = if (config_value != .object) "ReleaseFast"
-        else if (config_value.object.get("optimize_mode")) |v|
-            if (v == .string) v.string else "ReleaseFast"
-        else
-            "ReleaseFast";
-
-        const target_triple = if (config_value != .object) "native"
-        else if (config_value.object.get("target_triple")) |v|
-            if (v == .string) v.string else "native"
-        else
-            "native";
-
-        const enable_wasm = if (config_value != .object) true
-        else if (config_value.object.get("enable_wasm")) |v|
-            if (v == .bool) v.bool else true
-        else
-            true;
-
-        config = Config{
-            .zig_path = zig_path,
-            .optimize_mode = optimize_mode,
-            .target_triple = target_triple,
-            .enable_wasm = enable_wasm,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Parse command
         if (std.mem.startsWith(u8, message, "/zig-build")) {
-            return handleBuild(ctx, message);
+            return handleBuild(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/zig-test")) {
-            return handleTest(ctx, message);
+            return handleTest(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/zig-docs")) {
-            return handleDocs(ctx);
+            return handleDocs(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/zig-clean")) {
             return handleClean(ctx);
         }
@@ -67,7 +37,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -81,6 +51,32 @@ pub const skill = struct {
             .enabled = true,
         };
     }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const zig_path = if (config_json != .object) "zig" else if (config_json.object.get("zig_path")) |v|
+            if (v == .string) v.string else "zig"
+        else
+            "zig";
+        const optimize_mode = if (config_json != .object) "ReleaseFast" else if (config_json.object.get("optimize_mode")) |v|
+            if (v == .string) v.string else "ReleaseFast"
+        else
+            "ReleaseFast";
+        const target_triple = if (config_json != .object) "native" else if (config_json.object.get("target_triple")) |v|
+            if (v == .string) v.string else "native"
+        else
+            "native";
+        const enable_wasm = if (config_json != .object) true else if (config_json.object.get("enable_wasm")) |v|
+            if (v == .bool) v.bool else true
+        else
+            true;
+        return Config{
+            .zig_path = zig_path,
+            .optimize_mode = optimize_mode,
+            .target_triple = target_triple,
+            .enable_wasm = enable_wasm,
+        };
+    }
 };
 
 const Config = struct {
@@ -90,7 +86,7 @@ const Config = struct {
     enable_wasm: bool,
 };
 
-fn handleBuild(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleBuild(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract build options
     const args = std.mem.trim(u8, message["/zig-build".len..], " \t\r\n");
 
@@ -108,13 +104,13 @@ fn handleBuild(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\Size: 2.4 MB
         \\
         \\Build time: 1.2s
-    , .{config.?.zig_path, args, config.?.target_triple, config.?.optimize_mode});
+    , .{ cfg.zig_path, args, cfg.target_triple, cfg.optimize_mode });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleTest(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleTest(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract test pattern
     const pattern = std.mem.trim(u8, message["/zig-test".len..], " \t\r\n");
 
@@ -129,13 +125,13 @@ fn handleTest(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\
         \\Test coverage: 87.3%
         \\Test time: 0.8s
-    , .{config.?.zig_path, if (pattern.len > 0) pattern else ""});
+    , .{ cfg.zig_path, if (pattern.len > 0) pattern else "" });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleDocs(ctx: *ExecutionContext) !SkillResult {
+fn handleDocs(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     // In a real implementation, this would run zig build docs
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\📚 Generating Zig documentation...
@@ -148,7 +144,7 @@ fn handleDocs(ctx: *ExecutionContext) !SkillResult {
         \\✅ 234 functions documented
         \\
         \\Open ./zig-out/docs/index.html in your browser to view.
-    , .{config.?.zig_path});
+    , .{cfg.zig_path});
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);

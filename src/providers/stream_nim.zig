@@ -88,7 +88,7 @@ pub const StreamNIMClient = struct {
             // Parse SSE data
             if (std.mem.startsWith(u8, line, "data: ")) {
                 const data = line["data: ".len..];
-                
+
                 // Check for [DONE] marker
                 if (std.mem.eql(u8, data, "[DONE]")) {
                     break;
@@ -156,10 +156,68 @@ pub const StreamNIMClient = struct {
 
 test "StreamNIMClient initialization" {
     const allocator = std.testing.allocator;
+    // Allocate required fields
+    const nim_api_key = try allocator.dupe(u8, "test-key");
+    const nim_model = try allocator.dupe(u8, "test-model");
+    const image_model = try allocator.alloc(u8, 0);
+    const gateway_mode = try allocator.dupe(u8, "local");
+    const gateway_bind = try allocator.dupe(u8, "lan");
+    const workspace = try allocator.dupe(u8, "/tmp/zeptoclaw_test");
+    const fallback_models = try allocator.alloc([]const u8, 0);
+    // WhatsApp fields
+    const whatsapp_auth_dir = try allocator.alloc(u8, 0);
+    const whatsapp_dm_policy = try allocator.dupe(u8, "pairing");
+    const whatsapp_allow_from = try allocator.alloc([]const u8, 0);
+    const whatsapp_group_policy = try allocator.dupe(u8, "allowlist");
+    const whatsapp_group_activation_commands = try allocator.alloc([]const u8, 0);
+    // Other values
+    const gateway_port: u32 = 18789;
+    const gateway_control_ui_enabled = true;
+    const gateway_allow_insecure_auth = false;
+    const max_iterations: u32 = 1;
+    const temperature: f32 = 0.0;
+    const max_tokens: u32 = 1;
+    const nim_timeout_ms: u32 = 30000;
+    const max_concurrent: u32 = 4;
+    const source: config_module.ConfigSource = .default;
+    const whatsapp_enabled = false;
+    const whatsapp_media_max_mb: u32 = 50;
+    const whatsapp_debounce_ms: u32 = 0;
+    const whatsapp_send_read_receipts = true;
+    const whatsapp_group_require_mention = true;
+    const gateway_auth_token = null;
+
     const cfg = config_module.Config{
-        .nim_api_key = "test-key",
-        .nim_model = "test-model",
+        .allocator = allocator,
+        .nim_api_key = nim_api_key,
+        .nim_model = nim_model,
+        .max_iterations = max_iterations,
+        .temperature = temperature,
+        .max_tokens = max_tokens,
+        .fallback_models = fallback_models,
+        .image_model = image_model,
+        .gateway_port = gateway_port,
+        .gateway_mode = gateway_mode,
+        .gateway_bind = gateway_bind,
+        .gateway_auth_token = gateway_auth_token,
+        .gateway_control_ui_enabled = gateway_control_ui_enabled,
+        .gateway_allow_insecure_auth = gateway_allow_insecure_auth,
+        .workspace = workspace,
+        .max_concurrent = max_concurrent,
+        .source = source,
+        .whatsapp_enabled = whatsapp_enabled,
+        .whatsapp_auth_dir = whatsapp_auth_dir,
+        .whatsapp_dm_policy = whatsapp_dm_policy,
+        .whatsapp_allow_from = whatsapp_allow_from,
+        .whatsapp_group_policy = whatsapp_group_policy,
+        .whatsapp_media_max_mb = whatsapp_media_max_mb,
+        .whatsapp_debounce_ms = whatsapp_debounce_ms,
+        .whatsapp_send_read_receipts = whatsapp_send_read_receipts,
+        .whatsapp_group_require_mention = whatsapp_group_require_mention,
+        .whatsapp_group_activation_commands = whatsapp_group_activation_commands,
     };
+    defer cfg.deinit();
+
     var client = StreamNIMClient.init(allocator, cfg);
     defer client.deinit();
 

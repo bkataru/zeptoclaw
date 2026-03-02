@@ -16,6 +16,9 @@ pub const HttpServer = struct {
     running: bool,
     websocket_clients: std.ArrayList(*WebSocketClient),
     autonomous_agent: ?*autonomous.agent_framework.AutonomousAgent,
+    shutdown_requested: std.atomic.Value(bool),
+    start_time: i64,
+    request_counter: u64,
 
     const WebSocketClient = struct {
         address: std.net.Address,
@@ -57,6 +60,9 @@ pub const HttpServer = struct {
             .running = false,
             .websocket_clients = try std.ArrayList(*WebSocketClient).initCapacity(allocator, 0),
             .autonomous_agent = autonomous_agent,
+            .start_time = std.time.timestamp(),
+            .request_counter = 0,
+            .shutdown_requested = std.atomic.Value(bool).init(false),
         };
     }
 
@@ -75,6 +81,10 @@ pub const HttpServer = struct {
 
         while (self.running) {
             const connection = self.listener.accept() catch |err| {
+                if (self.shutdown_requested.load(.seq_cst)) {
+                    self.running = false;
+                    break;
+                }
                 std.debug.print("Accept error: {}\n", .{err});
                 continue;
             };
@@ -183,6 +193,7 @@ pub const HttpServer = struct {
             }
             request.headers.deinit();
         }
+        self.request_counter += 1;
 
         // Route based on path
         if (std.mem.eql(u8, request.path, "/health")) {
@@ -246,6 +257,9 @@ pub const HttpServer = struct {
             try self.handleGatewayIncident(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/gateway/incidents") and std.mem.eql(u8, request.method, "GET")) {
             try self.handleGetGatewayIncidents(stream);
+
+        } else if (std.mem.eql(u8, request.path, "/metrics")) {
+            try self.handleMetrics(stream);
         } else {
             try self.sendErrorResponse(stream, 404, "Not Found", "Endpoint not found");
         }
@@ -284,6 +298,14 @@ pub const HttpServer = struct {
             self.websocket_clients.items.len,
         });
 
+        _ = try stream.writeAll(response);
+    }
+
+    /// Handle /metrics endpoint (Prometheus format)
+    fn handleMetrics(self: *HttpServer, stream: std.net.Stream) !void {
+        var response_buffer: [1024]u8 = undefined;
+        const uptime = std.time.timestamp() - self.start_time;
+        const response = try std.fmt.bufPrint(&response_buffer, "# HELP zeptoclaw_requests_total Total number of HTTP requests handled\n# TYPE zeptoclaw_requests_total counter\nzeptoclaw_requests_total {d}\n# HELP zeptoclaw_uptime_seconds Uptime in seconds\n# TYPE zeptoclaw_uptime_seconds gauge\nzeptoclaw_uptime_seconds {d}\n", .{ self.request_counter, uptime });
         _ = try stream.writeAll(response);
     }
 

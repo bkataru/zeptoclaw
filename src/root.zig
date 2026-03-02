@@ -34,6 +34,7 @@ pub const channels = struct {
 };
 // Configuration
 pub const config = @import("config.zig");
+pub const validator = @import("config/validator.zig");
 
 // Autonomous Agent
 // Autonomous Agent
@@ -101,6 +102,13 @@ comptime {
         _ = @import("skills/git_workflow/git_workflow_test.zig");
     }
 }
+// Include validator tests in test builds.
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("config/validator_test.zig");
+    }
+}
+
 
 
 

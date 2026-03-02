@@ -9,58 +9,20 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        const webhook_port = if (config_value != .object) 9000
-        else if (config_value.object.get("webhook_port")) |v|
-            if (v == .integer) try std.math.cast(u16, v.integer) else 9000
-        else
-            9000;
-
-        const shell2http_port = if (config_value != .object) 9001
-        else if (config_value.object.get("shell2http_port")) |v|
-            if (v == .integer) try std.math.cast(u16, v.integer) else 9001
-        else
-            9001;
-
-        const webhook_secret_path = if (config_value != .object) "/home/user/.zeptoclaw/.webhook-secret"
-        else if (config_value.object.get("webhook_secret_path")) |v|
-            if (v == .string) v.string else "/home/user/.zeptoclaw/.webhook-secret"
-        else
-            "/home/user/.zeptoclaw/.webhook-secret";
-
-        const enable_webhook = if (config_value != .object) true
-        else if (config_value.object.get("enable_webhook")) |v|
-            if (v == .bool) v.bool else true
-        else
-            true;
-
-        const enable_shell2http = if (config_value != .object) true
-        else if (config_value.object.get("enable_shell2http")) |v|
-            if (v == .bool) v.bool else true
-        else
-            true;
-
-        config = Config{
-            .webhook_port = webhook_port,
-            .shell2http_port = shell2http_port,
-            .webhook_secret_path = webhook_secret_path,
-            .enable_webhook = enable_webhook,
-            .enable_shell2http = enable_shell2http,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
-        // Parse command
         if (std.mem.startsWith(u8, message, "/http-health")) {
-            return handleHealth(ctx);
+            return handleHealth(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/http-uptime")) {
             return handleUptime(ctx);
         } else if (std.mem.startsWith(u8, message, "/http-memory")) {
@@ -80,7 +42,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -94,6 +56,37 @@ pub const skill = struct {
             .enabled = true,
         };
     }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const webhook_port = if (config_json != .object) 9000 else if (config_json.object.get("webhook_port")) |v|
+            if (v == .integer) try std.math.cast(u16, v.integer) else 9000
+        else
+            9000;
+        const shell2http_port = if (config_json != .object) 9001 else if (config_json.object.get("shell2http_port")) |v|
+            if (v == .integer) try std.math.cast(u16, v.integer) else 9001
+        else
+            9001;
+        const webhook_secret_path = if (config_json != .object) "/home/user/.zeptoclaw/.webhook-secret" else if (config_json.object.get("webhook_secret_path")) |v|
+            if (v == .string) v.string else "/home/user/.zeptoclaw/.webhook-secret"
+        else
+            "/home/user/.zeptoclaw/.webhook-secret";
+        const enable_webhook = if (config_json != .object) true else if (config_json.object.get("enable_webhook")) |v|
+            if (v == .bool) v.bool else true
+        else
+            true;
+        const enable_shell2http = if (config_json != .object) true else if (config_json.object.get("enable_shell2http")) |v|
+            if (v == .bool) v.bool else true
+        else
+            true;
+        return Config{
+            .webhook_port = webhook_port,
+            .shell2http_port = shell2http_port,
+            .webhook_secret_path = webhook_secret_path,
+            .enable_webhook = enable_webhook,
+            .enable_shell2http = enable_shell2http,
+        };
+    }
 };
 
 const Config = struct {
@@ -104,7 +97,7 @@ const Config = struct {
     enable_shell2http: bool,
 };
 
-fn handleHealth(ctx: *ExecutionContext) !SkillResult {
+fn handleHealth(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     // In a real implementation, this would query the HTTP endpoint
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\🌐 System Health
@@ -119,7 +112,7 @@ fn handleHealth(ctx: *ExecutionContext) !SkillResult {
         \\✅ Disk: Normal
         \\
         \\All systems operational.
-    , .{config.?.webhook_port, config.?.shell2http_port});
+    , .{ cfg.webhook_port, cfg.shell2http_port });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
@@ -242,7 +235,7 @@ fn handleJournal(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\[2026-02-26 19:00:05] INFO: Processing message
         \\
         \\Use journalctl -u {s} -f for live logs
-    , .{service, service});
+    , .{ service, service });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);

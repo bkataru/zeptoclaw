@@ -9,36 +9,30 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
         _ = config_value;
-        config = Config{
-            .stuck_threshold_minutes = 10,
-            .log_path = "/home/user/.zeptoclaw/logs/gateway-watchdog.log",
-            .gateway_service = "zeptoclaw-gateway.service",
-            .enable_auto_restart = true,
-            .notification_url = null,
-        };
+        // No global state to initialize; config is constant.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
-        // Parse command
         if (std.mem.startsWith(u8, message, "/gateway-watchdog status") or
-            std.mem.startsWith(u8, message, "/watchdog-status")) {
-            return handleStatus(ctx);
+            std.mem.startsWith(u8, message, "/watchdog-status"))
+        {
+            return handleStatus(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/gateway-watchdog check") or
-            std.mem.startsWith(u8, message, "/watchdog-check")) {
+            std.mem.startsWith(u8, message, "/watchdog-check"))
+        {
             return handleCheck(ctx);
         } else if (std.mem.startsWith(u8, message, "/gateway-watchdog logs")) {
             return handleLogs(ctx);
         } else if (std.mem.startsWith(u8, message, "/gateway-watchdog threshold")) {
-            return handleThreshold(ctx, message);
+            return handleThreshold(ctx, message, cfg);
         } else {
             return handleHelp(ctx);
         }
@@ -46,7 +40,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -60,6 +54,18 @@ pub const skill = struct {
             .enabled = true,
         };
     }
+
+    // Parse configuration from JSON (per-execution) - constant defaults
+    fn parseConfig(config_json: std.json.Value) Config {
+        _ = config_json;
+        return Config{
+            .stuck_threshold_minutes = 10,
+            .log_path = "/home/user/.zeptoclaw/logs/gateway-watchdog.log",
+            .gateway_service = "zeptoclaw-gateway.service",
+            .enable_auto_restart = true,
+            .notification_url = null,
+        };
+    }
 };
 
 const Config = struct {
@@ -70,7 +76,7 @@ const Config = struct {
     notification_url: ?[]const u8,
 };
 
-fn handleStatus(ctx: *ExecutionContext) !SkillResult {
+fn handleStatus(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\🐕 Gateway Watchdog Status
         \\
@@ -85,11 +91,11 @@ fn handleStatus(ctx: *ExecutionContext) !SkillResult {
         \\Stuck sessions found: 0
         \\Recovery actions taken: 0
     , .{
-        config.?.stuck_threshold_minutes,
-        config.?.log_path,
-        config.?.gateway_service,
-        config.?.enable_auto_restart,
-        if (config.?.notification_url) |url| url else "none",
+        cfg.stuck_threshold_minutes,
+        cfg.log_path,
+        cfg.gateway_service,
+        cfg.enable_auto_restart,
+        if (cfg.notification_url) |url| url else "none",
     });
 
     try ctx.respond(response);
@@ -126,36 +132,29 @@ fn handleLogs(ctx: *ExecutionContext) !SkillResult {
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleThreshold(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleThreshold(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Parse threshold value
     var iter = std.mem.splitScalar(u8, message, ' ');
     _ = iter.next(); // Skip command
     const threshold_str = iter.next() orelse {
-        const response = try std.fmt.allocPrint(ctx.allocator,
-            "Current threshold: {d} minutes\nUsage: /gateway-watchdog threshold <minutes>",
-            .{config.?.stuck_threshold_minutes}
-        );
+        const response = try std.fmt.allocPrint(ctx.allocator, "Current threshold: {d} minutes\nUsage: /gateway-watchdog threshold <minutes>", .{cfg.stuck_threshold_minutes});
         try ctx.respond(response);
         return SkillResult.successResponse(ctx.allocator, response);
     };
 
     const threshold = std.fmt.parseInt(u32, threshold_str, 10) catch {
-        const response = try std.fmt.allocPrint(ctx.allocator,
-            "Invalid threshold value: {s}\nUsage: /gateway-watchdog threshold <minutes>",
-            .{threshold_str}
-        );
+        const response = try std.fmt.allocPrint(ctx.allocator, "Invalid threshold value: {s}\nUsage: /gateway-watchdog threshold <minutes>", .{threshold_str});
         try ctx.respond(response);
         return SkillResult.errorResponse(ctx.allocator, response);
     };
 
-    if (config) |*c| {
-        c.stuck_threshold_minutes = threshold;
-    }
-
+    // Runtime configuration changes are not supported in per-execution model.
+    // Respond with current config and note that change is ignored.
     const response = try std.fmt.allocPrint(ctx.allocator,
-        "✅ Stuck threshold updated to {d} minutes",
-        .{threshold}
-    );
+        \\Current threshold: {d} minutes
+        \\Requested change to: {d} minutes
+        \\Note: Runtime configuration changes are not supported in this version.
+    , .{ cfg.stuck_threshold_minutes, threshold });
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }

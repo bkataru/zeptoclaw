@@ -9,49 +9,25 @@ const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
 
 pub const skill = struct {
-    var config: ?Config = null;
-    var index_loaded = false;
-
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
         _ = allocator;
-
-        const index_path = if (config_value != .object) "/home/user/.openclaw/workspace/memory/github-stars-index.json"
-        else if (config_value.object.get("index_path")) |v|
-            if (v == .string) v.string else "/home/user/.openclaw/workspace/memory/github-stars-index.json"
-        else
-            "/home/user/.openclaw/workspace/memory/github-stars-index.json";
-
-        const sync_interval = if (config_value != .object) 24
-        else if (config_value.object.get("sync_interval_hours")) |v|
-            if (v == .integer) try std.math.cast(u32, v.integer) else 24
-        else
-            24;
-
-        const max_results = if (config_value != .object) 10
-        else if (config_value.object.get("max_results")) |v|
-            if (v == .integer) try std.math.cast(u32, v.integer) else 10
-        else
-            10;
-
-        config = Config{
-            .index_path = index_path,
-            .sync_interval_hours = sync_interval,
-            .max_results = max_results,
-        };
+        _ = config_value;
+        // No global state to initialize; config parsed per-execution.
     }
 
     pub fn execute(ctx: *ExecutionContext) !SkillResult {
         const message = ctx.getMessageContent() orelse {
             return SkillResult.errorResponse(ctx.allocator, "No message content");
         };
+        const cfg = parseConfig(ctx.config);
 
         // Parse command
         if (std.mem.startsWith(u8, message, "/stars-search")) {
-            return handleSearch(ctx, message);
+            return handleSearch(ctx, message, cfg);
         } else if (std.mem.startsWith(u8, message, "/stars-stats")) {
-            return handleStats(ctx);
+            return handleStats(ctx, cfg);
         } else if (std.mem.startsWith(u8, message, "/stars-sync")) {
-            return handleSync(ctx);
+            return handleSync(ctx, cfg);
         }
 
         return SkillResult.successResponse(ctx.allocator, "");
@@ -59,7 +35,7 @@ pub const skill = struct {
 
     pub fn deinit(allocator: std.mem.Allocator) void {
         _ = allocator;
-        config = null;
+        // No global resources to free.
     }
 
     pub fn getMetadata() sdk.SkillMetadata {
@@ -67,10 +43,31 @@ pub const skill = struct {
             .id = "github-stars",
             .name = "GitHub Stars Search",
             .version = "1.0.0",
-            .description": "Search Baala's GitHub stars for relevant tools, libraries, and references",
+            .description = "Search Baala's GitHub stars for relevant tools, libraries, and references",
             .homepage = null,
             .metadata = .{ .object = std.StringHashMap(std.json.Value).init(std.heap.page_allocator) },
             .enabled = true,
+        };
+    }
+
+    // Parse configuration from JSON (per-execution)
+    fn parseConfig(config_json: std.json.Value) Config {
+        const index_path = if (config_json != .object) "/home/user/.openclaw/workspace/memory/github-stars-index.json" else if (config_json.object.get("index_path")) |v|
+            if (v == .string) v.string else "/home/user/.openclaw/workspace/memory/github-stars-index.json"
+        else
+            "/home/user/.openclaw/workspace/memory/github-stars-index.json";
+        const sync_interval_hours = if (config_json != .object) 24 else if (config_json.object.get("sync_interval_hours")) |v|
+            if (v == .integer) try std.math.cast(u32, v.integer) else 24
+        else
+            24;
+        const max_results = if (config_json != .object) 10 else if (config_json.object.get("max_results")) |v|
+            if (v == .integer) try std.math.cast(u32, v.integer) else 10
+        else
+            10;
+        return Config{
+            .index_path = index_path,
+            .sync_interval_hours = sync_interval_hours,
+            .max_results = max_results,
         };
     }
 };
@@ -81,7 +78,7 @@ const Config = struct {
     max_results: u32,
 };
 
-fn handleSearch(ctx: *ExecutionContext, message: []const u8) !SkillResult {
+fn handleSearch(ctx: *ExecutionContext, message: []const u8, cfg: Config) !SkillResult {
     // Extract search query
     const query = std.mem.trim(u8, message["/stars-search".len..], " \t\r\n");
 
@@ -117,13 +114,13 @@ fn handleSearch(ctx: *ExecutionContext, message: []const u8) !SkillResult {
         \\   Stars: 856
         \\   Description: Zig standard library documentation
         \\   URL: https://github.com/master-q/zig-std
-    , .{query, config.?.index_path, config.?.max_results});
+    , .{ query, cfg.index_path, cfg.max_results });
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleStats(ctx: *ExecutionContext) !SkillResult {
+fn handleStats(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     // In a real implementation, this would read the index and show stats
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\⭐ GitHub Stars Statistics
@@ -141,13 +138,13 @@ fn handleStats(ctx: *ExecutionContext) !SkillResult {
         \\
         \\Last sync: 2026-02-26 18:00:00
         \\Next sync in: 6 hours
-    , .{config.?.index_path});
+    , .{cfg.index_path});
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);
 }
 
-fn handleSync(ctx: *ExecutionContext) !SkillResult {
+fn handleSync(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     // In a real implementation, this would sync with GitHub API
     const response = try std.fmt.allocPrint(ctx.allocator,
         \\⭐ Syncing GitHub stars...
@@ -162,7 +159,7 @@ fn handleSync(ctx: *ExecutionContext) !SkillResult {
         \\Removed: 3 deleted repos
         \\
         \\Index saved to: {s}
-    , .{config.?.index_path});
+    , .{cfg.index_path});
 
     try ctx.respond(response);
     return SkillResult.successResponse(ctx.allocator, response);

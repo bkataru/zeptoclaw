@@ -4,6 +4,7 @@ const state_store = @import("state_store.zig");
 const moltbook_client = @import("moltbook_client.zig");
 const rate_limiter = @import("rate_limiter.zig");
 
+const log = std.log.scoped(.autonomous);
 /// Autonomous agent framework
 pub const AutonomousAgent = struct {
     allocator: std.mem.Allocator,

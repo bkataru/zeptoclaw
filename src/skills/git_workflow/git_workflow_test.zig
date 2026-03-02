@@ -221,7 +221,7 @@ test "git_workflow: /git-push to feature branch with force protection should suc
 
     try std.testing.expectEqual(true, result.success);
     try std.testing.expect(result.response != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.response.?, "Pushing to remote") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.response.?, "📤 Pushing to remote") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.response.?, "feature/new-feature") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.response.?, "Push successful") != null);
     try std.testing.expectEqual(true, result.should_continue);
@@ -256,7 +256,7 @@ test "git_workflow: /git-push without force protection on default branch should 
         skill_metadata,
         message,
         "test-session",
-        .{ .null = {} },
+        config_value,
         &tool_registry,
         testSendResponse,
     );
@@ -266,7 +266,7 @@ test "git_workflow: /git-push without force protection on default branch should 
 
     try std.testing.expectEqual(true, result.success);
     try std.testing.expect(result.response != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.response.?, "Pushing to remote") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.response.?, "📤 Pushing to remote") != null);
     try std.testing.expectEqual(true, result.should_continue);
 }
 
