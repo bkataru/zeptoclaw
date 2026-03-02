@@ -75,3 +75,57 @@ test "ConfigLoader.load config path is a directory - error" {
     const result = loader.load(.{ .config_file = dir_path });
     try std.testing.expectError(error.IsDir, result);
 }
+
+test "ConfigLoader validation invalid gateway port" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+
+    const temp_dir = std.fs.cwd();
+    const config_path = "test_invalid_port.json";
+    const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"model\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":4}},\"gateway\":{\"port\":0,\"mode\":\"local\",\"bind\":\"lan\"}}";
+
+    const file = try temp_dir.createFile(config_path, .{});
+    file.writeAll(json_content) catch @panic("cannot write test file");
+    file.close();
+
+    const result = loader.load(.{ .config_file = config_path });
+    try std.testing.expectError(error.InvalidGatewayPort, result);
+
+    temp_dir.deleteFile(config_path) catch {};
+}
+
+test "ConfigLoader validation invalid max_concurrent" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+
+    const temp_dir = std.fs.cwd();
+    const config_path = "test_invalid_max_concurrent.json";
+    const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"model\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":0}},\"gateway\":{\"port\":18789,\"mode\":\"local\",\"bind\":\"lan\"}}";
+
+    const file = try temp_dir.createFile(config_path, .{});
+    file.writeAll(json_content) catch @panic("cannot write test file");
+    file.close();
+
+    const result = loader.load(.{ .config_file = config_path });
+    try std.testing.expectError(error.InvalidMaxConcurrent, result);
+
+    temp_dir.deleteFile(config_path) catch {};
+}
+
+test "ConfigLoader validation missing primary model" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+
+    const temp_dir = std.fs.cwd();
+    const config_path = "test_missing_primary.json";
+    const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":4}},\"gateway\":{\"port\":18789,\"mode\":\"local\",\"bind\":\"lan\"}}";
+
+    const file = try temp_dir.createFile(config_path, .{});
+    file.writeAll(json_content) catch @panic("cannot write test file");
+    file.close();
+
+    const result = loader.load(.{ .config_file = config_path });
+    try std.testing.expectError(error.MissingPrimaryModel, result);
+
+    temp_dir.deleteFile(config_path) catch {};
+}

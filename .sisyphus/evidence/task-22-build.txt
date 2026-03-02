@@ -1,0 +1,36 @@
+install
++- install zeptoclaw
+   +- compile exe zeptoclaw Debug native 1 errors
+src/config/migration_config.zig:294:33: error: expected type 'config.migration_config.ZeptoClawConfig', found pointer
+        try self.validateConfig(&result);
+                                ^
+src/config/migration_config.zig:294:33: note: address-of operator always returns a pointer
+referenced by:
+    load: src/config.zig:30:45
+    main: src/main.zig:14:26
+    5 reference(s) hidden; use '-freference-trace=7' to see all references
+error: the following command failed with 1 compilation errors:
+/home/user/.local/zig-x86_64-linux-0.15.2/zig build-exe -ODebug --dep zeptoclaw --dep zeitgeist -Mroot=/home/user/zeptoclaw/src/main.zig -ODebug --dep zeitgeist -Mzeptoclaw=/home/user/zeptoclaw/src/root.zig -ODebug -Mzeitgeist=/home/user/zeptoclaw/vendor/zeitgeist/src/lib/lib.zig --cache-dir .zig-cache --global-cache-dir /home/user/.cache/zig --name zeptoclaw --zig-lib-dir /home/user/.local/zig-x86_64-linux-0.15.2/lib/ --listen=-
+install
++- install zeptoclaw-gateway
+   +- compile exe zeptoclaw-gateway Debug native 1 errors
+src/config/migration_config.zig:294:33: error: expected type 'config.migration_config.ZeptoClawConfig', found pointer
+        try self.validateConfig(&result);
+                                ^
+src/config/migration_config.zig:294:33: note: address-of operator always returns a pointer
+referenced by:
+    load: src/config.zig:30:45
+    main: src/gateway/gateway_server.zig:22:26
+    5 reference(s) hidden; use '-freference-trace=7' to see all references
+error: the following command failed with 1 compilation errors:
+/home/user/.local/zig-x86_64-linux-0.15.2/zig build-exe -ODebug --dep zeptoclaw --dep zeitgeist -Mroot=/home/user/zeptoclaw/src/gateway/gateway_server.zig -ODebug --dep zeitgeist -Mzeptoclaw=/home/user/zeptoclaw/src/root.zig -ODebug -Mzeitgeist=/home/user/zeptoclaw/vendor/zeitgeist/src/lib/lib.zig --cache-dir .zig-cache --global-cache-dir /home/user/.cache/zig --name zeptoclaw-gateway --zig-lib-dir /home/user/.local/zig-x86_64-linux-0.15.2/lib/ --listen=-
+
+Build Summary: 4/9 steps succeeded; 2 failed
+install transitive failure
++- install zeptoclaw transitive failure
+|  +- compile exe zeptoclaw Debug native 1 errors
++- install zeptoclaw-gateway transitive failure
+   +- compile exe zeptoclaw-gateway Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/ca104583b45503e2310f8ba65ba01960/build /home/user/.local/zig-x86_64-linux-0.15.2/zig /home/user/.local/zig-x86_64-linux-0.15.2/lib /home/user/zeptoclaw .zig-cache /home/user/.cache/zig --seed 0x80dc08fc -Z5991478f9ac9656e

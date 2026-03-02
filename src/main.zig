@@ -11,10 +11,9 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Load configuration
-    var cfg = Config.load(allocator) catch {
-        std.debug.print("Error: NVIDIA_API_KEY environment variable not set\n", .{});
-        std.debug.print("Please set it and try again: export NVIDIA_API_KEY=your-key\n", .{});
-        return error.MissingApiKey;
+    var cfg = Config.load(allocator) catch |err| {
+        std.debug.print("Configuration error: {}\n", .{err});
+        return err;
     };
     defer cfg.deinit();
 

@@ -289,7 +289,9 @@ pub const ConfigLoader = struct {
             env_config.deinit();
         }
         // Merge configurations with priority: CLI > env > file > defaults
-        const result = try self.mergeConfigs(file_config, env_config, cli_args);
+        var result = try self.mergeConfigs(file_config, env_config, cli_args);
+        errdefer result.deinit();
+        try self.validateConfig(result);
         // Deinit intermediate configs after successful merge
         if (file_config) |*fc| {
             fc.deinit();
@@ -642,6 +644,18 @@ pub const ConfigLoader = struct {
             result[i] = try self.allocator.dupe(u8, item);
         }
         return result;
+    }
+
+    fn validateConfig(_: *ConfigLoader, cfg: ZeptoClawConfig) !void {
+        if (cfg.api_key.len == 0) return error.MissingApiKey;
+        if (cfg.primary_model.len == 0) return error.MissingPrimaryModel;
+        if (cfg.gateway_port < 1 or cfg.gateway_port > 65535) return error.InvalidGatewayPort;
+        if (cfg.nim_timeout_ms == 0) return error.InvalidTimeout;
+        if (cfg.max_concurrent == 0) return error.InvalidMaxConcurrent;
+        if (cfg.max_iterations == 0) return error.InvalidMaxIterations;
+        if (cfg.temperature < 0.0 or cfg.temperature > 1.0) return error.InvalidTemperature;
+        if (cfg.max_tokens == 0) return error.InvalidMaxTokens;
+        if (cfg.workspace.len == 0) return error.InvalidWorkspace;
     }
 };
 
