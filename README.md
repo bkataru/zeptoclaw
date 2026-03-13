@@ -450,5 +450,3 @@ The following changes were recently committed to complete the Zig 0.15.2 migrati
 **Status:** Migration Complete - All 11 phases finished with 0 errors
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)
-
-**Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)
