@@ -2,6 +2,8 @@
 //! All 30+ read-only system monitoring endpoints from OpenClaw
 
 const std = @import("std");
+const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 const http = @import("http_utils.zig");
 
 const log = std.log.scoped(.shell2http_endpoints);
@@ -16,8 +18,10 @@ pub const EndpointContext = struct {
     workspace_dir: []const u8,
 
     pub fn init(allocator: std.mem.Allocator) !EndpointContext {
-        const home = try std.process.getEnvVarOwned(allocator, "HOME");
-        const workspace = try std.fmt.allocPrint(allocator, "{s}/.openclaw/workspace", .{home});
+        const home = try compat.getEnvVarOwned(allocator, "HOME");
+        // Compat: prefer zeptoclaw workspace, fallback to legacy openclaw (bridge preserves formats)
+        const compat_openclaw = zeptoclaw.openclaw_compat;
+        const workspace = try compat_openclaw.resolveWorkspaceDir(allocator);
 
         return .{
             .allocator = allocator,
@@ -67,9 +71,27 @@ pub fn timers(ctx: *EndpointContext) !http.HttpResponse {
     return http.HttpResponse{ .status = 200, .content_type = "text/plain", .body = result };
 }
 
-/// /journal/gateway - journalctl --user -u openclaw-gateway.service -n 50 --no-pager
+/// /journal/gateway - journalctl --user -u zeptoclaw-gateway.service (compat fallback: openclaw-gateway.service)
 pub fn journalGateway(ctx: *EndpointContext) !http.HttpResponse {
-    const argv = &[_][]const u8{
+    const compat_openclaw = zeptoclaw.openclaw_compat;
+    // Try zeptoclaw primary, fallback to legacy for journal reads (compat bridge)
+    const primary = compat_openclaw.primary_gateway_service;
+    const argv_primary = [_][]const u8{
+        "/usr/bin/journalctl",
+        "--user",
+        "-u",
+        primary,
+        "-n",
+        "50",
+        "--no-pager",
+    };
+    if (http.executeCommandSimple(ctx.allocator, &argv_primary, ctx.home_dir)) |result| {
+        if (result.len > 0 and !std.mem.eql(u8, result, "-- No entries --\n")) {
+            return http.HttpResponse{ .status = 200, .content_type = "text/plain", .body = result };
+        }
+        ctx.allocator.free(result);
+    } else |_| {}
+    const argv_legacy = [_][]const u8{
         "/usr/bin/journalctl",
         "--user",
         "-u",
@@ -79,7 +101,7 @@ pub fn journalGateway(ctx: *EndpointContext) !http.HttpResponse {
         "--no-pager",
     };
 
-    const result = try http.executeCommandSimple(ctx.allocator, argv, ctx.home_dir);
+    const result = try http.executeCommandSimple(ctx.allocator, &argv_legacy, ctx.home_dir);
     return http.HttpResponse{ .status = 200, .content_type = "text/plain", .body = result };
 }
 
@@ -215,8 +237,13 @@ pub fn ollamaPs(ctx: *EndpointContext) !http.HttpResponse {
     return http.HttpResponse{ .status = 200, .content_type = "text/plain", .body = result };
 }
 
-/// /process/openclaw - pgrep -a openclaw
+/// /process/openclaw+zeptoclaw - pgrep -a zeptoclaw (compat: also openclaw)
 pub fn processOpenclaw(ctx: *EndpointContext) !http.HttpResponse {
+    const argv_zeptoclaw = &[_][]const u8{ "/usr/bin/pgrep", "-a", "zeptoclaw" };
+    if (http.executeCommandSimple(ctx.allocator, argv_zeptoclaw, null)) |result| {
+        if (result.len > 0) return http.HttpResponse{ .status = 200, .content_type = "text/plain", .body = result };
+        ctx.allocator.free(result);
+    } else |_| {}
     const argv = &[_][]const u8{
         "/usr/bin/pgrep",
         "-a",

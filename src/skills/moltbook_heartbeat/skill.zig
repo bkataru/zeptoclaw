@@ -2,6 +2,7 @@
 //! Automated engagement on Moltbook - check for new comments, reply to them, and signal the Cloudflare worker that local agent is active
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const execution_context = @import("../execution_context.zig");
 
@@ -92,7 +93,7 @@ const Config = struct {
 };
 
 fn performHeartbeat(ctx: *ExecutionContext, cfg: Config) !SkillResult {
-    const now = std.time.timestamp();
+    const now = compat.timestamp();
     // No global state to update
 
     const response = try std.fmt.allocPrint(ctx.allocator,
@@ -114,7 +115,7 @@ fn performHeartbeat(ctx: *ExecutionContext, cfg: Config) !SkillResult {
 }
 
 fn handleStatus(ctx: *ExecutionContext, cfg: Config) !SkillResult {
-    const now = std.time.timestamp();
+    const now = compat.timestamp();
     const time_since = now; // meaningless without persistent state
 
     const response = try std.fmt.allocPrint(ctx.allocator,

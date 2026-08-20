@@ -219,7 +219,7 @@ pub const OpenClawConfig = migration_config.OpenClawConfig;
 // test "Config load from env" {
 //     const allocator = std.testing.allocator;
 //     // This test requires NVIDIA_API_KEY to be set. Skip if not present.
-//     const api_key = std.process.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
+//     const api_key = compat.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
 //         if (err == error.EnvironmentVariableNotFound) {
 //             return error.SkipTest;
 //         }
@@ -242,7 +242,7 @@ test "Config load with defaults" {
     defer result.deinit();
 
     try std.testing.expectEqual(migration_config.ConfigSource.default, result.source);
-    try std.testing.expectEqualStrings("qwen/qwen3.5-397b-a17b", result.primary_model);
+    try std.testing.expectEqualStrings("thinkingmachines/inkling", result.primary_model);
     try std.testing.expectEqual(@as(u32, 18789), result.gateway_port);
 }
 
@@ -281,6 +281,6 @@ test "Config getPrimaryModel" {
         .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
         .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
     };
-    try std.testing.expectEqualStrings("qwen/qwen3.5-397b-a17b", config.getPrimaryModel());
-    try std.testing.expectEqualStrings("qwen/qwen3.5-397b-a17b", config.getPrimaryModel());
+    try std.testing.expectEqualStrings("thinkingmachines/inkling", config.getPrimaryModel());
+    try std.testing.expectEqualStrings("thinkingmachines/inkling", config.getPrimaryModel());
 }

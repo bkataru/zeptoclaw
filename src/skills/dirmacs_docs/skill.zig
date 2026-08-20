@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const types = @import("../types.zig");
 
@@ -122,7 +123,7 @@ const Index = struct {
 fn loadIndex(allocator: Allocator, cfg: Config) !?Index {
     const file_path = try std.fs.path.expand(allocator, cfg.index_path);
     defer allocator.free(file_path);
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const file = compat.cwd().openFile(file_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
             var empty_repos = std.StringHashMap(Index.Repository).init(allocator);
             return Index{

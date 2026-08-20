@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 
 /// Rate limiter for Moltbook API calls
 pub const RateLimiter = struct {
@@ -125,7 +126,7 @@ test "RateLimiter canPost" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Should be able to post initially
     try std.testing.expect(limiter.canPost(now));
@@ -144,7 +145,7 @@ test "RateLimiter canComment" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Should be able to comment initially
     try std.testing.expect(limiter.canComment(now));
@@ -163,7 +164,7 @@ test "RateLimiter daily limit" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Record 50 comments
     var i: u32 = 0;
@@ -182,7 +183,7 @@ test "RateLimiter timeUntilNextPost" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Should be 0 initially
     try std.testing.expectEqual(@as(i64, 0), limiter.timeUntilNextPost(now));
@@ -201,7 +202,7 @@ test "RateLimiter timeUntilNextComment" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Should be 0 initially
     try std.testing.expectEqual(@as(i64, 0), limiter.timeUntilNextComment(now));
@@ -220,7 +221,7 @@ test "RateLimiter getStatus" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     const status = limiter.getStatus(now);
 
@@ -237,7 +238,7 @@ test "RateLimiter remainingCommentsToday" {
     const allocator = std.testing.allocator;
     var limiter = RateLimiter.init(allocator);
 
-    const now = std.time.timestamp() * 1000;
+    const now = compat.timestamp() * 1000;
 
     // Should start with max
     try std.testing.expectEqual(@as(u32, RateLimiter.MAX_COMMENTS_PER_DAY), limiter.remainingCommentsToday(now));

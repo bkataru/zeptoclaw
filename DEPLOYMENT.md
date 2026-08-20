@@ -44,7 +44,7 @@ curl http://localhost:18789/health
 
 ### System Requirements
 
-- **Zig 0.15.2+** - [Download](https://ziglang.org/download/)
+- **Zig 0.16.0+** - [Download](https://ziglang.org/download/)
 - **Node.js 18+** (for Cloudflare Worker)
 - **systemd** (user services)
 - **NVIDIA NIM API Key** - [Get here](https://build.nvidia.com/)
@@ -57,7 +57,7 @@ Create `/home/user/.zeptoclaw/env`:
 ```bash
 # NVIDIA NIM API
 NVIDIA_API_KEY=nvapi-your-key-here
-NVIDIA_MODEL=qwen/qwen3.5-397b-a17b
+NVIDIA_MODEL=thinkingmachines/inkling
 
 # Moltbook Integration
 MOLTBOOK_API_KEY=your-moltbook-api-key

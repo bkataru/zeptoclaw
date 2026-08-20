@@ -168,7 +168,7 @@ Gateway healthy
 # Send a test request through the gateway
 TEST_RESPONSE=$(curl -s -X POST http://localhost:18789/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen/qwen3.5-397b-a17b","messages":[{"role":"user","content":"test"}],"max_tokens":10}' \
+  -d '{"model":"thinkingmachines/inkling","messages":[{"role":"user","content":"test"}],"max_tokens":10}' \
   -w "\n%{http_code}")
 
 # Extract response body and status code

@@ -258,7 +258,7 @@ test "ExecutionContext init" {
         skill_metadata,
         message,
         "session-123",
-        .{ .object = std.StringArrayHashMap(std.json.Value).init(allocator) },
+        .{ .object = try std.json.ObjectMap.init(allocator, &.{}, &.{}) },
         &tool_registry,
         testSendResponse,
     );
@@ -270,11 +270,11 @@ test "ExecutionContext init" {
 test "ExecutionContext getConfig" {
     const allocator = std.testing.allocator;
 
-    var config_obj = std.StringArrayHashMap(std.json.Value).init(allocator);
-    defer config_obj.deinit();
-    try config_obj.put("api_key", std.json.Value{ .string = "test-key" });
-    try config_obj.put("timeout", std.json.Value{ .integer = 30 });
-    try config_obj.put("enabled", std.json.Value{ .bool = true });
+    var config_obj = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    defer config_obj.deinit(allocator);
+    try config_obj.put(allocator, "api_key", std.json.Value{ .string = "test-key" });
+    try config_obj.put(allocator, "timeout", std.json.Value{ .integer = 30 });
+    try config_obj.put(allocator, "enabled", std.json.Value{ .bool = true });
 
     var skill_metadata = types.SkillMetadata{
         .id = try allocator.dupe(u8, "test-skill"),

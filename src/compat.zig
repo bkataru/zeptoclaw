@@ -1,0 +1,77 @@
+const std = @import("std");
+const builtin = @import("builtin");
+
+pub fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    if (comptime @hasDecl(std.process, "getEnvVarOwned")) {
+        return try std.process.getEnvVarOwned(allocator, key);
+    } else {
+        const key_z = try allocator.dupeZ(u8, key);
+        defer allocator.free(key_z);
+        if (std.c.getenv(key_z.ptr)) |val| {
+            return try allocator.dupe(u8, std.mem.span(val));
+        }
+        return error.EnvironmentVariableNotFound;
+    }
+}
+
+pub fn timestamp() i64 {
+    if (comptime @hasDecl(std.time, "timestamp")) {
+        return std.time.timestamp();
+    } else {
+        var ts: std.posix.timespec = undefined;
+        _ = std.c.clock_gettime(@as(std.c.clockid_t, @enumFromInt(0)), &ts);
+        return @as(i64, ts.sec);
+    }
+}
+
+pub const Dir = struct {
+    io: std.Io,
+    dir: std.Io.Dir,
+    pub fn openFile(self: Dir, path: []const u8, opts: std.Io.Dir.OpenFileOptions) !std.Io.File {
+        return try self.dir.openFile(self.io, path, opts);
+    }
+    pub fn createFile(self: Dir, path: []const u8, opts: std.Io.Dir.CreateFileOptions) !std.Io.File {
+        return try self.dir.createFile(self.io, path, opts);
+    }
+    pub fn makePath(self: Dir, path: []const u8) !void {
+        try self.dir.createDir(self.io, path, .default_dir);
+    }
+    pub fn makeOpenPath(self: Dir, path: []const u8, opts: anytype) !std.Io.Dir {
+        _ = opts;
+        // Handle absolute paths (common for sessions_dir)
+        if (path.len > 0 and path[0] == '/') {
+            std.Io.Dir.createDirAbsolute(self.io, path, .default_dir) catch |e| { if (e != error.PathAlreadyExists) return e; };
+            return try std.Io.Dir.openDirAbsolute(self.io, path, .{});
+        }
+        self.dir.createDir(self.io, path, .default_dir) catch |e| { if (e != error.PathAlreadyExists) return e; };
+        return try self.dir.openDir(self.io, path, .{});
+    }
+    pub fn readFileAlloc(self: Dir, allocator: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
+        const file = try self.dir.openFile(self.io, path, .{ .mode = .read_only });
+        defer file.close(self.io);
+        var reader = file.reader(self.io, &[_]u8{});
+        const data = try reader.interface.allocRemaining(allocator, .limited(max));
+        return data;
+    }
+};
+
+pub fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+pub fn getIo() std.Io {
+    return io();
+}
+
+pub fn cwd() Dir {
+    const _io = io();
+    return .{ .io = _io, .dir = std.Io.Dir.cwd() };
+}
+
+pub fn streamWriteAll(stream: std.Io.net.Stream, data: []const u8) !void {
+    const _io_val = getIo();
+    var buf: [4096]u8 = undefined;
+    var writer = stream.writer(_io_val, &buf);
+    try writer.interface.writeAll(data);
+    try writer.interface.flush();
+}

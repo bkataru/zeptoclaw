@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
@@ -188,7 +189,7 @@ pub const AccessControl = struct {
 
         const pairing = PendingPairing{
             .code = code,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat.timestamp(),
         };
 
         try self.pending_pairings.put(key, pairing);
@@ -204,7 +205,7 @@ pub const AccessControl = struct {
         }
 
         // Check if code expired (5 minutes)
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         if (now - entry.value.timestamp > 300) {
             return false;
         }
@@ -234,7 +235,7 @@ pub const AccessControl = struct {
 
     /// Clean up expired pairings
     pub fn cleanupExpiredPairings(self: *AccessControl) !void {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {

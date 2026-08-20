@@ -317,7 +317,7 @@ test "ToolDefinition dupe" {
         .@"type" = "function",
         .name = "get_weather",
         .description = "Get weather for a location",
-        .parameters = .{ .object = std.StringArrayHashMap(std.json.Value).init(allocator) },
+        .parameters = .{ .object = try std.json.ObjectMap.init(allocator, &.{}, &.{}) },
     };
 
     var duplicated = try original.dupe(allocator);
@@ -350,7 +350,7 @@ test "ChatCompletionResponse deinit" {
     
     var response = ChatCompletionResponse{
         .id = try allocator.dupe(u8, "chatcmpl-123"),
-        .model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b"),
+        .model = try allocator.dupe(u8, "thinkingmachines/inkling"),
         .choices = try allocator.alloc(Choice, 0),
         .created = 1234567890,
         .usage = .{ .prompt_tokens = 10, .completion_tokens = 20, .total_tokens = 30 },
@@ -371,7 +371,7 @@ test "ChatCompletionRequest deinit" {
     };
     
     var request = ChatCompletionRequest{
-        .model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b"),
+        .model = try allocator.dupe(u8, "thinkingmachines/inkling"),
         .messages = messages,
         .tools = null,
         .tool_choice = null,

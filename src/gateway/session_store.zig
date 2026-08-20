@@ -2,6 +2,7 @@
 //! Manages active sessions with persistence to disk
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 
 pub const SessionStore = struct {
     allocator: std.mem.Allocator,
@@ -28,7 +29,7 @@ pub const SessionStore = struct {
 
     pub fn init(allocator: std.mem.Allocator, sessions_dir: []const u8) !SessionStore {
         // Ensure sessions directory exists
-        _ = try std.fs.cwd().makeOpenPath(sessions_dir, .{});
+        _ = try compat.cwd().makeOpenPath(sessions_dir, .{});
         const sessions_file = try std.fmt.allocPrint(allocator, "{s}/sessions.json", .{sessions_dir});
 
         var store = SessionStore{
@@ -70,7 +71,7 @@ pub const SessionStore = struct {
 
     /// Create a new session
     pub fn createSession(self: *SessionStore, id: []const u8, user: []const u8, channel: []const u8) !void {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
 
         var metadata = std.StringHashMap([]const u8).init(self.allocator);
         try metadata.put("created_by", try self.allocator.dupe(u8, "gateway"));
@@ -98,7 +99,7 @@ pub const SessionStore = struct {
     /// Update session activity
     pub fn updateActivity(self: *SessionStore, id: []const u8, message_count_delta: u32) !void {
         if (self.sessions.getPtr(id)) |session| {
-            session.last_activity = std.time.timestamp();
+            session.last_activity = compat.timestamp();
             session.message_count += message_count_delta;
             session.status = .active;
             try self.save();
@@ -109,7 +110,7 @@ pub const SessionStore = struct {
     pub fn terminateSession(self: *SessionStore, id: []const u8) !bool {
         if (self.sessions.getPtr(id)) |session| {
             session.status = .terminated;
-            session.last_activity = std.time.timestamp();
+            session.last_activity = compat.timestamp();
             try self.save();
             return true;
         }
@@ -147,48 +148,52 @@ pub const SessionStore = struct {
 
     /// Save sessions to disk
     fn save(self: *SessionStore) !void {
-        const file = try std.fs.cwd().createFile(self.sessions_file, .{ .truncate = true });
-        defer file.close();
+        const _cwd = compat.cwd();
+        const file = try _cwd.createFile(self.sessions_file, .{ .truncate = true });
+        defer file.close(_cwd.io);
 
-const writer = file.deprecatedWriter();
+var w_buf: [4096]u8 = undefined;
+        var writer = file.writer(_cwd.io, &w_buf);
 
-        try writer.writeAll("{\n \"sessions\": [\n");
+        try writer.interface.writeAll("{\n \"sessions\": [\n");
 
         var first = true;
         var iter = self.sessions.iterator();
         while (iter.next()) |entry| {
             if (!first) {
-                try writer.writeAll(",\n");
+                try writer.interface.writeAll(",\n");
             }
             first = false;
 
             const session = entry.value_ptr.*;
-            try writer.print("    {{\n", .{});
-            try writer.print("      \"id\": \"{s}\",\n", .{session.id});
-            try writer.print("      \"created_at\": {d},\n", .{session.created_at});
-            try writer.print("      \"last_activity\": {d},\n", .{session.last_activity});
-            try writer.print("      \"user\": \"{s}\",\n", .{session.user});
-            try writer.print("      \"channel\": \"{s}\",\n", .{session.channel});
-            try writer.print("      \"message_count\": {d},\n", .{session.message_count});
-            try writer.print("      \"status\": \"{s}\"\n", .{@tagName(session.status)});
-            try writer.writeAll(" }");
+            try writer.interface.print("    {{\n", .{});
+            try writer.interface.print("      \"id\": \"{s}\",\n", .{session.id});
+            try writer.interface.print("      \"created_at\": {d},\n", .{session.created_at});
+            try writer.interface.print("      \"last_activity\": {d},\n", .{session.last_activity});
+            try writer.interface.print("      \"user\": \"{s}\",\n", .{session.user});
+            try writer.interface.print("      \"channel\": \"{s}\",\n", .{session.channel});
+            try writer.interface.print("      \"message_count\": {d},\n", .{session.message_count});
+            try writer.interface.print("      \"status\": \"{s}\"\n", .{@tagName(session.status)});
+            try writer.interface.writeAll(" }");
         }
 
-        try writer.writeAll("\n ]\n}\n");
+        try writer.interface.writeAll("\n ]\n}\n");
     }
 
     /// Load sessions from disk
     fn load(self: *SessionStore) !void {
-        const file = std.fs.cwd().openFile(self.sessions_file, .{}) catch |err| {
+        const _cwd = compat.cwd();
+        const file = _cwd.openFile(self.sessions_file, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // No existing sessions file, that's fine
                 return;
             }
             return err;
         };
-        defer file.close();
+        defer file.close(_cwd.io);
 
-        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024); // Max 1MB
+        var reader = file.reader(_cwd.io, &[_]u8{});
+        const content = try reader.interface.allocRemaining(self.allocator, .limited(1024*1024)); // Max 1MB
         defer self.allocator.free(content);
 
         // Parse JSON (simplified - in production, use proper JSON parser)
@@ -198,7 +203,7 @@ const writer = file.deprecatedWriter();
 
     /// Clean up old terminated sessions (older than 24 hours)
     pub fn cleanupOldSessions(self: *SessionStore) !usize {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         const cutoff = now - (24 * 60 * 60); // 24 hours ago
 
         var to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);

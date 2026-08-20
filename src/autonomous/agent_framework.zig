@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("types.zig");
 const state_store = @import("state_store.zig");
 const moltbook_client = @import("moltbook_client.zig");
@@ -48,7 +49,7 @@ pub const AutonomousAgent = struct {
     /// Select the next action to execute based on priority
     pub fn selectNextAction(self: *AutonomousAgent) !types.AutonomousAction {
         const state = self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // Priority 1: Always check for pending comment replies first
         const monitored_posts = self.moltbook_client.getMonitoredPosts();
@@ -107,7 +108,7 @@ pub const AutonomousAgent = struct {
     /// Check if local agent is down and worker should take over
     pub fn shouldWorkerTakeOver(self: *AutonomousAgent) bool {
         const state = self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // If local agent hasn't pinged in over an hour, worker takes over
         return (now - state.local_last_seen) > LOCAL_AGENT_TIMEOUT_MS;
@@ -119,7 +120,7 @@ pub const AutonomousAgent = struct {
         errdefer result.deinit(self.allocator);
 
         var state = &self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // Update last check time
         try self.state_store.updateLastCheck(now);
@@ -190,7 +191,7 @@ pub const AutonomousAgent = struct {
         errdefer result.deinit(self.allocator);
 
         var state = &self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // Update last browse time
         try self.state_store.updateLastBrowse(now);
@@ -328,7 +329,7 @@ pub const AutonomousAgent = struct {
     /// Execute CREATE_POST action
     fn executeCreatePost(self: *AutonomousAgent) !types.AutonomousResult {
         var state = &self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // Check rate limit
         if (!self.rate_limiter.canPost(now)) {
@@ -406,7 +407,7 @@ pub const AutonomousAgent = struct {
         errdefer result.deinit(self.allocator);
 
         var state = &self.state_store.state;
-        const now = std.time.timestamp() * 1000;
+        const now = compat.timestamp() * 1000;
 
         // Pick a random search topic
         const search_topic = SEARCH_TOPICS[@as(usize, @intFromFloat(randomFloat() * SEARCH_TOPICS.len))];
@@ -558,7 +559,7 @@ pub const AutonomousAgent = struct {
 
     /// Generate a random float between 0 and 1
     fn randomFloat() f32 {
-        return @as(f32, @floatFromInt(std.crypto.random.int(u32))) / @as(f32, @floatFromInt(std.math.maxInt(u32)));
+        var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(compat.timestamp()))); return prng.random().float(f32);
 
     }
 };

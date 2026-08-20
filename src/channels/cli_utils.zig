@@ -1,5 +1,15 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("../providers/types.zig");
+
+fn compatWriteAll(writer: anytype, bytes: []const u8) !void {
+    const T = @TypeOf(writer);
+    if (T == std.Io.File) {
+        try writer.writeStreamingAll(compat.getIo(), bytes);
+    } else {
+        try writer.writeAll(bytes);
+    }
+}
 
 pub fn formatMessagePrefix(role: types.MessageRole) []const u8 {
     return switch (role) {
@@ -11,32 +21,54 @@ pub fn formatMessagePrefix(role: types.MessageRole) []const u8 {
 }
 
 pub fn formatToolCall(name: []const u8, args: []const u8, writer: anytype) !void {
-    try writer.writeAll("\x1b[36m→\x1b[0m Calling ");
-    try writer.writeAll(name);
-    try writer.writeAll(" with ");
-    try writer.writeAll(args);
-    try writer.writeAll("\n");
+    if (@TypeOf(writer) == std.Io.File) {
+        try writer.writeStreamingAll(compat.getIo(), "\x1b[36m→\x1b[0m Calling ");
+        try writer.writeStreamingAll(compat.getIo(), name);
+        try writer.writeStreamingAll(compat.getIo(), " with ");
+        try writer.writeStreamingAll(compat.getIo(), args);
+        try writer.writeStreamingAll(compat.getIo(), "\n");
+    } else {
+        try writer.writeAll("\x1b[36m→\x1b[0m Calling ");
+        try writer.writeAll(name);
+        try writer.writeAll(" with ");
+        try writer.writeAll(args);
+        try writer.writeAll("\n");
+    }
 }
 
 pub fn formatToolResult(name: []const u8, result: []const u8, writer: anytype) !void {
-    try writer.writeAll("\x1b[36m✓\x1b[0m ");
-    try writer.writeAll(name);
-    try writer.writeAll(": ");
-    try writer.writeAll(result);
-    try writer.writeAll("\n");
+    if (@TypeOf(writer) == std.Io.File) {
+        try writer.writeStreamingAll(compat.getIo(), "\x1b[36m✓\x1b[0m ");
+        try writer.writeStreamingAll(compat.getIo(), name);
+        try writer.writeStreamingAll(compat.getIo(), ": ");
+        try writer.writeStreamingAll(compat.getIo(), result);
+        try writer.writeStreamingAll(compat.getIo(), "\n");
+    } else {
+        try writer.writeAll("\x1b[36m✓\x1b[0m ");
+        try writer.writeAll(name);
+        try writer.writeAll(": ");
+        try writer.writeAll(result);
+        try writer.writeAll("\n");
+    }
 }
 
 pub fn formatError(err: []const u8, writer: anytype) !void {
-    try writer.writeAll("\x1b[31mError:\x1b[0m ");
-    try writer.writeAll(err);
-    try writer.writeAll("\n");
+    if (@TypeOf(writer) == std.Io.File) {
+        try writer.writeStreamingAll(compat.getIo(), "\x1b[31mError:\x1b[0m ");
+        try writer.writeStreamingAll(compat.getIo(), err);
+        try writer.writeStreamingAll(compat.getIo(), "\n");
+    } else {
+        try writer.writeAll("\x1b[31mError:\x1b[0m ");
+        try writer.writeAll(err);
+        try writer.writeAll("\n");
+    }
 }
 
 pub fn formatStreamingToken(token: []const u8, writer: anytype) !void {
-    try writer.writeAll(token);
+    try compatWriteAll(writer, token);
 }
 pub fn clearCurrentLine(writer: anytype) !void {
-    try writer.writeAll("\r\x1b[K");
+    try compatWriteAll(writer, "\r\x1b[K");
 }
 
 test "formatMessagePrefix returns colors" {

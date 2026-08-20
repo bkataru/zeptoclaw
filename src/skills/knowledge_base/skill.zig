@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const types = @import("../types.zig");
 
@@ -124,7 +125,7 @@ const Index = struct {
 fn loadIndex(allocator: Allocator, cfg: Config) !?Index {
     const file_path = try std.fs.path.expand(allocator, cfg.index_path);
     defer allocator.free(file_path);
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const file = compat.cwd().openFile(file_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
             // Create empty index with vault_path
             var empty_files = std.ArrayList(Index.File).init(allocator);
@@ -275,7 +276,7 @@ fn handleShow(ctx: *ExecutionContext, cfg: Config) !SkillResult {
     defer ctx.allocator.free(full_path);
     const expanded_path = try std.fs.path.expand(ctx.allocator, full_path);
     defer ctx.allocator.free(expanded_path);
-    const file = std.fs.cwd().openFile(expanded_path, .{}) catch |err| {
+    const file = compat.cwd().openFile(expanded_path, .{}) catch |err| {
         return SkillResult{
             .success = false,
             .message = try std.fmt.allocPrint(ctx.allocator, "Failed to open note: {s}", .{@errorName(err)}),

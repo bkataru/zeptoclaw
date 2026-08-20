@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 
 /// WhatsApp message types
 pub const MessageType = enum {
@@ -81,6 +82,7 @@ pub const WhatsAppMessage = struct {
     mentioned_jids: std.ArrayList([]const u8),
     reply_context: ?ReplyContext,
     timestamp: i64,
+    from_me: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !WhatsAppMessage {
         return .{
@@ -100,6 +102,7 @@ pub const WhatsAppMessage = struct {
             .mentioned_jids = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             .reply_context = null,
             .timestamp = 0,
+            .from_me = false,
         };
     }
 
@@ -298,12 +301,12 @@ pub const Debouncer = struct {
 
         try gop.value_ptr.append(self.allocator, .{
             .message = message,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat.timestamp(),
         });
     }
 
     pub fn shouldFlush(self: *Debouncer, key: []const u8) bool {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         const last_flush_ms = self.last_flush.get(key) orelse 0;
         return (now - last_flush_ms) * 1000 >= self.debounce_ms;
     }
@@ -315,7 +318,7 @@ pub const Debouncer = struct {
             entries.value.deinit(self.allocator);
         }
 
-        try self.last_flush.put(try self.allocator.dupe(u8, key), std.time.timestamp());
+        try self.last_flush.put(try self.allocator.dupe(u8, key), compat.timestamp());
 
         return entries.value.items;
     }

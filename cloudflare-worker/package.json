@@ -1,7 +1,7 @@
 {
   "name": "zeptoclaw-router",
-  "version": "1.0.0",
-  "description": "Cloudflare Worker router for ZeptoClaw gateway",
+  "version": "1.1.0",
+  "description": "ZeptoClaw router — single-model NVIDIA inkling router (openclaw-compatible, no openclaw dependency)",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

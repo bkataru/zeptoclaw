@@ -2,6 +2,8 @@
 //! Common types and authentication helpers for ZeptoClaw HTTP services
 
 const std = @import("std");
+const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 
 pub const log = std.log.scoped(.http_server);
 
@@ -163,11 +165,12 @@ pub fn executeCommand(allocator: std.mem.Allocator, argv: []const []const u8, wo
         .exit_code = 0,
     };
 
-    const process_result = std.process.Child.run(.{
-        .allocator = allocator,
+    const cwd_val: std.process.Child.Cwd = if (working_dir) |wd| .{ .path = wd } else .inherit;
+    const process_result = std.process.run(allocator, compat.getIo(), .{
         .argv = argv,
-        .cwd = working_dir,
-        .max_output_bytes = 1024 * 1024, // 1MB limit
+        .cwd = cwd_val,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
     }) catch |err| {
         log.err("Failed to execute command: {s} - {}", .{argv[0], err});
         return err;
@@ -176,12 +179,11 @@ pub fn executeCommand(allocator: std.mem.Allocator, argv: []const []const u8, wo
     result.stdout = process_result.stdout;
     result.stderr = process_result.stderr;
     result.exit_code = switch (process_result.term) {
-        .Exited => |code| code,
+        .exited => |code| code,
         else => 1,
     };
 
     return result;
-
 }
 
 /// Execute a command and return the output as a string
@@ -281,13 +283,13 @@ pub const ServerConfig = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 9000,
 
-    pub fn address(self: *const ServerConfig) !std.net.Address {
-        return std.net.Address.parseIp(self.host, self.port);
+    pub fn address(self: *const ServerConfig) !std.Io.net.IpAddress {
+        return try std.Io.net.IpAddress.parse(self.host, self.port);
     }
 };
 
 pub fn loadWebhookSecret(allocator: std.mem.Allocator) ![]const u8 {
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+    const home = compat.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return error.HomeNotFound,
         else => return err,
     };
@@ -296,7 +298,7 @@ pub fn loadWebhookSecret(allocator: std.mem.Allocator) ![]const u8 {
     const secret_path = try std.fmt.allocPrint(allocator, "{s}/.zeptoclaw/.webhook-secret", .{home});
     defer allocator.free(secret_path);
 
-    const secret = try std.fs.cwd().readFileAlloc(allocator, secret_path, 1024);
+    const secret = try compat.cwd().readFileAlloc(allocator, secret_path, 1024);
 
     // Trim newline
     const trimmed = std.mem.trim(u8, secret, &std.ascii.whitespace);

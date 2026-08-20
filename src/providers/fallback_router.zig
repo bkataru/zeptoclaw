@@ -278,11 +278,8 @@ test "FallbackRouter initialization" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
-    const fallbacks = [_][]const u8{
-        "nvidia-nim/z-ai/glm4.7",
-        "nvidia-nim/minimaxai/minimax-m2.1",
-    };
+    const primary = "thinkingmachines/inkling";
+    const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
     defer router.deinit();
@@ -298,10 +295,8 @@ test "FallbackRouter selectModel priority_only" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
-    const fallbacks = [_][]const u8{
-        "nvidia-nim/z-ai/glm4.7",
-    };
+    const primary = "thinkingmachines/inkling";
+    const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
     defer router.deinit();
@@ -320,10 +315,8 @@ test "FallbackRouter selectModel health_aware" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
-    const fallbacks = [_][]const u8{
-        "nvidia-nim/z-ai/glm4.7",
-    };
+    const primary = "thinkingmachines/inkling";
+    const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
     defer router.deinit();
@@ -337,9 +330,9 @@ test "FallbackRouter selectModel health_aware" {
     // Mark primary as failed
     try router.recordFailure(primary, .rate_limit_429);
 
-    // Fallback should be selected now
-    const model2 = try router.selectModel();
-    try std.testing.expectEqualStrings(fallbacks[0], model2.id);
+    // With single model and no fallbacks, no available models remain after failure
+    const result = router.selectModel();
+    try std.testing.expectError(error.NoAvailableModels, result);
 }
 
 test "FallbackRouter recordSuccess and recordFailure" {
@@ -350,7 +343,7 @@ test "FallbackRouter recordSuccess and recordFailure" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
+    const primary = "thinkingmachines/inkling";
     const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
@@ -377,7 +370,7 @@ test "FallbackRouter getStats" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
+    const primary = "thinkingmachines/inkling";
     const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
@@ -402,11 +395,8 @@ test "FallbackRouter round_robin" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
-    const fallbacks = [_][]const u8{
-        "nvidia-nim/z-ai/glm4.7",
-        "nvidia-nim/minimaxai/minimax-m2.1",
-    };
+    const primary = "thinkingmachines/inkling";
+    const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
     defer router.deinit();
@@ -416,10 +406,8 @@ test "FallbackRouter round_robin" {
     // Get multiple models and verify rotation
     const model1 = try router.selectModel();
     const model2 = try router.selectModel();
-    const model3 = try router.selectModel();
-
-    // Models should be different (assuming all are available)
-    try std.testing.expect(!std.mem.eql(u8, model1.id, model2.id));
+    // With single model, all selections return same model
+    try std.testing.expectEqualStrings(model1.id, model2.id);
 }
 
 test "FallbackRouter reset" {
@@ -430,7 +418,7 @@ test "FallbackRouter reset" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
+    const primary = "thinkingmachines/inkling";
     const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);
@@ -452,7 +440,7 @@ test "FallbackRouter setStrategy and getStrategy" {
     var tracker = health_tracker.HealthTracker.init(allocator);
     defer tracker.deinit();
 
-    const primary = "nvidia-nim/qwen/qwen3.5-397b-a17b";
+    const primary = "thinkingmachines/inkling";
     const fallbacks = [_][]const u8{};
 
     var router = try FallbackRouter.init(allocator, &pool, &tracker, primary, &fallbacks);

@@ -1,9 +1,10 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("../providers/types.zig");
 
 pub const Session = struct {
     allocator: std.mem.Allocator,
-    messages: std.ArrayList(types.Message),
+    messages: std.ArrayListUnmanaged(types.Message),
     start_time: i64,
     message_count: u32,
     max_messages: u32,
@@ -11,8 +12,8 @@ pub const Session = struct {
     pub fn init(allocator: std.mem.Allocator, max: u32) Session {
         return .{
             .allocator = allocator,
-            .messages = std.ArrayList(types.Message){},
-            .start_time = @as(i64, std.time.timestamp()),
+            .messages = .empty,
+            .start_time = @as(i64, compat.timestamp()),
             .message_count = 0,
             .max_messages = max,
         };

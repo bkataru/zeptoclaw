@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const provider_pool = @import("provider_pool.zig");
 
 /// Error type for model failures
@@ -173,14 +174,14 @@ pub const HealthTracker = struct {
 
     /// Record a successful request
     pub fn recordSuccess(self: *HealthTracker, model_id: []const u8, latency_ms: f64) !void {
-        const current_time = std.time.timestamp();
+        const current_time = compat.timestamp();
         const health = try self.getOrCreateHealth(model_id);
         health.recordSuccess(latency_ms, current_time);
     }
 
     /// Record a failed request
     pub fn recordFailure(self: *HealthTracker, model_id: []const u8, error_type: ModelError) !void {
-        const current_time = std.time.timestamp();
+        const current_time = compat.timestamp();
         const health = try self.getOrCreateHealth(model_id);
         health.recordFailure(error_type, current_time, self.cooldown_duration);
     }
@@ -188,7 +189,7 @@ pub const HealthTracker = struct {
     /// Check if model is healthy and available
     pub fn isModelAvailable(self: *HealthTracker, model_id: []const u8) bool {
         const health = self.health_map.get(model_id) orelse return true; // No history = available
-        const current_time = std.time.timestamp();
+        const current_time = compat.timestamp();
 
         // Check cooldown
         if (health.isInCooldown(current_time)) {
@@ -304,7 +305,7 @@ test "HealthTracker recordFailure" {
     try std.testing.expectEqual(@as(u64, 1), health.?.failure_count);
     try std.testing.expectEqual(@as(u64, 1), health.?.total_requests);
     try std.testing.expectEqual(ModelError.rate_limit_429, health.?.last_error.?);
-    try std.testing.expect(health.?.isInCooldown(std.time.timestamp()));
+    try std.testing.expect(health.?.isInCooldown(compat.timestamp()));
 }
 
 test "HealthTracker isModelAvailable" {

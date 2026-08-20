@@ -3,6 +3,8 @@
 //! Implements all 30+ read-only system monitoring endpoints
 
 const std = @import("std");
+const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 const http = @import("http_utils.zig");
 const endpoints = @import("shell2http_endpoints.zig");
 
@@ -38,12 +40,12 @@ pub const Shell2HTTPServer = struct {
     allocator: std.mem.Allocator,
     config: Config,
     endpoint_ctx: endpoints.EndpointContext,
-    listener: std.net.Server,
+    listener: std.Io.net.Server,
     running: bool,
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Shell2HTTPServer {
-        const address = try std.net.Address.parseIp(config.host, config.port);
-        const listener = try address.listen(.{ .reuse_address = true });
+        const address = try std.Io.net.IpAddress.parse(config.host, config.port);
+        const listener = try address.listen(compat.getIo(), .{ .reuse_address = true });
 
         const endpoint_ctx = try endpoints.EndpointContext.init(allocator);
 
@@ -58,7 +60,7 @@ pub const Shell2HTTPServer = struct {
 
     pub fn deinit(self: *Shell2HTTPServer) void {
         self.endpoint_ctx.deinit();
-        self.listener.deinit();
+        self.listener.deinit(compat.getIo());
     }
 
     pub fn run(self: *Shell2HTTPServer) !void {
@@ -66,7 +68,7 @@ pub const Shell2HTTPServer = struct {
         log.info("Shell2HTTP server listening on {s}:{}\n", .{ self.config.host, self.config.port });
 
         while (self.running) {
-            const connection = self.listener.accept() catch |err| {
+            const connection = self.listener.accept(compat.getIo()) catch |err| {
                 log.err("Failed to accept connection: {}\n", .{err});
                 continue;
             };
@@ -81,12 +83,13 @@ pub const Shell2HTTPServer = struct {
         self.running = false;
     }
 
-    fn handleConnection(self: *Shell2HTTPServer, connection: std.net.Server.Connection) !void {
-        defer connection.stream.close();
+    fn handleConnection(self: *Shell2HTTPServer, connection: std.Io.net.Stream) !void {
+        defer connection.close(compat.getIo());
 
         // Read request
         var buffer: [8192]u8 = undefined;
-        const n = connection.stream.read(&buffer) catch |err| {
+        var stream_reader = connection.reader(compat.getIo(), &buffer);
+        const n = stream_reader.interface.readSliceShort(buffer[1..]) catch |err| {
             log.err("Failed to read request: {}\n", .{err});
             return;
         };
@@ -98,14 +101,14 @@ pub const Shell2HTTPServer = struct {
         // Parse request
         var request = http.parseHttpRequest(self.allocator, request_data) catch |err| {
             log.err("Failed to parse request: {}\n", .{err});
-            try self.sendErrorResponse(connection.stream, 400, "Bad Request");
+            try self.sendErrorResponse(connection, 400, "Bad Request");
             return;
         };
         defer request.deinit(self.allocator);
 
         // Validate method (only GET allowed for shell2http)
         if (!std.mem.eql(u8, request.method, "GET")) {
-            try self.sendErrorResponse(connection.stream, 405, "Method Not Allowed");
+            try self.sendErrorResponse(connection, 405, "Method Not Allowed");
             return;
         }
 
@@ -113,28 +116,28 @@ pub const Shell2HTTPServer = struct {
         const auth_header = request.getHeader("Authorization");
         http.validateBasicAuth(auth_header, self.config.username, self.config.password) catch |err| {
             log.warn("Auth failed for path {s}: {}\n", .{ request.path, err });
-            try self.sendErrorResponse(connection.stream, 401, "Unauthorized");
+            try self.sendErrorResponse(connection, 401, "Unauthorized");
             return;
         };
 
         // Find endpoint
         const endpoint = endpoints.getEndpoint(request.path) orelse {
-            try self.sendErrorResponse(connection.stream, 404, "Not Found");
+            try self.sendErrorResponse(connection, 404, "Not Found");
             return;
         };
 
         // Execute endpoint
         const response = endpoint.handler(&self.endpoint_ctx) catch |err| {
             log.err("Error executing endpoint {s}: {}\n", .{ endpoint.path, err });
-            try self.sendErrorResponse(connection.stream, 500, "Internal Server Error");
+            try self.sendErrorResponse(connection, 500, "Internal Server Error");
             return;
         };
 
         // Send response
-        try self.sendResponse(connection.stream, response);
+        try self.sendResponse(connection, response);
     }
 
-    fn sendResponse(self: *Shell2HTTPServer, stream: std.net.Stream, response: http.HttpResponse) !void {
+    fn sendResponse(self: *Shell2HTTPServer, stream: std.Io.net.Stream, response: http.HttpResponse) !void {
         const status_line = try std.fmt.allocPrint(self.allocator, "HTTP/1.1 {d} OK\r\n", .{response.status});
         defer self.allocator.free(status_line);
 
@@ -145,17 +148,17 @@ pub const Shell2HTTPServer = struct {
         defer self.allocator.free(content_length_header);
 
         // Write the body directly (no need to dupe)
-        _ = try stream.writeAll(status_line);
-        _ = try stream.writeAll(content_type_header);
-        _ = try stream.writeAll(content_length_header);
-        _ = try stream.writeAll("\r\n");
-        _ = try stream.writeAll(response.body);
+        try compat.streamWriteAll(stream, status_line);
+        try compat.streamWriteAll(stream, content_type_header);
+        try compat.streamWriteAll(stream, content_length_header);
+        try compat.streamWriteAll(stream, "\r\n");
+        try compat.streamWriteAll(stream, response.body);
 
         // Free the body if it's owned
         response.deinit(self.allocator);
     }
 
-    fn sendErrorResponse(self: *Shell2HTTPServer, stream: std.net.Stream, status: u16, message: []const u8) !void {
+    fn sendErrorResponse(self: *Shell2HTTPServer, stream: std.Io.net.Stream, status: u16, message: []const u8) !void {
         const body = try std.fmt.allocPrint(self.allocator, "{{\"error\":\"{s}\"}}", .{message});
         defer self.allocator.free(body);
 
@@ -174,7 +177,7 @@ pub const Shell2HTTPServer = struct {
 // ============================================================================
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

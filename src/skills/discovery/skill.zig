@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const types = @import("../types.zig");
 
@@ -68,7 +69,7 @@ pub const skill = struct {
         const file_path = try std.fs.path.expand(allocator, config.data_file);
         defer allocator.free(file_path);
 
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        const file = compat.cwd().openFile(file_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // Data file doesn't exist yet, create empty data
                 data = Data{
@@ -169,9 +170,9 @@ pub const skill = struct {
         defer allocator.free(file_path);
 
         const dir = std.fs.path.dirname(file_path) orelse ".";
-        try std.fs.cwd().makePath(dir);
+        try compat.cwd().makePath(dir);
 
-        const file = try std.fs.cwd().createFile(file_path, .{});
+        const file = try compat.cwd().createFile(file_path, .{});
         defer file.close();
 
         const writer = file.writer();
@@ -631,7 +632,7 @@ pub const skill = struct {
     }
 
     fn getTimestamp(allocator: Allocator) ![]const u8 {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         const datetime = std.time.epoch.EpochSeconds{ .secs = now };
         const year = datetime.getEpochYear();
         const month = datetime.getMonth();

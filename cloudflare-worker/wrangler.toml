@@ -1,22 +1,35 @@
 name = "zeptoclaw-router"
 main = "worker.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2026-01-01"
 
-# KV namespace for gateway health state
+# KV namespace for Barvis/ZeptoClaw state (mirrors openclaw BARVIS_STATE)
+# Reuses the existing KV so old gateways keep working after migration.
+# BARVIS_STATE kept for old gateways; ZEPTOCLAW_STATE is the new canonical name.
+# Both point to the same KV so either binding sees the same data (compat bridge).
 [[kv_namespaces]]
-binding = "GATEWAY_HEALTH"
-id = "" # TODO: Create KV namespace and add ID here
+binding = "BARVIS_STATE"
+id = "70a3dbb693e246d48a0fbdc7b32c7317"
 
-# KV namespace for ZeptoClaw state (heartbeat, incidents, etc.)
 [[kv_namespaces]]
 binding = "ZEPTOCLAW_STATE"
-id = "" # TODO: Create KV namespace and add ID here
+id = "70a3dbb693e246d48a0fbdc7b32c7317"
+
+# Cron trigger for automated Moltbook checks (openclaw compat)
+[triggers]
+crons = ["*/30 * * * *"]  # Every 30 minutes
 
 [vars]
-# ZeptoClaw gateway URL (update with your actual gateway URL)
-# For local development: http://localhost:18789
-# For production: https://your-gateway-domain.com
-ZEPTOCLAW_GATEWAY_URL = "http://localhost:18789"
+# Moltbook config (preserved for /state, /moltbook/*, /autonomous/*, /gateway/* compat)
+MOLTBOOK_AGENT_NAME = "barvis_da_jarvis"
+MOLTBOOK_AGENT_ID = "fe523128-4e22-4853-b7d9-59319c1939f6"
+MOLTBOOK_MONITORED_POSTS = "c8e5e47c-a6b6-4d6d-9bb8-0309a4b0a847"
 
-# Secrets (set via wrangler secret):
-# - ZEPTOCLAW_API_KEY (optional, if your gateway requires authentication)
+# Route: deployed to zeptoclaw-router.<account>.workers.dev
+# Add routes/routes block here if you want barvis-router.bkataru.workers.dev alias:
+# [[routes]]
+# pattern = "barvis-router.bkataru.workers.dev/*"
+# zone_name = "bkataru.workers.dev"
+
+# Secrets (set via: npx wrangler secret put NVIDIA_API_KEY && npx wrangler secret put MOLTBOOK_API_KEY)
+# - NVIDIA_API_KEY  (required)  -> https://integrate.api.nvidia.com/v1/chat/completions, model thinkingmachines/inkling
+# - MOLTBOOK_API_KEY (optional) -> Moltbook autonomous features; worker still serves health/chat without it

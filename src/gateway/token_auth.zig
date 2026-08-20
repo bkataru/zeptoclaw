@@ -2,6 +2,7 @@
 //! Provides token-based authentication with rate limiting and rotation support
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 
 pub const TokenAuth = struct {
     allocator: std.mem.Allocator,
@@ -34,7 +35,7 @@ pub const TokenAuth = struct {
         };
 
         // Register main token
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         try auth.tokens.put(try allocator.dupe(u8, main_token), .{
             .token = try allocator.dupe(u8, main_token),
             .created_at = now,
@@ -79,7 +80,7 @@ pub const TokenAuth = struct {
 
         // Check expiration
         if (token_info.expires_at) |expires| {
-            const now = std.time.timestamp();
+            const now = compat.timestamp();
             if (now >= expires) return false;
         }
 
@@ -91,7 +92,7 @@ pub const TokenAuth = struct {
 
     /// Check and update rate limit for a token
     fn checkRateLimit(self: *TokenAuth, token: []const u8) !void {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         const gop = try self.rate_limits.getOrPut(token);
         if (!gop.found_existing) {
             gop.key_ptr.* = try self.allocator.dupe(u8, token);
@@ -122,7 +123,7 @@ pub const TokenAuth = struct {
     /// Rotate the main token (generate new token, invalidate old)
     pub fn rotateMainToken(self: *TokenAuth) ![]const u8 {
         const new_token = try self.generateToken();
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
 
         // Invalidate old main token
         if (self.tokens.get(self.main_token)) |*info| {
@@ -147,7 +148,7 @@ pub const TokenAuth = struct {
 
     /// Generate a random 40-character hex token
     fn generateToken(self: *TokenAuth) ![]const u8 {
-        var rng = std.rand.DefaultPrng.init(@as(u64, std.time.timestamp()));
+        var rng = std.rand.DefaultPrng.init(@as(u64, compat.timestamp()));
         const random = rng.random();
         var token: [40]u8 = undefined;
 

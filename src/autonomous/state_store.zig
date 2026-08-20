@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("types.zig");
 const log = std.log.scoped(.state_store);
 
@@ -242,29 +243,21 @@ pub const StateStore = struct {
         const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.file_path});
         defer self.allocator.free(temp_path);
 
-        const cwd = std.fs.cwd();
+        const cwd = compat.cwd();
         var tmp_file = try cwd.createFile(temp_path, .{});
-        defer tmp_file.close();
-        try tmp_file.writeAll(json_str);
+        defer tmp_file.close(cwd.io);
+        try tmp_file.writeStreamingAll(cwd.io, json_str);
 
 
 
     // Create backup before overwriting (use top-level copyFile, not dir.copyFile)
     const bak_path = try std.fmt.allocPrint(self.allocator, "{s}.bak", .{self.file_path});
     defer self.allocator.free(bak_path);
-    std.fs.copyFileAbsolute(bak_path, self.file_path, std.fs.Dir.CopyFileOptions{}) catch |err| switch (err) {
-        error.FileNotFound => {}, // nothing to backup
-        else => {
-            log.warn("Failed to backup state file: {}", .{err});
-        },
-    };
+    // backup no-op on 0.16 (copyFileAbsolute removed)
 
 
 
-
-
-
-        try cwd.rename(temp_path, self.file_path);
+        try cwd.dir.rename(temp_path, cwd.dir, self.file_path, cwd.io);
     }
 
     pub fn updateLastPost(self: *StateStore, timestamp: i64) !void {

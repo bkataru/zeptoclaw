@@ -6,7 +6,7 @@ pub fn createValidTestConfig(allocator: std.mem.Allocator) !ZeptoClawConfig {
     return .{
         .allocator = allocator,
         .api_key = try allocator.dupe(u8, "test_key"),
-        .primary_model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b"),
+        .primary_model = try allocator.dupe(u8, "thinkingmachines/inkling"),
         .fallback_models = try allocator.alloc([]const u8, 0),
         .image_model = try allocator.dupe(u8, "stable-diffusion-3.5-large"),
         .max_iterations = 10,

@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     mod.addImport("zeitgeist", zeitgeist_mod);
+    mod.link_libc = true;
 
     // Main executable
     const main_mod = b.createModule(.{
@@ -32,6 +33,7 @@ pub fn build(b: *std.Build) void {
         .root_module = main_mod,
     });
 
+    exe.root_module.link_libc = true;
     b.installArtifact(exe);
     // Webhook server executable
     const webhook_server_mod = b.createModule(.{
@@ -45,6 +47,7 @@ pub fn build(b: *std.Build) void {
         .name = "zeptoclaw-webhook",
         .root_module = webhook_server_mod,
     });
+    webhook_server_exe.root_module.link_libc = true;
     b.installArtifact(webhook_server_exe);
 
     // Shell2HTTP server executable
@@ -59,6 +62,7 @@ pub fn build(b: *std.Build) void {
         .name = "zeptoclaw-shell2http",
         .root_module = shell2http_server_mod,
     });
+    shell2http_server_exe.root_module.link_libc = true;
     b.installArtifact(shell2http_server_exe);
 
     // Gateway server executable
@@ -74,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .name = "zeptoclaw-gateway",
         .root_module = gateway_server_mod,
     });
+    gateway_server_exe.root_module.link_libc = true;
     b.installArtifact(gateway_server_exe);
 
     // Run command
@@ -108,6 +113,7 @@ pub fn build(b: *std.Build) void {
     });
     integration_test_mod.addImport("zeptoclaw", mod);
     integration_test_mod.addImport("zeitgeist", zeitgeist_mod);
+    integration_test_mod.link_libc = true;
     const integration_test_test = b.addTest(.{
         .root_module = integration_test_mod,
     });

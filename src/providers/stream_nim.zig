@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("types.zig");
 const config_module = @import("../config.zig");
 
@@ -16,7 +17,7 @@ pub const StreamNIMClient = struct {
             .allocator = allocator,
             .api_key = cfg.nim_api_key,
             .model = cfg.nim_model,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = std.http.Client{ .allocator = allocator, .io = compat.io() },
             .cancel_token = null,
         };
     }

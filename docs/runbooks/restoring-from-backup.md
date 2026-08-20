@@ -264,7 +264,7 @@ systemctl --user status workspace-sync.timer
 
 If original host lost:
 
-1. Install Zig 0.15.2, clone repo, build binaries
+1. Install Zig 0.16.0, clone repo, build binaries
 2. Install systemd services on new host
 3. Copy backup directory from remote storage to `~/.local/share/zeptoclaw/backups/`
 4. Follow steps 2-7 above

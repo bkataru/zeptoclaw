@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const ConfigLoader = @import("migration_config.zig").ConfigLoader;
 const ZeptoClawConfig = @import("migration_config.zig").ZeptoClawConfig;
 const ConfigSource = @import("migration_config.zig").ConfigSource;
@@ -15,7 +16,7 @@ test "ConfigLoader.load invalid JSON - no leak" {
     const allocator = std.testing.allocator;
     var loader = ConfigLoader.init(allocator);
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const config_path = "test_invalid_config.json";
 
     const malformed_json = "{\"invalid\": json}";
@@ -33,7 +34,7 @@ test "ConfigLoader.load allocation failure - no leak" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const inner_allocator = gpa.allocator();
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const config_path = "test_oom_config.json";
 
     const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"model\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\"}},\"gateway\":{\"port\":18789,\"mode\":\"local\",\"bind\":\"lan\"}}";
@@ -64,7 +65,7 @@ test "ConfigLoader.load config path is a directory - error" {
     const allocator = std.testing.allocator;
     var loader = ConfigLoader.init(allocator);
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const dir_path = "test_dir_for_config";
     // Create a temporary directory
     temp_dir.makeDir(dir_path) catch |err| {
@@ -80,7 +81,7 @@ test "ConfigLoader validation invalid gateway port" {
     const allocator = std.testing.allocator;
     var loader = ConfigLoader.init(allocator);
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const config_path = "test_invalid_port.json";
     const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"model\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":4}},\"gateway\":{\"port\":0,\"mode\":\"local\",\"bind\":\"lan\"}}";
 
@@ -98,7 +99,7 @@ test "ConfigLoader validation invalid max_concurrent" {
     const allocator = std.testing.allocator;
     var loader = ConfigLoader.init(allocator);
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const config_path = "test_invalid_max_concurrent.json";
     const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"model\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":0}},\"gateway\":{\"port\":18789,\"mode\":\"local\",\"bind\":\"lan\"}}";
 
@@ -116,7 +117,7 @@ test "ConfigLoader validation missing primary model" {
     const allocator = std.testing.allocator;
     var loader = ConfigLoader.init(allocator);
 
-    const temp_dir = std.fs.cwd();
+    const temp_dir = compat.cwd();
     const config_path = "test_missing_primary.json";
     const json_content = "{\"env\":{\"NVIDIA_API_KEY\":\"test-key\"},\"agents\":{\"defaults\":{\"model\":{\"primary\":\"\"},\"imageModel\":{\"primary\":\"image\"},\"workspace\":\"/tmp\",\"maxConcurrent\":4}},\"gateway\":{\"port\":18789,\"mode\":\"local\",\"bind\":\"lan\"}}";
 

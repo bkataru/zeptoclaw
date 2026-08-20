@@ -20,6 +20,7 @@ let qrHandlers = [];
 let isConnected = false;
 let selfJid = null;
 let selfE164 = null;
+let allowedFrom = new Set(); // E.164 strings from channels.whatsapp.allowFrom for symmetric DM wake
 
 // Logger
 const logger = pino({ level: 'silent' });
@@ -28,7 +29,10 @@ const logger = pino({ level: 'silent' });
  * Initialize WhatsApp connection
  */
 async function init(options = {}) {
-    const { auth_dir, print_qr = true, browser = ['zeptoclaw', 'cli', '1.0.0'] } = options;
+    const { auth_dir, print_qr = true, browser = ['zeptoclaw', 'cli', '1.0.0'], allow_from = [] } = options;
+    if (Array.isArray(allow_from)) {
+        allowedFrom = new Set(allow_from.map(v => String(v).replace(/[^0-9]/g, '').replace(/^0+/, '')));
+    }
 
     authDir = auth_dir || path.join(process.env.HOME, '.local', 'share', 'zeptoclaw', 'sessions', 'whatsapp');
 
@@ -111,8 +115,18 @@ async function init(options = {}) {
             // Skip status and broadcast messages
             if (remoteJid.endsWith('@status') || remoteJid.endsWith('@broadcast')) continue;
 
-            // Skip messages from self
-            if (msg.key.fromMe) continue;
+            // fromMe handling: symmetric DM wake for allowlisted 1:1
+            // DMs have no participantJid. If fromMe and peer is allowlisted,
+            // treat as inbound so Baala can wake barvis in the peer's DM.
+            if (msg.key.fromMe) {
+                const isGroupChat = remoteJid.endsWith('@g.us');
+                if (isGroupChat) continue; // groups stay mention-gated (fromMe irrelevant)
+                const peerE164 = jidToE164(remoteJid);
+                const peerDigits = String(peerE164 || '').replace(/[^0-9]/g, '');
+                // Only forward self-sent DM when peer is in allowFrom (e.g. peer)
+                // self messages are Baala's; they will be re-tagged below.
+                if (!peerDigits || !allowedFrom.has(peerDigits)) continue;
+            }
 
             // Extract message data
             const messageData = extractMessageData(msg);
@@ -449,6 +463,7 @@ function extractMessageData(msg) {
     const remoteJid = msg.key.remoteJid;
     const isGroup = remoteJid && remoteJid.endsWith('@g.us');
     const participantJid = msg.key.participant;
+    const fromMe = !!msg.key.fromMe;
 
     let body = '';
     let mediaType = null;
@@ -510,9 +525,10 @@ function extractMessageData(msg) {
         to: selfE164,
         chatId: remoteJid,
         chatType: isGroup ? 'group' : 'direct',
-        senderJid: isGroup ? participantJid : remoteJid,
-        senderE164: isGroup ? jidToE164(participantJid) : jidToE164(remoteJid),
-        senderName: msg.pushName,
+        senderJid: isGroup ? participantJid : (fromMe ? selfJid : remoteJid),
+        senderE164: isGroup ? jidToE164(participantJid) : (fromMe ? selfE164 : jidToE164(remoteJid)),
+        fromMe,
+        senderName: fromMe ? 'Baala' : msg.pushName,
         body,
         mediaType,
         location,

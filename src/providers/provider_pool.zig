@@ -67,7 +67,7 @@ pub const ModelPool = struct {
     models: []ModelMetadata,
     model_map: std.StringHashMap(usize), // Maps model ID to index in models array
 
-    /// Initialize the model pool with all 14 NVIDIA NIM models
+    /// Initialize the model pool with single model: thinkingmachines/inkling
     pub fn init(allocator: std.mem.Allocator) !ModelPool {
         var pool = ModelPool{
             .allocator = allocator,
@@ -75,27 +75,10 @@ pub const ModelPool = struct {
             .model_map = std.StringHashMap(usize).init(allocator),
         };
 
-        // Tier 1: Highest priority - best models
+        // Single model: thinkingmachines/inkling on NVIDIA NIM
         try pool.addModel(.{
-            .id = "nvidia-nim/deepseek-ai/deepseek-r1",
-            .name = "DeepSeek R1",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_1,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "DeepSeek R1 - High-performance reasoning model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/qwen/qwen3.5-397b-a17b",
-            .name = "Qwen 3.5 397B",
+            .id = "thinkingmachines/inkling",
+            .name = "Inkling",
             .provider = "nvidia-nim",
             .base_url = "https://integrate.api.nvidia.com/v1",
             .api_type = .openai_chat,
@@ -107,201 +90,10 @@ pub const ModelPool = struct {
             .supports_streaming = true,
             .supports_function_calling = true,
             .supports_vision = false,
-            .description = "Qwen 3.5 397B - Large language model with strong reasoning",
+            .description = "Inkling by Thinking Machines - single fleet model",
         });
 
-        try pool.addModel(.{
-            .id = "nvidia-nim/mistralai/mistral-large",
-            .name = "Mistral Large 3",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_1,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Mistral Large 3 - High-quality multilingual model",
-        });
-
-        // Tier 2: High priority - excellent models
-        try pool.addModel(.{
-            .id = "nvidia-nim/stepfun/step-3.5-flash",
-            .name = "Step 3.5 Flash",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_2,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Step 3.5 Flash - Fast and efficient model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/moonshotai/kimi-2.5",
-            .name = "Kimi K2.5",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_2,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Kimi K2.5 - Long-context understanding model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/z-ai/glm4.7",
-            .name = "GLM 4.7",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_2,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "GLM 4.7 - General language model with strong performance",
-        });
-
-        // Tier 3: Medium priority - good models
-        try pool.addModel(.{
-            .id = "nvidia-nim/meta/llama-3.3-70b-instruct",
-            .name = "Llama 3.3 70B",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_3,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Llama 3.3 70B - Open-source instruction-tuned model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/nvidia/nemotron-3-8b",
-            .name = "Nemotron 3 Nano",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_3,
-            .context_window = 32768,
-            .max_tokens = 4096,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Nemotron 3 Nano - Compact efficient model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/minimaxai/minimax-m2.1",
-            .name = "MiniMax M2.1",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_3,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "MiniMax M2.1 - Multimodal AI assistant",
-        });
-
-        // Tier 4: Low priority - fallback models
-        try pool.addModel(.{
-            .id = "nvidia-nim/deepseek-ai/deepseek-v3",
-            .name = "DeepSeek V3.1",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_4,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "DeepSeek V3.1 - Previous generation reasoning model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/qwen/qwq-32b-preview",
-            .name = "QwQ 32B",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_4,
-            .context_window = 32768,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "QwQ 32B - Question-answering specialized model",
-        });
-
-        try pool.addModel(.{
-            .id = "nvidia-nim/nvidia/nemotron-70b",
-            .name = "Nemotron 70B",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_4,
-            .context_window = 128000,
-            .max_tokens = 8192,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Nemotron 70B - NVIDIA's large language model",
-        });
-
-        // Tier 5: Lowest priority - last resort
-        try pool.addModel(.{
-            .id = "nvidia-nim/microsoft/phi-4-mini",
-            .name = "Phi-4 Mini",
-            .provider = "nvidia-nim",
-            .base_url = "https://integrate.api.nvidia.com/v1",
-            .api_type = .openai_chat,
-            .priority = .tier_5,
-            .context_window = 128000,
-            .max_tokens = 4096,
-            .rate_limit_rpm = 40,
-            .rate_limit_tpm = 100000,
-            .supports_streaming = true,
-            .supports_function_calling = true,
-            .supports_vision = false,
-            .description = "Phi-4 Mini - Compact model for simple tasks",
-        });
-
-        // Image model (separate category)
+        // Image model (kept for completeness but not used as LLM fallback)
         try pool.addModel(.{
             .id = "nvidia-nim/stabilityai/stable-diffusion-3.5-large",
             .name = "Stable Diffusion 3.5 Large",
@@ -451,13 +243,13 @@ test "ModelPool initialization" {
     var pool = try ModelPool.init(allocator);
     defer pool.deinit();
 
-    // Check that we have 14 models
-    try std.testing.expectEqual(@as(usize, 14), pool.models.len);
+    // Check that we have 2 models (1 LLM + 1 image)
+    try std.testing.expectEqual(@as(usize, 2), pool.models.len);
 
     // Check that we can find a specific model
-    const model = pool.getModel("nvidia-nim/qwen/qwen3.5-397b-a17b");
+    const model = pool.getModel("thinkingmachines/inkling");
     try std.testing.expect(model != null);
-    try std.testing.expectEqualStrings("Qwen 3.5 397B", model.?.name);
+    try std.testing.expectEqualStrings("Inkling", model.?.name);
     try std.testing.expectEqual(PriorityTier.tier_1, model.?.priority);
 }
 
@@ -471,7 +263,6 @@ test "ModelPool getModelsByPriority" {
 
     // Check that models are sorted by priority
     try std.testing.expectEqual(PriorityTier.tier_1, sorted[0].priority);
-    try std.testing.expectEqual(PriorityTier.tier_5, sorted[sorted.len - 1].priority);
 }
 
 test "ModelPool getModelsByTier" {
@@ -482,8 +273,8 @@ test "ModelPool getModelsByTier" {
     const tier1 = try pool.getModelsByTier(.tier_1);
     defer allocator.free(tier1);
 
-    // Tier 1 should have 4 models (3 text + 1 image)
-    try std.testing.expectEqual(@as(usize, 4), tier1.len);
+    // Tier 1 should have 2 models (1 text + 1 image)
+    try std.testing.expectEqual(@as(usize, 2), tier1.len);
 
     for (tier1) |model| {
         try std.testing.expectEqual(PriorityTier.tier_1, model.priority);

@@ -1,10 +1,17 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const WhatsAppMessage = types.WhatsAppMessage;
 const WhatsAppConfig = types.WhatsAppConfig;
 const Debouncer = types.Debouncer;
+
+fn jidToE164(jid: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, jid, "@s.whatsapp.net")) |idx| return jid[0..idx];
+    if (std.mem.indexOf(u8, jid, "@g.us")) |idx| return jid[0..idx];
+    return jid;
+}
 
 /// WhatsApp session manager
 pub const WhatsAppSession = struct {
@@ -120,7 +127,7 @@ pub const WhatsAppSession = struct {
     pub fn generatePairingCode(self: *WhatsAppSession, sender_e164: []const u8) ![]const u8 {
         const code = try std.fmt.allocPrint(self.allocator, "{d}", .{std.crypto.random.int(u32)});
         const key = try self.allocator.dupe(u8, sender_e164);
-        try self.pending_pairing.put(key, std.time.timestamp());
+        try self.pending_pairing.put(key, compat.timestamp());
         return code;
     }
 
@@ -130,7 +137,7 @@ pub const WhatsAppSession = struct {
         defer self.allocator.free(entry.key);
 
         // Check if code expired (5 minutes)
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         if (now - entry.value > 300) {
             return false;
         }
@@ -143,11 +150,25 @@ pub const WhatsAppSession = struct {
 
     /// Check access control for a message
     pub fn checkAccessControl(self: *WhatsAppSession, msg: *const WhatsAppMessage) !AccessResult {
-        const result = AccessResult{
+        var result = AccessResult{
             .allowed = false,
             .reason = null,
             .pairing_code = null,
         };
+
+        // Symmetric DM wake: fromMe DMs are own messages; only allow when peer is allowlisted.
+        // Peer is inferred from chat_id (the 1:1 JID). Without from_me awareness the
+        // old baileys_wrapper unconditionally dropped fromMe; new wrapper only forwards
+        // fromMe when peer ∈ allowFrom. Here we double-guard: drop stray fromMe DMs.
+        if (msg.isDirect() and msg.from_me) {
+            const peer_e164 = jidToE164(msg.chat_id);
+            if (peer_e164.len == 0 or !self.config.isAllowedSender(peer_e164)) {
+                result.reason = "fromMe DM with non-allowlisted peer";
+                return result;
+            }
+            // Peer is allowlisted -> treat Baala's own message in peer DM as inbound from Baala
+            // (sender_e164 already set to selfE164 by wrapper for fromMe). Allow through.
+        }
 
         // Check DM policy
         if (msg.isDirect()) {

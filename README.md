@@ -2,15 +2,15 @@
 
 > **The world's tiniest AI agent computer.**
 >
-> Zig 0.15.2 powered, NVIDIA NIM native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis), Baala's Jarvis 🦀⚡
+> Zig 0.16.0 powered, NVIDIA NIM native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis), Baala's Jarvis 🦀⚡
 
 ## Build Status
 
-**Zig 0.15.2 Migration Complete** - Build and tests passing with 0 errors (Completed: February 28, 2026)
+**Zig 0.16.0 Migration Complete** - Build and tests passing with 0 errors (Completed: February 28, 2026)
 
 ## Recent Updates
 
-- **Zig 0.15.2 Migration** (February 28, 2026): All 11 phases finalized with zero errors
+- **Zig 0.16.0 Migration** (February 28, 2026): All 11 phases finalized with zero errors
 - **ArrayList API**: Fixed `toOwnedSlice()` across all 9 skill modules (nufast_physics, knowledge_base, semantic_search, local_llm, adhd_workflow, dirmacs_docs, planckeon_sites, discovery, memory_tree_search)
 - **Thread Safety**: Added mutex protection to WhatsApp channel shared state; eliminated global mutable state via per-execution skill instances
 - **HTTP Robustness**: Implemented configurable request timeouts in NIMClient (default 30s) to prevent hangs
@@ -43,10 +43,10 @@
 
 ## What is this?
 
-ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.15.2+**. It's designed as a lean, purpose-built alternative to frameworks like NullClaw and KrillClaw, optimized specifically for the Barvis ecosystem.
+ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+**. It's designed as a lean, purpose-built alternative to frameworks like NullClaw and KrillClaw, optimized specifically for the Barvis ecosystem.
 
 **Key features:**
-- NVIDIA NIM native with `qwen/qwen3.5-397b-a17b`
+- NVIDIA NIM native with `thinkingmachines/inkling`
 - Zero bloat, built from scratch
 - UTCP (Universal Tool Calling Protocol) support
 - Modular: providers, agents, channels, tools
@@ -64,7 +64,7 @@ zig build
 
 ### Prerequisites
 
-- **Zig 0.15.2+** - Install via [ziglang.org](https://ziglang.org/download/)
+- **Zig 0.16.0+** - Install via [ziglang.org](https://ziglang.org/download/)
 - **NVIDIA NIM API Key** - Get yours from [NVIDIA NIM](https://build.nvidia.com/)
 
 ## Configuration
@@ -75,8 +75,8 @@ Set required environment variables:
 # Required: NVIDIA API key
 export NVIDIA_API_KEY=nvapi-xxx
 
-# Optional: Model (defaults to qwen/qwen3.5-397b-a17b)
-export NVIDIA_MODEL=qwen/qwen3.5-397b-a17b
+# Optional: Model (defaults to thinkingmachines/inkling)
+export NVIDIA_MODEL=thinkingmachines/inkling
 
 # Moltbook integration (if using)
 export MOLTBOOK_API_KEY=your_key
@@ -436,14 +436,14 @@ MIT - Same as the rest of the Claw family.
 
 ## Recent Commits
 
-The following changes were recently committed to complete the Zig 0.15.2 migration:
+The following changes were recently committed to complete the Zig 0.16.0 migration:
 
 1. **fix: Implement Config.deinit() to free allocated fields** - Prevents memory leaks by freeing all allocated Config fields
 2. **fix: Correct fallback_models allocation in migration config** - Fixes static slice allocation issues
 3. **fix: Resolve memory leaks in provider test fixtures** - Adds proper cleanup in tests
 4. **fix: Correct ArrayList API usage in provider modules** - Fixes append() and toOwnedSlice() calls
 5. **fix: Fix ArrayList.toOwnedSlice() in WhatsApp channel** - Ensures API compliance across channel files
-6. **fix: Update knowledge_base skill for Zig 0.15.2 compatibility** - Updates skill for latest Zig version
+6. **fix: Update knowledge_base skill for Zig 0.16.0 compatibility** - Updates skill for latest Zig version
 
 ---
 

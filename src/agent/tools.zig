@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("../providers/types.zig");
 
 pub const ToolFn = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;
@@ -64,7 +65,7 @@ pub fn echoTool(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
 // Current time tool  
 pub fn currentTimeTool(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
     _ = args;
-    const now = std.time.timestamp();
+    const now = compat.timestamp();
     var buf: [32]u8 = undefined;
     const result = try std.fmt.bufPrint(&buf, "{d}", .{now});
     return try allocator.dupe(u8, result);

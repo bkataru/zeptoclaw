@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.zeptoclaw/scripts/gateway-start.sh
+ExecStart=%h/zeptoclaw/zig-out/bin/zeptoclaw-gateway
 Restart=on-failure
 RestartSec=5
 

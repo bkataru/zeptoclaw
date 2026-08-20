@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const whatsapp = @import("whatsapp_channel.zig");
 
 const StressThreadArgs = struct {
@@ -34,19 +35,19 @@ fn stressThread(arg: *StressThreadArgs) void {
         }
 
         while (!stop.load(.seq_cst)) {
-            channel.mutex.lock();
+            channel.mutex.lock(compat.getIo()) catch {};
             channel.connected = true;
             channel.self_jid = jid_copy;
             channel.self_e164 = e164_copy;
-            channel.mutex.unlock();
+            channel.mutex.unlock(compat.getIo());
         }
     } else {
         while (!stop.load(.seq_cst)) {
-            channel.mutex.lock();
+            channel.mutex.lock(compat.getIo()) catch {};
             _ = channel.connected;
             _ = channel.self_jid;
             _ = channel.self_e164;
-            channel.mutex.unlock();
+            channel.mutex.unlock(compat.getIo());
         }
     }
 }
@@ -83,7 +84,8 @@ test "thread safety stress test" {
     }
 
     // Run for 5 seconds
-    std.Thread.sleep(5 * std.time.ns_per_s);
+    _ = std.c.nanosleep(&.{ .sec = 5, .nsec = 0 }, null);
+    _ = compat;
     stop_flag.store(true, .seq_cst);
 
     // Join all threads

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Zig 0.15.2+ installed and in PATH
+- Zig 0.16.0+ installed and in PATH
 - NVIDIA NIM API key (obtain from [NVIDIA NIM](https://build.nvidia.com/))
 - Linux system with systemd (user or system)
 - Git (optional, for cloning)
@@ -62,8 +62,8 @@ cat > ~/.config/zeptoclaw/env <<'EOF'
 # Required: NVIDIA API key
 NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Optional: Model (default: qwen/qwen3.5-397b-a17b)
-# NVIDIA_MODEL=qwen/qwen3.5-397b-a17b
+# Optional: Model (default: thinkingmachines/inkling)
+# NVIDIA_MODEL=thinkingmachines/inkling
 
 # Optional: Moltbook integration
 # MOLTBOOK_API_KEY=your_key
@@ -185,7 +185,7 @@ curl http://localhost:18789/metrics | head -20
 curl -X POST http://localhost:18789/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen/qwen3.5-397b-a17b",
+    "model": "thinkingmachines/inkling",
     "messages": [{"role": "user", "content": "Hello!"}],
     "max_tokens": 50
   }'

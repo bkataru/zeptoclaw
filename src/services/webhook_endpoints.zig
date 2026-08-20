@@ -2,6 +2,8 @@
 //! All 12 webhook endpoints from OpenClaw with exact command mappings
 
 const std = @import("std");
+const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 const http = @import("http_utils.zig");
 
 const log = std.log.scoped(.webhook_endpoints);
@@ -16,8 +18,9 @@ pub const EndpointContext = struct {
     workspace_dir: []const u8,
 
     pub fn init(allocator: std.mem.Allocator) !EndpointContext {
-        const home = try std.process.getEnvVarOwned(allocator, "HOME");
-        const workspace = try std.fmt.allocPrint(allocator, "{s}/.openclaw/workspace", .{home});
+        const home = try compat.getEnvVarOwned(allocator, "HOME");
+        const compat_openclaw = zeptoclaw.openclaw_compat;
+        const workspace = try compat_openclaw.resolveWorkspaceDir(allocator);
 
         return .{
             .allocator = allocator,
@@ -42,7 +45,7 @@ pub fn health(ctx: *EndpointContext, body: ?[]const u8) !http.HttpResponse {
     return http.HttpResponse.text(ctx.allocator, "ok");
 }
 
-/// 2. gateway-restart - systemctl --user restart openclaw-gateway.service
+/// 2. gateway-restart - systemctl --user restart zeptoclaw-gateway.service (compat fallback: openclaw-gateway.service)
 pub fn gatewayRestart(ctx: *EndpointContext, body: ?[]const u8) !http.HttpResponse {
     _ = body;
 
@@ -58,7 +61,7 @@ pub fn gatewayRestart(ctx: *EndpointContext, body: ?[]const u8) !http.HttpRespon
         "/usr/bin/systemctl",
         "--user",
         "restart",
-        "openclaw-gateway.service",
+        "zeptoclaw-gateway.service",
     };
 
     const result = try http.executeCommandSimple(ctx.allocator, argv, ctx.home_dir);

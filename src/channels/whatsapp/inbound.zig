@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const types = @import("types.zig");
 const session = @import("session.zig");
 
@@ -60,7 +61,7 @@ pub const InboundProcessor = struct {
         defer self.allocator.free(key);
 
         if (self.seen_messages.get(key)) |timestamp| {
-            const now = std.time.timestamp();
+            const now = compat.timestamp();
             const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
             return elapsed_ms < self.dedupe_ttl_ms;
         }
@@ -73,12 +74,12 @@ pub const InboundProcessor = struct {
         const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ msg.chat_id, msg.id });
         errdefer self.allocator.free(key);
 
-        try self.seen_messages.put(key, std.time.timestamp());
+        try self.seen_messages.put(key, compat.timestamp());
     }
 
     /// Clean up old entries from deduplication cache
     pub fn cleanup(self: *InboundProcessor) !void {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {
@@ -197,7 +198,7 @@ pub const MessageDeduper = struct {
 
     pub fn isDuplicate(self: *MessageDeduper, key: []const u8) bool {
         if (self.cache.get(key)) |timestamp| {
-            const now = std.time.timestamp();
+            const now = compat.timestamp();
             const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
             return elapsed_ms < self.ttl_ms;
         }
@@ -206,11 +207,11 @@ pub const MessageDeduper = struct {
 
     pub fn markSeen(self: *MessageDeduper, key: []const u8) !void {
         const key_copy = try self.allocator.dupe(u8, key);
-        try self.cache.put(key_copy, std.time.timestamp());
+        try self.cache.put(key_copy, compat.timestamp());
     }
 
     pub fn cleanup(self: *MessageDeduper) !void {
-        const now = std.time.timestamp();
+        const now = compat.timestamp();
         var keys_to_remove = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer {
             for (keys_to_remove.items) |key| {

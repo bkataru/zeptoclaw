@@ -1,5 +1,6 @@
 const std = @import("std");
 const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 const Config = zeptoclaw.config.Config;
 const NIMClient = zeptoclaw.providers.nim.NIMClient;
 const Message = zeptoclaw.providers.types.Message;
@@ -54,7 +55,7 @@ test "integration: NIMClient chat completion" {
     const allocator = std.testing.allocator;
 
     // Get API key from env, skip if not set
-    const api_key = std.process.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
+    const api_key = compat.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
         if (err == error.EnvironmentVariableNotFound) {
             std.debug.print("\n[SKIP] NVIDIA_API_KEY not set, skipping integration test\n", .{});
             return;
@@ -62,8 +63,8 @@ test "integration: NIMClient chat completion" {
         return err;
     };
     // Get model from env or default
-    const model_opt = std.process.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
-    const model = if (model_opt) |m| m else try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
+    const model_opt = compat.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
+    const model = if (model_opt) |m| m else try allocator.dupe(u8, "thinkingmachines/inkling");
 
     var cfg = try makeTestConfig(allocator, api_key, model);
     defer cfg.deinit();
@@ -107,7 +108,7 @@ test "integration: NIMClient auth error handling" {
 
     // Use an invalid API key
     const invalid_key = try allocator.dupe(u8, "invalid-key");
-    const model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
+    const model = try allocator.dupe(u8, "thinkingmachines/inkling");
 
     var cfg = try makeTestConfig(allocator, invalid_key, model);
     defer cfg.deinit();
@@ -138,15 +139,15 @@ test "integration: NIMClient auth error handling" {
 test "integration: NIMClient message with tool calls" {
     const allocator = std.testing.allocator;
 
-    const api_key = std.process.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
+    const api_key = compat.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
         if (err == error.EnvironmentVariableNotFound) {
             std.debug.print("\n[SKIP] NVIDIA_API_KEY not set, skipping tool call test\n", .{});
             return;
         }
         return err;
     };
-    const model_opt = std.process.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
-    const model = if (model_opt) |m| m else try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
+    const model_opt = compat.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
+    const model = if (model_opt) |m| m else try allocator.dupe(u8, "thinkingmachines/inkling");
 
     var cfg = try makeTestConfig(allocator, api_key, model);
     defer cfg.deinit();
@@ -187,7 +188,7 @@ test "integration: agent startup" {
     const allocator = std.testing.allocator;
 
     // Get API key from env, skip if not set
-    const api_key = std.process.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
+    const api_key = compat.getEnvVarOwned(allocator, "NVIDIA_API_KEY") catch |err| {
         if (err == error.EnvironmentVariableNotFound) {
             std.debug.print("\n[SKIP] NVIDIA_API_KEY not set, skipping agent startup test\n", .{});
             return;
@@ -195,7 +196,7 @@ test "integration: agent startup" {
         return err;
     };
 
-    const model = try allocator.dupe(u8, "qwen/qwen3.5-397b-a17b");
+    const model = try allocator.dupe(u8, "thinkingmachines/inkling");
 
 
     var cfg = try makeTestConfig(allocator, api_key, model);

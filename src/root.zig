@@ -35,6 +35,8 @@ pub const channels = struct {
 // Configuration
 pub const config = @import("config.zig");
 pub const validator = @import("config/validator.zig");
+pub const compat = @import("compat.zig");
+pub const openclaw_compat = @import("openclaw_compat/openclaw.zig");
 
 // Autonomous Agent
 // Autonomous Agent
@@ -64,9 +66,9 @@ pub const skills = struct {
 // BACKWARDS COMPATIBILITY (old test functions)
 // ============================================================================
 
-pub fn printAnotherMessage(writer: *std.fs.File) !void {
-    try writer.writeAll("Run `zig build test` to run the tests.\n");
-    try writer.writeAll("\n");
+pub fn printAnotherMessage(writer: *std.Io.File) !void {
+    try writer.writeStreamingAll(compat.getIo(), "Run `zig build test` to run the tests.\n");
+    try writer.writeStreamingAll(compat.getIo(), "\n");
 }
 
 pub fn add(a: i32, b: i32) i32 {

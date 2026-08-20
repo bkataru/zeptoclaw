@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const config_module = @import("../config.zig");
+const compat = @import("../compat.zig");
 
 
 
@@ -21,7 +22,7 @@ pub const NIMClient = struct {
             .model = cfg.nim_model,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = 30000,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
 
@@ -33,7 +34,7 @@ pub const NIMClient = struct {
             .model = model_id,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = 30000,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
 
@@ -45,7 +46,7 @@ pub const NIMClient = struct {
             .model = model_id,
             .base_url = base_url,
             .timeout_ms = 30000,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
 
@@ -77,7 +78,7 @@ pub fn deinit(self: *NIMClient) void {
     /// Send chat completion request and return response
     pub fn chat(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
         // Build request body as JSON string
-        var out = std.io.Writer.Allocating.init(self.allocator);
+        var out = std.Io.Writer.Allocating.init(self.allocator);
         defer out.deinit();
 
         var stringifier = std.json.Stringify{
@@ -132,14 +133,14 @@ pub fn deinit(self: *NIMClient) void {
         };
 
         const body = out.written();
-        var timer = std.time.Timer.start() catch return types.ProviderError.Network;
+        const start_ns = compat.timestamp(); // fallback
         const overall_timeout_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms;
 
         // Build Authorization header value
-        var auth_buf = std.ArrayList(u8){};
+        var auth_buf: std.ArrayList(u8) = .empty;
         defer auth_buf.deinit(self.allocator);
-        auth_buf.writer(self.allocator).writeAll("Bearer ") catch return types.ProviderError.Network;
-        auth_buf.writer(self.allocator).writeAll(self.api_key) catch return types.ProviderError.Network;
+        auth_buf.appendSlice(self.allocator, "Bearer ") catch return types.ProviderError.Network;
+        auth_buf.appendSlice(self.allocator, self.api_key) catch return types.ProviderError.Network;
 
         // Make HTTP request
         // Make HTTP request
@@ -155,24 +156,24 @@ pub fn deinit(self: *NIMClient) void {
         // Send body
         // Send body with timeout enforcement
         req.sendBodyComplete(body) catch {
-            if (timer.read() > overall_timeout_ns) {
+            if (@as(u64, @intCast(compat.timestamp() - start_ns)) * std.time.ns_per_s > overall_timeout_ns) {
                 return types.ProviderError.Timeout;
             }
             return types.ProviderError.Network;
         };
-        if (timer.read() > overall_timeout_ns) {
+        if ((@as(u64, @intCast(compat.timestamp() - start_ns)) * @as(u64, std.time.ns_per_s)) > overall_timeout_ns) {
             return types.ProviderError.Timeout;
         }
 
         // Receive response head
         var redirect_buffer: [1024]u8 = undefined;
         var response = req.receiveHead(&redirect_buffer) catch {
-            if (timer.read() > overall_timeout_ns) {
+            if (@as(u64, @intCast(compat.timestamp() - start_ns)) * std.time.ns_per_s > overall_timeout_ns) {
                 return types.ProviderError.Timeout;
             }
             return types.ProviderError.Network;
         };
-        if (timer.read() > overall_timeout_ns) {
+        if ((@as(u64, @intCast(compat.timestamp() - start_ns)) * @as(u64, std.time.ns_per_s)) > overall_timeout_ns) {
             return types.ProviderError.Timeout;
         }
         // Check response status
@@ -190,19 +191,32 @@ pub fn deinit(self: *NIMClient) void {
 
         // Read all remaining bytes from response
         const response_bytes = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch {
-            if (timer.read() > overall_timeout_ns) {
+            if (@as(u64, @intCast(compat.timestamp() - start_ns)) * std.time.ns_per_s > overall_timeout_ns) {
                 return types.ProviderError.Timeout;
             }
             return types.ProviderError.Network;
         };
-        if (timer.read() > overall_timeout_ns) {
+        if ((@as(u64, @intCast(compat.timestamp() - start_ns)) * @as(u64, std.time.ns_per_s)) > overall_timeout_ns) {
             return types.ProviderError.Timeout;
         }
         defer self.allocator.free(response_bytes);
         // Parse JSON response
-        var parsed = std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_bytes, .{}) catch return types.ProviderError.InvalidResponse;
+        var parsed = std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return types.ProviderError.InvalidResponse;
         defer parsed.deinit();
-        return parsed.value;
+        // Deep copy out of arena before defer frees it — ChatCompletionResponse owns allocs
+        const val = parsed.value;
+        const duped_id = self.allocator.dupe(u8, val.id) catch return types.ProviderError.InvalidResponse;
+        errdefer self.allocator.free(duped_id);
+        const duped_model = self.allocator.dupe(u8, val.model) catch return types.ProviderError.InvalidResponse;
+        errdefer self.allocator.free(duped_model);
+        const duped_choices = self.allocator.alloc(types.Choice, val.choices.len) catch return types.ProviderError.InvalidResponse;
+        for (val.choices, 0..) |ch, i| {
+            var c = ch.message.dupe(self.allocator) catch return types.ProviderError.InvalidResponse;
+            errdefer c.deinit(self.allocator);
+            duped_choices[i] = .{ .index = ch.index, .message = c, .finish_reason = if (ch.finish_reason) |fr| self.allocator.dupe(u8, fr) catch return types.ProviderError.InvalidResponse else null };
+        }
+        const usage = val.usage;
+        return .{ .id = duped_id, .model = duped_model, .choices = duped_choices, .created = val.created, .usage = usage };
     }
 };
 
@@ -438,7 +452,7 @@ test "NIMClient model name flexibility" {
 
     // Test with various model names
     const models = [_][]const u8{
-        "qwen/qwen3.5-397b-a17b",
+        "thinkingmachines/inkling",
         "meta/llama3-70b-instruct",
         "mistralai/mixtral-8x7b-instruct-v0.1",
         "",

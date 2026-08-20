@@ -1,25 +1,26 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const input = @import("input.zig");
 const cli_utils = @import("cli_utils.zig");
 
 pub fn runInteractiveSession(agent: anytype) !void {
     const allocator = agent.allocator;
-    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout_file = std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 
     // Show welcome message
-    try stdout_file.writeAll(cli_utils.formatMessagePrefix(.system));
-    try stdout_file.writeAll("Zeptoclaw AI Agent - Type /help for commands\n\n");
+    try stdout_file.writeStreamingAll(compat.getIo(), cli_utils.formatMessagePrefix(.system));
+    try stdout_file.writeStreamingAll(compat.getIo(), "Zeptoclaw AI Agent - Type /help for commands\n\n");
 
     // Main REPL loop
     while (true) {
         // Show prompt
-        try stdout_file.writeAll("\x1b[32mZeptoclaw>\x1b[0m ");
+        try stdout_file.writeStreamingAll(compat.getIo(), "\x1b[32mZeptoclaw>\x1b[0m ");
 
         // Read input
         const user_input = input.readLine(allocator, "") catch |err| {
             if (err == error.EndOfStream) {
                 // EOF - exit gracefully
-                try stdout_file.writeAll("\nGoodbye!\n");
+                try stdout_file.writeStreamingAll(compat.getIo(), "\nGoodbye!\n");
                 return;
             }
             return err;
@@ -43,55 +44,55 @@ pub fn runInteractiveSession(agent: anytype) !void {
 
 
         // Regular message - run through agent
-        try stdout_file.writeAll(cli_utils.formatMessagePrefix(.user));
-        try stdout_file.writeAll(trimmed);
-        try stdout_file.writeAll("\n");
+        try stdout_file.writeStreamingAll(compat.getIo(), cli_utils.formatMessagePrefix(.user));
+        try stdout_file.writeStreamingAll(compat.getIo(), trimmed);
+        try stdout_file.writeStreamingAll(compat.getIo(), "\n");
 
         // Get response from agent (agent manages its own session)
-        try stdout_file.writeAll(cli_utils.formatMessagePrefix(.assistant));
+        try stdout_file.writeStreamingAll(compat.getIo(), cli_utils.formatMessagePrefix(.assistant));
         const response = try agent.run(trimmed);
         defer allocator.free(response);
 
         // Display response
-        try stdout_file.writeAll(response);
-        try stdout_file.writeAll("\n");
+        try stdout_file.writeStreamingAll(compat.getIo(), response);
+        try stdout_file.writeStreamingAll(compat.getIo(), "\n");
     }
 }
 
-fn handleCommand(agent: anytype, cmd: []const u8, writer: std.fs.File) !bool {
+fn handleCommand(agent: anytype, cmd: []const u8, writer: std.Io.File) !bool {
     if (std.mem.eql(u8, cmd, "/help")) {
-        try writer.writeAll("Available commands:\n");
-        try writer.writeAll("  /help - Show this help\n");
-        try writer.writeAll("  /exit - Exit the program\n");
-        try writer.writeAll("  /clear - Clear conversation history\n");
-        try writer.writeAll("  /session - Show session stats\n");
-        try writer.writeAll("\n");
+        try writer.writeStreamingAll(compat.getIo(), "Available commands:\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /help - Show this help\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /exit - Exit the program\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /clear - Clear conversation history\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /session - Show session stats\n");
+        try writer.writeStreamingAll(compat.getIo(), "\n");
         return true;
     }
 
     if (std.mem.eql(u8, cmd, "/exit") or std.mem.eql(u8, cmd, "/quit")) {
-        try writer.writeAll("Goodbye!\n");
+        try writer.writeStreamingAll(compat.getIo(), "Goodbye!\n");
         return false;
     }
 
     if (std.mem.eql(u8, cmd, "/clear")) {
         // Clear the agent's session
         agent.session.clear();
-        try writer.writeAll("Conversation cleared.\n\n");
+        try writer.writeStreamingAll(compat.getIo(), "Conversation cleared.\n\n");
         return true;
     }
 
     if (std.mem.eql(u8, cmd, "/session")) {
-        try writer.writeAll("Session stats:\n");
-        try writer.writeAll("  Messages: ");
+        try writer.writeStreamingAll(compat.getIo(), "Session stats:\n");
+        try writer.writeStreamingAll(compat.getIo(), "  Messages: ");
         var buf: [32]u8 = undefined;
         const len = try std.fmt.bufPrint(&buf, "{d}", .{agent.session.message_count});
-        try writer.writeAll(len);
-        try writer.writeAll("\n");
-        try writer.writeAll("  Max messages: ");
+        try writer.writeStreamingAll(compat.getIo(), len);
+        try writer.writeStreamingAll(compat.getIo(), "\n");
+        try writer.writeStreamingAll(compat.getIo(), "  Max messages: ");
         const len2 = try std.fmt.bufPrint(&buf, "{d}", .{agent.session.max_messages});
-        try writer.writeAll(len2);
-        try writer.writeAll("\n\n");
+        try writer.writeStreamingAll(compat.getIo(), len2);
+        try writer.writeStreamingAll(compat.getIo(), "\n\n");
         return true;
     }
 
@@ -101,8 +102,8 @@ fn handleCommand(agent: anytype, cmd: []const u8, writer: std.fs.File) !bool {
 }
 
 pub fn showPrompt() !void {
-    const stdout_file = std.fs.File.stdout();
-    try stdout_file.writeAll("Zeptoclaw> ");
+    const stdout_file = std.Io.File.stdout();
+    try stdout_file.writeStreamingAll(compat.getIo(), "Zeptoclaw> ");
 }
 
 test "CLI module loads" {

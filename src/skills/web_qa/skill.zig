@@ -2,6 +2,7 @@
 //! Web app debugging — Chrome headless screenshots, CDN issues, SRI hash fixes, Canvas quirks
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const execution_context = @import("../execution_context.zig");
 
@@ -95,7 +96,7 @@ fn handleScreenshot(ctx: *ExecutionContext, message: []const u8, cfg: Config) !S
     }
 
     // Generate screenshot filename
-    const timestamp = std.time.timestamp();
+    const timestamp = compat.timestamp();
     const filename = try std.fmt.allocPrint(ctx.allocator, "screenshot_{d}.png", .{timestamp});
     defer ctx.allocator.free(filename);
 

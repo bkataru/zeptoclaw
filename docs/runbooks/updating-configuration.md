@@ -98,7 +98,7 @@ Common top-level fields:
 {
   "nvidia": {
     "api_key": "nvapi-...",
-    "model": "qwen/qwen3.5-397b-a17b",
+    "model": "thinkingmachines/inkling",
     "timeout_ms": 30000,
     "retry_policy": { "max_retries": 3, "backoff_ms": 1000 }
   },
@@ -193,7 +193,7 @@ Send a test request:
 ```bash
 curl -s -X POST http://localhost:18789/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen/qwen3.5-397b-a17b","messages":[{"role":"user","content":"test"}]}' \
+  -d '{"model":"thinkingmachines/inkling","messages":[{"role":"user","content":"test"}]}' \
   -w "\nHTTP %{http_code}\n" | tail -1
 # Expected: HTTP 200
 ```

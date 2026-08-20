@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("types.zig");
 
 /// Moltbook API client
@@ -29,7 +30,7 @@ pub const MoltbookClient = struct {
             .allocator = allocator,
             .api_key = api_key,
             .base_url = DEFAULT_BASE_URL,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = std.http.Client{ .allocator = allocator, .io = compat.io() },
             .agent_id = agent_id,
             .agent_name = agent_name,
             .monitored_posts = monitored_posts_list,

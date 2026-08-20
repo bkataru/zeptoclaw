@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const zeptoclaw = @import("zeptoclaw");
+const compat = zeptoclaw.compat;
 
 const TokenAuth = zeptoclaw.gateway.token_auth.TokenAuth;
 const SessionStore = zeptoclaw.gateway.session_store.SessionStore;
@@ -18,14 +19,14 @@ const RateLimiter = zeptoclaw.autonomous.rate_limiter.RateLimiter;
 var global_server: *HttpServer = undefined;
 
 // Signal handler for graceful shutdown
-fn sigHandler(sig: i32) callconv(.c) void {
+fn sigHandler(sig: std.os.linux.SIG) callconv(.c) void {
     _ = sig;
     if (global_server.shutdown_requested.load(.seq_cst) == false) {
         global_server.shutdown_requested.store(true, .seq_cst);
     }
 }
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -59,21 +60,21 @@ pub fn main() !void {
     defer autonomous_state_store.deinit();
 
     // Load Moltbook configuration from environment
-    const moltbook_api_key = std.process.getEnvVarOwned(allocator, "MOLTBOOK_API_KEY") catch {
-        std.debug.print("Error: MOLTBOOK_API_KEY environment variable not set\n", .{});
-        return error.MissingMoltbookConfig;
+    const moltbook_api_key = compat.getEnvVarOwned(allocator, "MOLTBOOK_API_KEY") catch |err| blk: {
+        std.debug.print("Warn: MOLTBOOK_API_KEY not set ({s}) — autonomous features disabled\n", .{@errorName(err)});
+        break :blk try allocator.dupe(u8, "");
     };
     defer allocator.free(moltbook_api_key);
 
-    const moltbook_agent_id = std.process.getEnvVarOwned(allocator, "MOLTBOOK_AGENT_ID") catch {
-        std.debug.print("Error: MOLTBOOK_AGENT_ID environment variable not set\n", .{});
-        return error.MissingMoltbookConfig;
+    const moltbook_agent_id = compat.getEnvVarOwned(allocator, "MOLTBOOK_AGENT_ID") catch |err| blk: {
+        std.debug.print("Warn: MOLTBOOK_AGENT_ID not set ({s})\n", .{@errorName(err)});
+        break :blk try allocator.dupe(u8, "");
     };
     defer allocator.free(moltbook_agent_id);
 
-    const moltbook_agent_name = std.process.getEnvVarOwned(allocator, "MOLTBOOK_AGENT_NAME") catch {
-        std.debug.print("Error: MOLTBOOK_AGENT_NAME environment variable not set\n", .{});
-        return error.MissingMoltbookConfig;
+    const moltbook_agent_name = compat.getEnvVarOwned(allocator, "MOLTBOOK_AGENT_NAME") catch |err| blk: {
+        std.debug.print("Warn: MOLTBOOK_AGENT_NAME not set ({s})\n", .{@errorName(err)});
+        break :blk try allocator.dupe(u8, "");
     };
     defer allocator.free(moltbook_agent_name);
 
@@ -111,8 +112,8 @@ pub fn main() !void {
         .mask = std.os.linux.sigemptyset(),
         .flags = 0,
     };
-    _ = std.os.linux.sigaction(2, &act, null);
-    _ = std.os.linux.sigaction(15, &act, null);
+    _ = std.os.linux.sigaction(.INT, &act, null);
+    _ = std.os.linux.sigaction(.TERM, &act, null);
     defer server.deinit();
 
     // Print startup information

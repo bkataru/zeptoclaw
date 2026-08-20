@@ -19,11 +19,11 @@ test "git_workflow: init with default config" {
 test "git_workflow: init with custom config" {
     const allocator = std.testing.allocator;
 
-    var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
-    defer obj.deinit();
-    try obj.put("default_branch", std.json.Value{ .string = "develop" });
-    try obj.put("enable_rebase", std.json.Value{ .bool = false });
-    try obj.put("force_push_protection", std.json.Value{ .bool = false });
+    var obj = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    defer obj.deinit(allocator);
+    try obj.put(allocator, "default_branch", std.json.Value{ .string = "develop" });
+    try obj.put(allocator, "enable_rebase", std.json.Value{ .bool = false });
+    try obj.put(allocator, "force_push_protection", std.json.Value{ .bool = false });
     const config_value = std.json.Value{ .object = obj };
 
     try git_workflow.skill.init(allocator, config_value);
@@ -230,9 +230,9 @@ test "git_workflow: /git-push to feature branch with force protection should suc
 test "git_workflow: /git-push without force protection on default branch should succeed" {
     const allocator = std.testing.allocator;
 
-    var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
-    defer obj.deinit();
-    try obj.put("force_push_protection", std.json.Value{ .bool = false });
+    var obj = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    defer obj.deinit(allocator);
+    try obj.put(allocator, "force_push_protection", std.json.Value{ .bool = false });
     const config_value = std.json.Value{ .object = obj };
 
     try git_workflow.skill.init(allocator, config_value);

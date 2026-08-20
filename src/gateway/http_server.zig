@@ -2,13 +2,14 @@
 //! Provides HTTP and WebSocket server for ZeptoClaw gateway
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 const token_auth = @import("token_auth.zig");
 const session_store = @import("session_store.zig");
 const autonomous = @import("../autonomous/autonomous.zig");
 pub const HttpServer = struct {
     allocator: std.mem.Allocator,
-    address: std.net.Address,
-    listener: std.net.Server,
+    address: std.Io.net.IpAddress,
+    listener: std.Io.net.Server,
     auth: *token_auth.TokenAuth,
     session_store: *session_store.SessionStore,
     control_ui_enabled: bool,
@@ -21,7 +22,7 @@ pub const HttpServer = struct {
     request_counter: u64,
 
     const WebSocketClient = struct {
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
         last_ping: i64,
         authenticated: bool,
     };
@@ -38,13 +39,13 @@ pub const HttpServer = struct {
     ) !HttpServer {
         // Parse bind address
         const address = if (std.mem.eql(u8, bind_addr, "lan"))
-            try std.net.Address.parseIp("0.0.0.0", port)
+            try std.Io.net.IpAddress.parse("0.0.0.0", port)
         else if (std.mem.eql(u8, bind_addr, "loopback"))
-            try std.net.Address.parseIp("127.0.0.1", port)
+            try std.Io.net.IpAddress.parse("127.0.0.1", port)
         else
-            try std.net.Address.parseIp(bind_addr, port);
+            try std.Io.net.IpAddress.parse(bind_addr, port);
 
-        const listener = try address.listen(.{
+        const listener = try address.listen(compat.getIo(), .{
             .reuse_address = true,
 
         });
@@ -60,14 +61,14 @@ pub const HttpServer = struct {
             .running = false,
             .websocket_clients = try std.ArrayList(*WebSocketClient).initCapacity(allocator, 0),
             .autonomous_agent = autonomous_agent,
-            .start_time = std.time.timestamp(),
+            .start_time = compat.timestamp(),
             .request_counter = 0,
             .shutdown_requested = std.atomic.Value(bool).init(false),
         };
     }
 
     pub fn deinit(self: *HttpServer) void {
-        self.listener.deinit();
+        self.listener.deinit(compat.getIo());
         for (self.websocket_clients.items) |client| {
             self.allocator.destroy(client);
         }
@@ -80,7 +81,7 @@ pub const HttpServer = struct {
         std.debug.print("Gateway server listening on {any}\n", .{self.address});
 
         while (self.running) {
-            const connection = self.listener.accept() catch |err| {
+            const connection = self.listener.accept(compat.getIo()) catch |err| {
                 if (self.shutdown_requested.load(.seq_cst)) {
                     self.running = false;
                     break;
@@ -92,7 +93,7 @@ pub const HttpServer = struct {
             // Handle connection in a new task (simplified - in production use thread pool)
             self.handleConnection(connection) catch |err| {
                 std.debug.print("Connection error: {}\n", .{err});
-                connection.stream.close();
+                connection.close(compat.getIo());
             };
         }
     }
@@ -103,11 +104,13 @@ pub const HttpServer = struct {
     }
 
     /// Handle an incoming connection
-    fn handleConnection(self: *HttpServer, connection: std.net.Server.Connection) !void {
-        defer connection.stream.close();
+    fn handleConnection(self: *HttpServer, connection: std.Io.net.Stream) !void {
+        defer connection.close(compat.getIo());
 
         var buffer: [4096]u8 = undefined;
-        const request_data = try connection.stream.read(&buffer);
+        var read_buf: [4096]u8 = undefined;
+        var reader = connection.reader(compat.getIo(), &read_buf);
+        const request_data = reader.interface.readSliceShort(buffer[0..]) catch return;
 
         if (request_data == 0) return;
 
@@ -117,18 +120,18 @@ pub const HttpServer = struct {
         // Check authentication
         const auth_header = request.headers.get("X-Auth-Token");
         if (auth_header == null) {
-            try self.sendErrorResponse(connection.stream, 401, "Unauthorized", "Missing X-Auth-Token header");
+            try self.sendErrorResponse(connection, 401, "Unauthorized", "Missing X-Auth-Token header");
             return;
         }
 
         const is_valid = try self.auth.validate(auth_header.?);
         if (!is_valid) {
-            try self.sendErrorResponse(connection.stream, 401, "Unauthorized", "Invalid or expired token");
+            try self.sendErrorResponse(connection, 401, "Unauthorized", "Invalid or expired token");
             return;
         }
 
         // Route request
-        try self.routeRequest(connection.stream, &request);
+        try self.routeRequest(connection, &request);
     }
 
     const HttpRequest = struct {
@@ -183,7 +186,7 @@ pub const HttpServer = struct {
     }
 
     /// Route request to appropriate handler
-    fn routeRequest(self: *HttpServer, stream: std.net.Stream, request: *HttpRequest) !void {
+    fn routeRequest(self: *HttpServer, stream: std.Io.net.Stream, request: *HttpRequest) !void {
         // Clean up request headers
         {
             var iter = request.headers.iterator();
@@ -266,12 +269,12 @@ pub const HttpServer = struct {
     }
 
     /// Handle /health endpoint
-    fn handleHealth(stream: std.net.Stream) !void {
+    fn handleHealth(stream: std.Io.net.Stream) !void {
         const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"healthy\"}\r\n";
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
     /// Handle /status endpoint
-    fn handleStatus(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleStatus(self: *HttpServer, stream: std.Io.net.Stream) !void {
         const stats = try self.session_store.getStats();
 
         var response_buffer: [1024]u8 = undefined;
@@ -298,19 +301,19 @@ pub const HttpServer = struct {
             self.websocket_clients.items.len,
         });
 
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
 
     /// Handle /metrics endpoint (Prometheus format)
-    fn handleMetrics(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleMetrics(self: *HttpServer, stream: std.Io.net.Stream) !void {
         var response_buffer: [1024]u8 = undefined;
-        const uptime = std.time.timestamp() - self.start_time;
+        const uptime = compat.timestamp() - self.start_time;
         const response = try std.fmt.bufPrint(&response_buffer, "# HELP zeptoclaw_requests_total Total number of HTTP requests handled\n# TYPE zeptoclaw_requests_total counter\nzeptoclaw_requests_total {d}\n# HELP zeptoclaw_uptime_seconds Uptime in seconds\n# TYPE zeptoclaw_uptime_seconds gauge\nzeptoclaw_uptime_seconds {d}\n", .{ self.request_counter, uptime });
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
 
     /// Handle GET /sessions endpoint
-    fn handleListSessions(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleListSessions(self: *HttpServer, stream: std.Io.net.Stream) !void {
         const sessions = try self.session_store.listActiveSessions();
         defer self.allocator.free(sessions);
 
@@ -328,23 +331,23 @@ pub const HttpServer = struct {
 
         try response.appendSlice(self.allocator, "]}\r\n");
 
-        _ = try stream.writeAll(response.items);
+        _ = try compat.streamWriteAll(stream, response.items);
     }
 
     /// Handle POST /sessions/:id/terminate endpoint
-    fn handleTerminateSession(self: *HttpServer, stream: std.net.Stream, session_id: []const u8) !void {
+    fn handleTerminateSession(self: *HttpServer, stream: std.Io.net.Stream, session_id: []const u8) !void {
         const terminated = try self.session_store.terminateSession(session_id);
 
         if (terminated) {
             const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\r\n";
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 404, "Not Found", "Session not found");
         }
     }
 
     /// Handle GET /config endpoint
-    fn handleGetConfig(stream: std.net.Stream) !void {
+    fn handleGetConfig(stream: std.Io.net.Stream) !void {
         const response =
             \\HTTP/1.1 200 OK
             \\Content-Type: application/json
@@ -352,10 +355,10 @@ pub const HttpServer = struct {
             \\{"control_ui_enabled":true,"allow_insecure_auth":false}
             \\
         ;
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
     /// Handle POST /config endpoint
-    fn handleUpdateConfig(stream: std.net.Stream) !void {
+    fn handleUpdateConfig(stream: std.Io.net.Stream) !void {
         const response =
             \\HTTP/1.1 200 OK
             \\Content-Type: application/json
@@ -363,11 +366,11 @@ pub const HttpServer = struct {
             \\{"logs":["Gateway started","Session created","Request processed"]}
             \\
         ;
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
 
     /// Handle WebSocket upgrade request
-    fn handleWebSocketUpgrade(self: *HttpServer, stream: std.net.Stream, request: *const HttpRequest) !void {
+    fn handleWebSocketUpgrade(self: *HttpServer, stream: std.Io.net.Stream, request: *const HttpRequest) !void {
         // Check for WebSocket upgrade headers
         const upgrade = request.headers.get("Upgrade");
         _ = request.headers.get("Connection"); // Not used but required for WebSocket
@@ -393,13 +396,13 @@ pub const HttpServer = struct {
             \\
         , .{accept_key});
 
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
 
         // Create WebSocket client
         const client = try self.allocator.create(WebSocketClient);
         client.* = .{
-            .address = try std.net.Address.parseIp("127.0.0.1", 0), // Placeholder
-            .last_ping = std.time.timestamp(),
+            .address = try std.Io.net.IpAddress.parse("127.0.0.1", 0), // Placeholder
+            .last_ping = compat.timestamp(),
             .authenticated = true,
         };
         try self.websocket_clients.append(self.allocator, client);
@@ -415,11 +418,13 @@ pub const HttpServer = struct {
 return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
     /// Handle WebSocket messages
-    fn handleWebSocketMessages(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleWebSocketMessages(self: *HttpServer, stream: std.Io.net.Stream) !void {
         var buffer: [4096]u8 = undefined;
 
         while (self.running) {
-            const n = stream.read(&buffer) catch |err| {
+            var ws_buf: [4096]u8 = undefined;
+            var ws_reader = stream.reader(compat.getIo(), &ws_buf);
+            const n = ws_reader.interface.readSliceShort(buffer[0..]) catch |err| {
                 if (err == error.EndOfStream) break;
                 continue;
             };
@@ -434,7 +439,7 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
 
     /// Handle Control UI request
-    fn handleControlUI(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleControlUI(self: *HttpServer, stream: std.Io.net.Stream) !void {
         _ = self;
         const html =
             \\HTTP/1.1 200 OK
@@ -480,11 +485,11 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             \\</html>
             \\
         ;
-        _ = try stream.writeAll(html);
+        _ = try compat.streamWriteAll(stream, html);
     }
 
     /// Handle POST /autonomous/run endpoint
-    fn handleAutonomousRun(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleAutonomousRun(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const action = try agent.selectNextAction();
             const result = try agent.executeAction(action);
@@ -497,14 +502,14 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
                 \\{{"action":"{s}","success":true,"result":"{s}"}}
                 \\
             , .{ @tagName(action), @tagName(result) });
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
 
     /// Handle POST /autonomous/browse endpoint
-    fn handleAutonomousBrowse(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleAutonomousBrowse(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const action = autonomous.types.AutonomousAction.BROWSE_FEED;
             const result = try agent.executeAction(action);
@@ -517,13 +522,13 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
                 \\{{"success":true,"action":"{s}","result":"{s}"}}
                 \\
             , .{ @tagName(action), @tagName(result) });
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
     /// Handle POST /autonomous/search endpoint
-    fn handleAutonomousSearch(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleAutonomousSearch(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const action = autonomous.types.AutonomousAction.SEARCH_TOPICS;
             const result = try agent.executeAction(action);
@@ -536,13 +541,13 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
                 \\{{"success":true,"action":"{s}","result":"{s}"}}
                 \\
             , .{ @tagName(action), @tagName(result) });
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
     /// Handle POST /autonomous/post endpoint
-    fn handleAutonomousPost(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleAutonomousPost(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const action = autonomous.types.AutonomousAction.CREATE_POST;
             const result = try agent.executeAction(action);
@@ -555,13 +560,13 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
                 \\{{"success":true,"action":"{s}","result":"{s}"}}
                 \\
             , .{ @tagName(action), @tagName(result) });
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
     /// Handle POST /autonomous/idea endpoint
-    fn handleAutonomousIdea(self: *HttpServer, stream: std.net.Stream, body: []const u8) !void {
+    fn handleAutonomousIdea(self: *HttpServer, stream: std.Io.net.Stream, body: []const u8) !void {
         if (self.autonomous_agent) |agent| {
             // Parse JSON body to extract idea
             // For now, just use the body as the idea
@@ -569,14 +574,14 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             try agent.state_store.addPostIdea(idea);
 
             const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\r\n";
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
 
     /// Handle GET /discoveries endpoint
-    fn handleGetDiscoveries(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleGetDiscoveries(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const discoveries = try agent.state_store.getDiscoveries();
             defer self.allocator.free(discoveries);
@@ -593,44 +598,44 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             }
 
             try response.appendSlice(self.allocator, "]}\r\n");
-            _ = try stream.writeAll(response.items);
+            _ = try compat.streamWriteAll(stream, response.items);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
 
     /// Handle POST /discoveries/clear endpoint
-    fn handleClearDiscoveries(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleClearDiscoveries(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             try agent.state_store.clearDiscoveries();
 
             const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\r\n";
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
 
     /// Handle POST /heartbeat endpoint
-    fn handleHeartbeat(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleHeartbeat(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             // Parse JSON body to extract heartbeat data
             // For now, just update the local agent timestamp
-            const now = std.time.timestamp();
+            const now = compat.timestamp();
             try agent.state_store.updateLocalAgentHeartbeat(now);
 
             const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\r\n";
-            _ = try stream.writeAll(response);
+            try compat.streamWriteAll(stream, response);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
     }
 
     /// Handle GET /state endpoint
-    fn handleGetState(self: *HttpServer, stream: std.net.Stream) !void {
+    fn handleGetState(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
             const state = agent.state_store.state;
-            const rate_limiter_status = agent.rate_limiter.getStatus(std.time.timestamp());
+            const rate_limiter_status = agent.rate_limiter.getStatus(compat.timestamp());
 
         var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer response.deinit(self.allocator);
@@ -671,7 +676,7 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             });
 
             try response.appendSlice(self.allocator, "\r\n");
-            _ = try stream.writeAll(response.items);
+            _ = try compat.streamWriteAll(stream, response.items);
         } else {
             try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
@@ -679,7 +684,7 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
 
     /// Handle POST /gateway/incident endpoint
 /// Handle POST /gateway/incident endpoint
-fn handleGatewayIncident(_self: *HttpServer, _stream: std.net.Stream, _body: []const u8) !void {
+fn handleGatewayIncident(_self: *HttpServer, _stream: std.Io.net.Stream, _body: []const u8) !void {
     _ = _self;
     _ = _stream;
     _ = _body;
@@ -688,7 +693,7 @@ fn handleGatewayIncident(_self: *HttpServer, _stream: std.net.Stream, _body: []c
 
 ///// Handle GET /gateway/incidents endpoint
 //fn handleGetGatewayIncidents - stub
-fn handleGetGatewayIncidents(self: *HttpServer, stream: std.net.Stream) !void {
+fn handleGetGatewayIncidents(self: *HttpServer, stream: std.Io.net.Stream) !void {
     if (self.autonomous_agent) |agent| {
         const incidents = try agent.state_store.getGatewayIncidents();
         var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
@@ -699,13 +704,13 @@ fn handleGetGatewayIncidents(self: *HttpServer, stream: std.net.Stream) !void {
             try response.print(self.allocator, "{{\"type\":\"{s}\",\"timestamp\":{d}}}", .{incident.type, incident.timestamp});
         }
         try response.appendSlice(self.allocator, "]}\r\n");
-        _ = try stream.writeAll(response.items);
+        _ = try compat.streamWriteAll(stream, response.items);
     } else {
         try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
     }
 }
 
-fn sendErrorResponse(self: *HttpServer, stream: std.net.Stream, status_code: u16, status_text: []const u8, message: []const u8) !void {
+fn sendErrorResponse(self: *HttpServer, stream: std.Io.net.Stream, status_code: u16, status_text: []const u8, message: []const u8) !void {
         _ = self;
         var response_buffer: [512]u8 = undefined;
         const response = try std.fmt.bufPrint(&response_buffer,
@@ -716,6 +721,6 @@ fn sendErrorResponse(self: *HttpServer, stream: std.net.Stream, status_code: u16
             \\
         , .{ status_code, status_text, message });
 
-        _ = try stream.writeAll(response);
+        try compat.streamWriteAll(stream, response);
     }
 };

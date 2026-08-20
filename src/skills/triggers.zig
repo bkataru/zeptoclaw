@@ -2,6 +2,7 @@
 //! Handles trigger matching for skill activation
 
 const std = @import("std");
+const compat = @import("../compat.zig");
 const types = @import("types.zig");
 
 const Trigger = types.Trigger;
@@ -326,7 +327,7 @@ test "TriggerScheduler shouldFire" {
     // Don't call deinit since cron_expr is a string literal
 
     // This test is time-dependent, so we just check it doesn't crash
-    _ = try scheduler.shouldFire(trigger, std.time.timestamp());
+    _ = try scheduler.shouldFire(trigger, compat.timestamp());
 }
 
 test "TriggerEvent matches" {
