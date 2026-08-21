@@ -94,6 +94,12 @@ pub const NoiseHandshake = struct {
         @memcpy(&res.read_key, okm[32..64]);
         return res;
     }
+
+    pub fn verifyServerCert(cert_decrypted: []const u8, static_decrypted: []const u8) !void {
+        _ = cert_decrypted; _ = static_decrypted;
+        // Full verify: CertChain proto -> intermediate sig WACertPubKey Ed25519, leaf sig intermediate, validity, hmac(key)==static
+        // Stub keeps BUILD:0 — real proto decode + Ed25519 DjbType 0x05 verification next slice
+    }
 };
 
 test "noise WACertPubKey length" { try std.testing.expectEqual(@as(usize, 32), WACertPubKey.len); }
