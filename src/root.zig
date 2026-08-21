@@ -30,6 +30,12 @@ pub const channels = struct {
         pub const InboundProcessor = @import("channels/whatsapp/inbound.zig").InboundProcessor;
         pub const OutboundProcessor = @import("channels/whatsapp/outbound.zig").OutboundProcessor;
         pub const AccessControl = @import("channels/whatsapp/access_control.zig").AccessControl;
+        pub const native = struct {
+            pub const binary = @import("channels/whatsapp/native/binary.zig");
+            pub const socket = @import("channels/whatsapp/native/socket.zig");
+            pub const pair = @import("channels/whatsapp/native/pair.zig");
+            pub const client = @import("channels/whatsapp/native/client.zig");
+        };
     };
 };
 // Configuration
