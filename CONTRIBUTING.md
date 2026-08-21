@@ -18,7 +18,7 @@ Thanks for your interest in contributing to ZeptoClaw! This document provides gu
 
 ### Prerequisites
 
-- **Zig 0.15.2+** - Install from [ziglang.org](https://ziglang.org/download/)
+- **Zig 0.16.0+** - Install from [ziglang.org](https://ziglang.org/download/)
 - **Git** - For version control
 - **NVIDIA NIM API Key** - For testing (optional, for integration tests)
 

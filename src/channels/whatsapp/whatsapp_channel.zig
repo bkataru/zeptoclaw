@@ -69,7 +69,7 @@ pub const WhatsAppChannel = struct {
 
         // Get path to Node.js wrapper
         const wrapper_path = try std.fs.path.join(self.allocator, &[_][]const u8{
-            std.fs.selfExeDirPath(self.allocator) catch ".",
+            compat.getSelfExeDir(self.allocator) catch ".",
             "src",
             "channels",
             "whatsapp",

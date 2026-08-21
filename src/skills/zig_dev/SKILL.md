@@ -164,4 +164,4 @@ This skill provides Zig development workflow support. It:
 
 ## Dependencies
 
-- Zig compiler (0.15.2+)
+- Zig compiler (0.16.0+)

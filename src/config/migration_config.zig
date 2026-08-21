@@ -461,6 +461,18 @@ pub const ConfigLoader = struct {
             self.allocator.free(whatsapp_group_require_mention_str);
         }
         var whatsapp_allow_from = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+        {
+            const allow_str = compat.getEnvVarOwned(self.allocator, "WHATSAPP_ALLOW_FROM") catch "";
+            if (allow_str.len > 0) {
+                var it = std.mem.splitSequence(u8, allow_str, ",");
+                while (it.next()) |entry| {
+                    const trimmed = std.mem.trim(u8, entry, " ");
+                    if (trimmed.len == 0) continue;
+                    try whatsapp_allow_from.append(self.allocator, try self.allocator.dupe(u8, trimmed));
+                }
+                self.allocator.free(allow_str);
+            }
+        }
         var whatsapp_group_activation_commands = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         try whatsapp_group_activation_commands.append(self.allocator, try self.allocator.dupe(u8, "/start"));
 
@@ -582,19 +594,6 @@ pub const ConfigLoader = struct {
             self.allocator.free(result.gateway_bind);
             self.allocator.free(result.workspace);
             if (result.gateway_auth_token) |token| self.allocator.free(token);
-            // Free WhatsApp config from file
-            self.allocator.free(result.whatsapp_auth_dir);
-            self.allocator.free(result.whatsapp_dm_policy);
-            self.allocator.free(result.whatsapp_group_policy);
-            for (result.whatsapp_allow_from) |item| {
-                self.allocator.free(item);
-            }
-            self.allocator.free(result.whatsapp_allow_from);
-            for (result.whatsapp_group_activation_commands) |item| {
-                self.allocator.free(item);
-            }
-            self.allocator.free(result.whatsapp_group_activation_commands);
-
             result.api_key = try self.allocator.dupe(u8, ec.api_key);
             result.primary_model = try self.allocator.dupe(u8, ec.primary_model);
             result.fallback_models = try self.dupeSlice(ec.fallback_models);
@@ -611,17 +610,26 @@ pub const ConfigLoader = struct {
             result.workspace = try self.allocator.dupe(u8, ec.workspace);
             result.max_concurrent = ec.max_concurrent;
             result.source = .env;
-            // WhatsApp config from env
-            result.whatsapp_enabled = ec.whatsapp_enabled;
-            result.whatsapp_auth_dir = try self.allocator.dupe(u8, ec.whatsapp_auth_dir);
-            result.whatsapp_dm_policy = try self.allocator.dupe(u8, ec.whatsapp_dm_policy);
-            result.whatsapp_allow_from = try self.dupeSlice(ec.whatsapp_allow_from);
-            result.whatsapp_group_policy = try self.allocator.dupe(u8, ec.whatsapp_group_policy);
-            result.whatsapp_media_max_mb = ec.whatsapp_media_max_mb;
-            result.whatsapp_debounce_ms = ec.whatsapp_debounce_ms;
-            result.whatsapp_send_read_receipts = ec.whatsapp_send_read_receipts;
-            result.whatsapp_group_require_mention = ec.whatsapp_group_require_mention;
-            result.whatsapp_group_activation_commands = try self.dupeSlice(ec.whatsapp_group_activation_commands);
+            // WhatsApp config from env - only override file's if env explicitly set (preserve legacy openclaw.json when env absent)
+            if (ec.whatsapp_enabled) {
+                result.whatsapp_enabled = true;
+                self.allocator.free(result.whatsapp_auth_dir);
+                self.allocator.free(result.whatsapp_dm_policy);
+                self.allocator.free(result.whatsapp_allow_from);
+                self.allocator.free(result.whatsapp_group_policy);
+                // keep group_activation_commands already from file, will be overwritten below
+                for (result.whatsapp_group_activation_commands) |item| self.allocator.free(item);
+                self.allocator.free(result.whatsapp_group_activation_commands);
+                result.whatsapp_auth_dir = try self.allocator.dupe(u8, ec.whatsapp_auth_dir);
+                result.whatsapp_dm_policy = try self.allocator.dupe(u8, ec.whatsapp_dm_policy);
+                result.whatsapp_allow_from = try self.dupeSlice(ec.whatsapp_allow_from);
+                result.whatsapp_group_policy = try self.allocator.dupe(u8, ec.whatsapp_group_policy);
+                result.whatsapp_media_max_mb = ec.whatsapp_media_max_mb;
+                result.whatsapp_debounce_ms = ec.whatsapp_debounce_ms;
+                result.whatsapp_send_read_receipts = ec.whatsapp_send_read_receipts;
+                result.whatsapp_group_require_mention = ec.whatsapp_group_require_mention;
+                result.whatsapp_group_activation_commands = try self.dupeSlice(ec.whatsapp_group_activation_commands);
+            }
 
             // Note: We don't deinit ec here because it's a const reference
         }

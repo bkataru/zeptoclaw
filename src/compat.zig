@@ -14,6 +14,19 @@ pub fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     }
 }
 
+pub fn getSelfExeDir(allocator: std.mem.Allocator) ![]u8 {
+    if (comptime @hasDecl(std.process, "selfExeDirPath")) {
+        return try std.process.selfExeDirPath(allocator);
+    }
+    // 0.16 fallback: read /proc/self/exe
+    var buf: [std.posix.PATH_MAX]u8 = undefined;
+    const len_raw = std.c.readlink("/proc/self/exe", &buf, buf.len);
+    if (len_raw < 0) return try allocator.dupe(u8, ".");
+    const len: usize = @intCast(len_raw);
+    const exe_path = buf[0..len];
+    return try allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse ".");
+}
+
 pub fn timestamp() i64 {
     if (comptime @hasDecl(std.time, "timestamp")) {
         return std.time.timestamp();

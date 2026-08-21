@@ -46,3 +46,10 @@ test_nim_api.zig
 Thumbs.db
 
 *.a  # Static library build artifacts
+
+# Node / Cloudflare
+node_modules/
+package-lock.json
+sessions/
+zig-pkg/
+.zig-pkg-cache/

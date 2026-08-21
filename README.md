@@ -36,9 +36,9 @@
 
 | Binary | Size | Description |
 |--------|------|-------------|
-| `zeptoclaw` | 43 MB | Main agent binary |
-| `zeptoclaw-gateway` | 34 MB | HTTP gateway server (port 18789) |
-| `zeptoclaw-webhook` | 12 MB | Webhook server (port 9000) |
+| `zeptoclaw` | 37 MB | Main agent binary |
+| `zeptoclaw-gateway` | 32 MB | HTTP gateway server (port 18789) |
+| `zeptoclaw-webhook` | 13 MB | Webhook server (port 9000) |
 | `zeptoclaw-shell2http` | 12 MB | Shell2HTTP server (port 9001) |
 
 ## What is this?

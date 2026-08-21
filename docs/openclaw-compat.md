@@ -30,7 +30,7 @@ id = "70a3dbb693e246d48a0fbdc7b32c7317"
 
 Both bindings point at the **same KV id** — old gateways writing `BARVIS_STATE` remain visible to new gateways reading `ZEPTOCLAW_STATE` (and vice versa). State key is `state` (BarvisState: `replied_comments`, `seen_posts`, `last_heartbeat`, `heartbeat_history`, etc.). Cron trigger `*/30 * * * *` preserved.
 
-> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `thinkingmachines/inkling` @ `https://integrate.api.nvidia.com/v1/chat/completions`. Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Old `barvis-router` 5905366f remains as alias until route cutover.
+> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `thinkingmachines/inkling` @ `https://integrate.api.nvidia.com/v1/chat/completions`. Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Alias `barvis-router` 182dc8e2 remains until route cutover.
 
 ## 3. Config Paths & Priority
 
