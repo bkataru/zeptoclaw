@@ -40,6 +40,8 @@ pub const channels = struct {
             pub const store = @import("channels/whatsapp/native/store.zig");
             pub const appstate = @import("channels/whatsapp/native/appstate.zig");
             pub const proto = @import("channels/whatsapp/native/proto.zig");
+            pub const framesocket = @import("channels/whatsapp/native/framesocket.zig");
+            pub const client_native = @import("channels/whatsapp/native/client_native.zig");
         };
     };
 };
