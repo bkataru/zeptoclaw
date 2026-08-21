@@ -191,8 +191,14 @@ pub const Decoder = struct {
 pub fn unpack(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     if (data.len == 0) return try allocator.dupe(u8, "");
     if (data[0] & 2 != 0) {
-        // zlib-compressed payload would go through std.compress.flate.Decompress (.zlib) here
-        return error.NotImplemented;
+        // zlib 0x02 flag — decompress data[1..] via flate (.zlib header+adler)
+        var in = std.Io.Reader.fixed(data[1..]);
+        var out_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        defer out_buf.deinit(allocator);
+        var decomp: std.compress.flate.Decompress = .init(&in, .zlib, &.{});
+        var out_writer = std.Io.Writer.Allocating.fromArrayList(allocator, &out_buf);
+        _ = decomp.reader(&in).streamRemaining(&out_writer.writer) catch return error.InvalidToken;
+        return try out_buf.toOwnedSlice(allocator);
     }
     return try allocator.dupe(u8, data[1..]);
 }
