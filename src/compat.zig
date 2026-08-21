@@ -31,6 +31,21 @@ pub fn getSelfExeDir(allocator: std.mem.Allocator) ![]u8 {
     return try allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse ".");
 }
 
+pub fn getArgsAlloc(allocator: std.mem.Allocator) ![][:0]const u8 {
+    if (comptime @hasDecl(std.process, "argsAlloc")) {
+        return try std.process.argsAlloc(allocator);
+    }
+    return try allocator.alloc([:0]const u8, 0);
+}
+
+pub fn freeArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    if (comptime @hasDecl(std.process, "argsFree")) {
+        std.process.argsFree(allocator, args);
+        return;
+    }
+    allocator.free(args);
+}
+
 pub fn timestamp() i64 {
     if (comptime @hasDecl(std.time, "timestamp")) {
         return std.time.timestamp();

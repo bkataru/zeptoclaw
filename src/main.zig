@@ -5,11 +5,42 @@ const NIMClient = zeptoclaw.providers.nim.NIMClient;
 const Agent = zeptoclaw.agent.loop.Agent;
 const Config = zeptoclaw.config.Config;
 const validator = zeptoclaw.validator;
+const pairing = @import("channels/whatsapp/pairing.zig");
+const compat = zeptoclaw.compat;
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Subcommand dispatch: whatsapp pair / channels login
+    {
+        const args = try compat.getArgsAlloc(allocator);
+        defer compat.freeArgs(allocator, args);
+        if (args.len >= 3 and std.mem.eql(u8, args[1], "whatsapp") and std.mem.eql(u8, args[2], "pair")) {
+            try pairing.runPairing(allocator);
+            return;
+        }
+        if (args.len >= 3 and std.mem.eql(u8, args[1], "channels") and std.mem.eql(u8, args[2], "login")) {
+            try pairing.runPairing(allocator);
+            return;
+        }
+        if (args.len >= 2 and (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "help"))) {
+            printHelp();
+            return;
+        }
+    }
+
+    // Env fallback for pairing (since 0.16 argsAlloc stub): ZEPTO_PAIR=1
+    {
+        const env_pair = compat.getEnvVarOwned(allocator, "ZEPTO_PAIR") catch "";
+        if (env_pair.len > 0 and (env_pair[0] == '1' or env_pair[0] == 't')) {
+            allocator.free(env_pair);
+            try pairing.runPairing(allocator);
+            return;
+        }
+        if (env_pair.len > 0) allocator.free(env_pair);
+    }
 
     // Load configuration
     var cfg = Config.load(allocator) catch |err| {
@@ -68,6 +99,20 @@ pub fn main() !void {
 
     // Run interactive CLI session
     try zeptoclaw.channels.cli.runInteractiveSession(&agent);
+}
+
+fn printHelp() void {
+    std.debug.print(
+        \\ZeptoClaw — Zig-native AI agent
+        \\
+        \\Usage:
+        \\  zeptoclaw                          Interactive CLI
+        \\  zeptoclaw whatsapp pair            Pair WhatsApp (scan QR)
+        \\  zeptoclaw channels login           Alias for whatsapp pair
+        \\  zeptoclaw --help                   This help
+        \\
+        \\
+    , .{});
 }
 
 test "main" {
