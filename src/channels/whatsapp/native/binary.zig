@@ -171,7 +171,21 @@ pub const Decoder = struct {
     }
     // Unpack helpers mirror whatsmeow unpack.go
     pub fn readJIDPair(self: *Decoder) ![]const u8 { _ = self; return error.NotImplemented; }
+    pub fn readPacked(self: *Decoder, tag: u8) ![]const u8 { _ = self; _ = tag; return error.NotImplemented; }
+    pub fn readAttributes(self: *Decoder, n: usize, allocator: std.mem.Allocator) !std.StringHashMap([]const u8) {
+        _ = self; _ = n; _ = allocator;
+        return error.NotImplemented;
+    }
+    pub fn readList(self: *Decoder, tag: u8, allocator: std.mem.Allocator) ![]Node {
+        _ = self; _ = tag; _ = allocator;
+        return error.NotImplemented;
+    }
     pub fn readNode(self: *Decoder) !Node { _ = self; return error.NotImplemented; }
+    pub fn readRaw(self: *Decoder, len: usize) ![]const u8 {
+        try self.checkEOS(len);
+        defer self.idx += len;
+        return self.data[self.idx .. self.idx + len];
+    }
 };
 
 pub fn unpack(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
