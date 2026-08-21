@@ -68,8 +68,10 @@ pub const WhatsAppChannel = struct {
         if (already_connected) return;
 
         // Get path to Node.js wrapper
+        const exe_dir = compat.getSelfExeDir(self.allocator) catch try self.allocator.dupe(u8, ".");
+        defer self.allocator.free(exe_dir);
         const wrapper_path = try std.fs.path.join(self.allocator, &[_][]const u8{
-            compat.getSelfExeDir(self.allocator) catch ".",
+            exe_dir,
             "src",
             "channels",
             "whatsapp",
@@ -77,22 +79,18 @@ pub const WhatsAppChannel = struct {
         });
         defer self.allocator.free(wrapper_path);
 
-        // Spawn Node.js process
-        var node_process = std.process.Child.init(&[_][]const u8{
-            "node",
-            wrapper_path,
-        }, self.allocator);
+        // Spawn Node.js process (Zig 0.16 Io API)
+        const child = try std.process.spawn(compat.getIo(), .{
+            .argv = &[_][]const u8{ "node", wrapper_path },
+            .stdin = .pipe,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        });
 
-        node_process.stdin_behavior = .Pipe;
-        node_process.stdout_behavior = .Pipe;
-        node_process.stderr_behavior = .Pipe;
-
-        try node_process.spawn();
-
-        self.node_process = node_process;
-        self.node_stdin = node_process.stdin.?;
-        self.node_stdout = node_process.stdout.?;
-        self.node_stderr = node_process.stderr.?;
+        self.node_process = child;
+        self.node_stdin = child.stdin.?;
+        self.node_stdout = child.stdout.?;
+        self.node_stderr = child.stderr.?;
 
         // Start reader thread
         self.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{self});
@@ -348,7 +346,7 @@ pub const WhatsAppChannel = struct {
         defer line_buffer.deinit();
 
         while (true) {
-            const bytes_read = self.node_stdout.?.read(&buffer) catch |err| {
+            const bytes_read = self.node_stdout.?.readStreaming(compat.getIo(), &.{buffer[0..]}) catch |err| {
                 if (err == error.EndOfStream) break;
                 continue;
             };

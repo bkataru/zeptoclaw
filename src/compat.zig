@@ -15,10 +15,14 @@ pub fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
 }
 
 pub fn getSelfExeDir(allocator: std.mem.Allocator) ![]u8 {
+    // Zig 0.16: executableDirPathAlloc(io, allocator). Older: selfExeDirPath.
+    if (comptime @hasDecl(std.process, "executableDirPathAlloc")) {
+        return try std.process.executableDirPathAlloc(getIo(), allocator);
+    }
     if (comptime @hasDecl(std.process, "selfExeDirPath")) {
         return try std.process.selfExeDirPath(allocator);
     }
-    // 0.16 fallback: read /proc/self/exe
+    // Fallback: read /proc/self/exe (Linux)
     var buf: [std.posix.PATH_MAX]u8 = undefined;
     const len_raw = std.c.readlink("/proc/self/exe", &buf, buf.len);
     if (len_raw < 0) return try allocator.dupe(u8, ".");
