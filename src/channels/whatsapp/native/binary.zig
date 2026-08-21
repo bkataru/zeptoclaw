@@ -142,6 +142,36 @@ pub const Decoder = struct {
         defer self.idx += 1;
         return self.data[self.idx];
     }
+    pub fn checkEOS(self: *Decoder, n: usize) !void {
+        if (self.idx + n > self.data.len) return error.EndOfStream;
+    }
+    pub fn readIntN(self: *Decoder, n: usize, le: bool) !usize {
+        try self.checkEOS(n);
+        var ret: usize = 0;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const shift: u6 = @intCast(if (le) i * 8 else (n - i - 1) * 8);
+            ret |= @as(usize, self.data[self.idx + i]) << shift;
+        }
+        self.idx += n;
+        return ret;
+    }
+    pub fn readInt20(self: *Decoder) !usize {
+        try self.checkEOS(3);
+        const ret = ((@as(usize, self.data[self.idx]) & 15) << 16) | (@as(usize, self.data[self.idx + 1]) << 8) | @as(usize, self.data[self.idx + 2]);
+        self.idx += 3;
+        return ret;
+    }
+    pub fn readListSize(self: *Decoder, tag: u8) !usize {
+        return switch (tag) {
+            @intFromEnum(Tag.List8) => self.readIntN(1, false),
+            @intFromEnum(Tag.List16) => self.readIntN(2, false),
+            else => error.InvalidToken,
+        };
+    }
+    // Unpack helpers mirror whatsmeow unpack.go
+    pub fn readJIDPair(self: *Decoder) ![]const u8 { _ = self; return error.NotImplemented; }
+    pub fn readNode(self: *Decoder) !Node { _ = self; return error.NotImplemented; }
 };
 
 pub fn unpack(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
