@@ -206,6 +206,7 @@ pub const ZeptoClawConfig = struct {
     source: ConfigSource,
     // WhatsApp configuration
     whatsapp_enabled: bool = false,
+    whatsapp_native: bool = false,
     whatsapp_auth_dir: []const u8,
     whatsapp_dm_policy: []const u8,
     whatsapp_allow_from: [][]const u8,
@@ -383,6 +384,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = openclaw.agents.defaults.maxConcurrent,
             .source = .file,
             .whatsapp_enabled = whatsapp_enabled,
+            .whatsapp_native = false,
             .whatsapp_auth_dir = whatsapp_auth_dir,
             .whatsapp_dm_policy = whatsapp_dm_policy,
             .whatsapp_allow_from = whatsapp_allow_from,
@@ -495,6 +497,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = 4,
             .source = .env,
             .whatsapp_enabled = whatsapp_enabled,
+            .whatsapp_native = std.mem.eql(u8, compat.getEnvVarOwned(self.allocator, "WHATSAPP_NATIVE") catch "false", "true"),
             .whatsapp_auth_dir = whatsapp_auth_dir,
             .whatsapp_dm_policy = whatsapp_dm_policy,
             .whatsapp_allow_from = try whatsapp_allow_from.toOwnedSlice(self.allocator),
@@ -533,6 +536,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = 4,
             .source = .default,
             .whatsapp_enabled = false,
+            .whatsapp_native = false,
             .whatsapp_auth_dir = try self.allocator.dupe(u8, "/home/user/zeptoclaw/sessions/whatsapp"),
             .whatsapp_dm_policy = try self.allocator.dupe(u8, "pairing"),
             .whatsapp_allow_from = &.{},
@@ -575,6 +579,7 @@ pub const ConfigLoader = struct {
             result.source = .file;
             // WhatsApp config from file
             result.whatsapp_enabled = mutable_fc.whatsapp_enabled;
+            result.whatsapp_native = mutable_fc.whatsapp_native;
             result.whatsapp_auth_dir = try self.allocator.dupe(u8, mutable_fc.whatsapp_auth_dir);
             result.whatsapp_dm_policy = try self.allocator.dupe(u8, mutable_fc.whatsapp_dm_policy);
             result.whatsapp_allow_from = try self.dupeSlice(mutable_fc.whatsapp_allow_from);

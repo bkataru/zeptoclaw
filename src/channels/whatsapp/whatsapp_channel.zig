@@ -33,6 +33,8 @@ pub const WhatsAppChannel = struct {
     // Reader thread
     reader_thread: ?std.Thread,
     mutex: std.Io.Mutex,
+    use_native: bool = false,
+    native_client: ?@import("native/client.zig").Client = null,
 
     pub fn init(allocator: Allocator, config: WhatsAppConfig) WhatsAppChannel {
         return .{
