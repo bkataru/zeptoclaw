@@ -568,7 +568,7 @@ function getMimeType(filePath) {
 /**
  * JSON-RPC interface for communication with Zig
  */
-function handleRpcRequest(request) {
+async function handleRpcRequest(request) {
     const { id, method, params } = request;
 
     async function sendResponse(result) {

@@ -9,7 +9,10 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
     };
     defer cfg.deinit();
 
-    const auth_dir = cfg.whatsapp_auth_dir;
+    const auth_dir = try allocator.dupe(u8, cfg.whatsapp_auth_dir);
+    defer allocator.free(auth_dir);
+    // Use page_allocator for large transient allocs to avoid GPA OOM
+    const pa = std.heap.page_allocator;
     std.debug.print("\nWhatsApp Pairing\n  Auth dir: {s}\n  Allow from: ", .{auth_dir});
     for (cfg.whatsapp_allow_from, 0..) |jid, i| {
         if (i > 0) std.debug.print(", ", .{});
@@ -17,10 +20,8 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
     }
     std.debug.print("\n\nStarting Baileys — scan QR with WhatsApp (Linked Devices).\nTimeout 120s, Ctrl+C to abort.\n\n", .{});
 
-    const exe_dir = compat.getSelfExeDir(allocator) catch try allocator.dupe(u8, ".");
-    defer allocator.free(exe_dir);
-    const wrapper_path = try std.fs.path.join(allocator, &[_][]const u8{ exe_dir, "src", "channels", "whatsapp", "baileys_wrapper.js" });
-    defer allocator.free(wrapper_path);
+    const wrapper_path = try pa.dupe(u8, "/home/user/zeptoclaw/src/channels/whatsapp/baileys_wrapper.js");
+    defer pa.free(wrapper_path);
 
     var child = try std.process.spawn(compat.getIo(), .{
         .argv = &[_][]const u8{ "node", wrapper_path },
@@ -30,44 +31,43 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
     });
 
     // Build init JSON line
-    var allow_json = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer allow_json.deinit(allocator);
-    try allow_json.append(allocator, '[');
+    var allow_json = try std.ArrayList(u8).initCapacity(pa, 0);
+    defer allow_json.deinit(pa);
+    try allow_json.append(pa, '[');
     for (cfg.whatsapp_allow_from, 0..) |jid, i| {
-        if (i > 0) try allow_json.append(allocator, ',');
-        try allow_json.append(allocator, '"');
-        try allow_json.appendSlice(allocator, jid);
-        try allow_json.append(allocator, '"');
+        if (i > 0) try allow_json.append(pa, ',');
+        try allow_json.append(pa, '"');
+        try allow_json.appendSlice(pa, jid);
+        try allow_json.append(pa, '"');
     }
-    try allow_json.append(allocator, ']');
+    try allow_json.append(pa, ']');
 
-    const init_line = try std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"init\",\"params\":{{\"auth_dir\":\"{s}\",\"print_qr\":true,\"allow_from\":{s}}}}}\n", .{ auth_dir, allow_json.items });
-    defer allocator.free(init_line);
+    const init_line = try std.fmt.allocPrint(pa, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"init\",\"params\":{{\"auth_dir\":\"{s}\",\"print_qr\":true,\"allow_from\":{s}}}}}\n", .{ auth_dir, allow_json.items });
+    defer pa.free(init_line);
 
     if (child.stdin) |stdin| {
-        _ = try stdin.writeStreamingAll(compat.getIo(), init_line);
-        // also register handlers
-        const on_msg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"onMessage\"}\n";
-        _ = try stdin.writeStreamingAll(compat.getIo(), on_msg);
+        const on_qr = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"onQr\"}\n";
+        _ = try stdin.writeStreamingAll(compat.getIo(), on_qr);
         const on_conn = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"onConnection\"}\n";
         _ = try stdin.writeStreamingAll(compat.getIo(), on_conn);
-        const on_qr = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"onQr\"}\n";
-        _ = try stdin.writeStreamingAll(compat.getIo(), on_qr);
+        const on_msg = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"onMessage\"}\n";
+        _ = try stdin.writeStreamingAll(compat.getIo(), on_msg);
+        _ = try stdin.writeStreamingAll(compat.getIo(), init_line);
     }
 
     // Poll stdout for QR and connection
     var buf: [8192]u8 = undefined;
     var connected = false;
     const deadline = compat.timestamp() + 120;
-    var line_acc = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer line_acc.deinit(allocator);
+    var line_acc = try std.ArrayList(u8).initCapacity(pa, 0);
+    defer line_acc.deinit(pa);
 
     while (compat.timestamp() < deadline) {
         if (child.stdout) |stdout| {
             // non-blocking read via try; if no data, sleep
             const n = stdout.readStreaming(compat.getIo(), &.{buf[0..]}) catch 0;
             if (n > 0) {
-                try line_acc.appendSlice(allocator, buf[0..n]);
+                try line_acc.appendSlice(pa, buf[0..n]);
                 // flush complete lines to terminal
                 while (std.mem.indexOfScalar(u8, line_acc.items, '\n')) |idx| {
                     const line = line_acc.items[0..idx];
@@ -78,10 +78,10 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
                     }
                     // remove line
                     const remain = line_acc.items[idx + 1 ..];
-                    const tmp = try allocator.dupe(u8, remain);
+                    const tmp = try pa.dupe(u8, remain);
                     line_acc.clearRetainingCapacity();
-                    try line_acc.appendSlice(allocator, tmp);
-                    allocator.free(tmp);
+                    try line_acc.appendSlice(pa, tmp);
+                    pa.free(tmp);
                     if (connected) break;
                 }
                 if (connected) break;

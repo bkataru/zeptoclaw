@@ -8,30 +8,23 @@ const validator = zeptoclaw.validator;
 const pairing = @import("channels/whatsapp/pairing.zig");
 const compat = zeptoclaw.compat;
 
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Subcommand dispatch: whatsapp pair / channels login
-    {
-        const args = try compat.getArgsAlloc(allocator);
-        defer compat.freeArgs(allocator, args);
-        if (args.len >= 3 and std.mem.eql(u8, args[1], "whatsapp") and std.mem.eql(u8, args[2], "pair")) {
-            try pairing.runPairing(allocator);
-            return;
-        }
-        if (args.len >= 3 and std.mem.eql(u8, args[1], "channels") and std.mem.eql(u8, args[2], "login")) {
-            try pairing.runPairing(allocator);
-            return;
-        }
-        if (args.len >= 2 and (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "help"))) {
-            printHelp();
-            return;
-        }
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const args_vec = init.minimal.args.vector;
+    // args_vec[0] is exe, [1] whatsapp, [2] pair etc
+    if (args_vec.len >= 3 and std.mem.eql(u8, std.mem.span(args_vec[1]), "whatsapp") and std.mem.eql(u8, std.mem.span(args_vec[2]), "pair")) {
+        try pairing.runPairing(allocator);
+        return;
     }
-
-    // Env fallback for pairing (since 0.16 argsAlloc stub): ZEPTO_PAIR=1
+    if (args_vec.len >= 3 and std.mem.eql(u8, std.mem.span(args_vec[1]), "channels") and std.mem.eql(u8, std.mem.span(args_vec[2]), "login")) {
+        try pairing.runPairing(allocator);
+        return;
+    }
+    if (args_vec.len >= 2 and (std.mem.eql(u8, std.mem.span(args_vec[1]), "--help") or std.mem.eql(u8, std.mem.span(args_vec[1]), "-h") or std.mem.eql(u8, std.mem.span(args_vec[1]), "help"))) {
+        printHelp();
+        return;
+    }
+    // Env fallback
     {
         const env_pair = compat.getEnvVarOwned(allocator, "ZEPTO_PAIR") catch "";
         if (env_pair.len > 0 and (env_pair[0] == '1' or env_pair[0] == 't')) {
