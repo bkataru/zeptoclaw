@@ -1,25 +1,29 @@
 # Fuzzing
 
-Unit tests call `std.testing.fuzz` with a small corpus (runs once in `zig build test`).
+Unit tests call `std.testing.fuzz` with a small corpus (once per `zig build test`). Extra mutations: `src/fuzz_mutate.zig` (400 havoc iterations, seed `0x7e970c1a`).
 
-Continuous:
+`zig build test --fuzz` on Zig 0.16.0 fails to rebuild: compiler `test_runner.zig` mixes `builtin.StackTrace` and `debug.StackTrace`. Bypass:
 
 ```bash
-zig build test --fuzz
-# or time-bounded
-zig build test --fuzz=30s
+./zig-out/bin/zeptoclaw fuzz           # 50000 havoc iters, no NIM
+./zig-out/bin/zeptoclaw fuzz 2000
 ```
 
-Targets (no NIM, no Baileys):
+Nightly (optional): copy `contrib/systemd/zeptoclaw-fuzz.{service,timer}` and `systemctl --user enable --now zeptoclaw-fuzz.timer`.
 
-| Test | File | Surface |
-|------|------|---------|
-| fuzz inbound json parse | `whatsapp_channel.zig` | Baileys JSON -> `parseMessage` / `parseConnectionUpdate` |
-| fuzz journal jid isolation | `memory.zig` | `lineBelongsToChat` |
-| fuzz pending jsonl | `pending.zig` | `pending-turns.jsonl` |
-| fuzz hydrate tool json | `loop.zig` | leaked chat JSON -> tool calls |
-| fuzz parseDecision | `memory_update.zig` / `memory_compact.zig` | UPDATE/SKIP/COMPACT |
+Targets (no NIM HTTP, no Baileys):
 
-Do not fuzz `runTurn` or WhatsApp connect.
+| Surface | Code |
+|---------|------|
+| Baileys JSON | `WhatsAppChannel.parseMessage` / `parseConnectionUpdate` |
+| Journal JID | `memory.lineBelongsToChat` |
+| pending-turns.jsonl | `pending.loadFrom` / enqueue |
+| Tool JSON | `hydrateToolCallsFromContent` |
+| UPDATE/SKIP/COMPACT | `memory_update` / `memory_compact` `parseDecision` |
+| NIM completion JSON | `nim.tryParseCompletion` |
+| last-image index | `inbound_media.loadLast` |
+| Presence slots | `engagement.subscribe` |
 
-`zig build test --fuzz` on Zig 0.16.0 fails to rebuild: compiler `test_runner.zig` mixes `builtin.StackTrace` and `debug.StackTrace`. Corpus still runs in `zig build test`. Extra mutations: `src/fuzz_mutate.zig` (400 havoc iterations, seed `0x7e970c1a`).
+Redacted seed shapes: `testdata/fuzz/seeds.jsonl` (dummy E.164 `1555555010x`, bodies `x`). Do not commit live journals or phone numbers.
+
+Properties in `zig build test`: suffix JID is not a match; `dailyContextAt` keeps chats apart; pending enqueue/ack round-trip; parseMessage rejects non-objects.

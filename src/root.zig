@@ -71,6 +71,7 @@ pub const config = @import("config.zig");
 pub const validator = @import("config/validator.zig");
 pub const compat = @import("compat.zig");
 pub const openclaw_compat = @import("openclaw_compat/openclaw.zig");
+pub const fuzz_mutate = @import("fuzz_mutate.zig");
 
 // Autonomous Agent
 pub const autonomous = struct {

@@ -1,0 +1,14 @@
+[Unit]
+Description=ZeptoClaw parser havoc (no NIM, no WhatsApp)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=15
+TimeoutStartSec=1800
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/zeptoclaw/zig-out/bin/zeptoclaw fuzz 50000
+
+[Install]
+WantedBy=default.target

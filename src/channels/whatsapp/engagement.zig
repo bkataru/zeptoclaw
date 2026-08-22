@@ -119,3 +119,12 @@ test "appendSignature once" {
     defer a.free(twice);
     try std.testing.expect(std.mem.eql(u8, twice, s));
 }
+
+test "subscribe long id is truncated not overflow" {
+    var long: [200]u8 = undefined;
+    @memset(&long, 'x');
+    subscribe(&long);
+    try std.testing.expect(isSubscribed(long[0..128]));
+    unsubscribe(long[0..128]);
+    try std.testing.expect(!isSubscribed(long[0..128]));
+}

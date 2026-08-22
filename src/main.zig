@@ -32,6 +32,17 @@ pub fn main(init: std.process.Init) !void {
         try zeptoclaw.agent.memory_compact.runOnce(allocator);
         return;
     }
+    if (args_vec.len >= 2 and std.mem.eql(u8, std.mem.span(args_vec[1]), "fuzz")) {
+        var iters: usize = 50_000;
+        if (args_vec.len >= 3) {
+            iters = std.fmt.parseInt(usize, std.mem.span(args_vec[2]), 10) catch 50_000;
+        }
+        const seed: u64 = @intCast(@as(u64, @bitCast(@as(i64, compat.timestamp()))));
+        std.debug.print("fuzz havoc iters={d} seed={d}\n", .{ iters, seed });
+        zeptoclaw.fuzz_mutate.runHavoc(allocator, iters, seed);
+        std.debug.print("fuzz ok\n", .{});
+        return;
+    }
     // Env fallback
     {
         const env_pair = compat.getEnvVarOwned(allocator, "ZEPTO_PAIR") catch "";
@@ -112,6 +123,7 @@ fn printHelp() void {
         \\  zeptoclaw channels login           Alias for whatsapp pair
         \\  zeptoclaw memory update            Ingest journals into MEMORY.md (30-min job; own NIM budget)
         \\  zeptoclaw memory compact           Compress MEMORY.md itself (2-hour job; own NIM budget)
+        \\  zeptoclaw fuzz [iters]             Parser havoc (default 50000). No NIM, no WhatsApp.
         \\  zeptoclaw --help                   This help
         \\
         \\

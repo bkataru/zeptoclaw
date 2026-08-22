@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `zeptoclaw fuzz [iters]` nightly havoc (default 50000). Property tests for JID isolation and pending ack. NIM `tryParseCompletion`. Redacted seeds in `testdata/fuzz/`. Zig `--fuzz` still broken on 0.16.0.
+
+
 - Fuzz targets (`std.testing.fuzz`) for inbound JSON, journal JID filter, pending-turns jsonl, tool-call hydrate, memory decide parsers. `zig build test --fuzz`.
 
 

@@ -32,4 +32,4 @@ Small, focused diffs. Do not add logs, `node_modules`, or `.sisyphus` scratch.
 
 ## Fuzzing
 
-`std.testing.fuzz` tests live next to parsers (inbound JSON, journal JID, pending jsonl, tool hydrate, memory decide). Corpus runs in `zig build test`. `zig build test --fuzz` is broken on Zig 0.16.0 (`test_runner` StackTrace). Extra mutations: `src/fuzz_mutate.zig`. See `docs/fuzz.md`.
+`std.testing.fuzz` tests live next to parsers (inbound JSON, journal JID, pending jsonl, tool hydrate, memory decide). Corpus runs in `zig build test`. `zig build test --fuzz` is broken on Zig 0.16.0 (`test_runner` StackTrace). Extra mutations: `src/fuzz_mutate.zig` (400 in `zig build test`). Longer: `zeptoclaw fuzz 50000` or `contrib/systemd/zeptoclaw-fuzz.timer`. See `docs/fuzz.md`.

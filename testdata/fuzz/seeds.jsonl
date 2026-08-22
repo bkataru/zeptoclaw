@@ -1,0 +1,6 @@
+{"id":"cmpl-x","model":"thinkingmachines/inkling","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"created":1,"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+{"error":{"message":"rate limited","type":"rate_limit_error","code":"429"}}
+{"seen":["MSGID1"],"sent":["MSGID2"],"fingerprints":{"15555550101@lid|1|x":1}}
+{"chatId":"15555550101@lid","body":"x","fromMe":true,"id":"m1","chatType":"direct","mediaType":"image","mediaPath":"/tmp/x.jpg"}
+{"type":"connected","selfJid":"15555550100:55@s.whatsapp.net","selfE164":"+15555550100"}
+{"id":"m1","chat_id":"15555550101@lid","body":"x","from_me":true,"direct":true}

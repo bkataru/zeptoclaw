@@ -1,0 +1,11 @@
+[Unit]
+Description=ZeptoClaw parser havoc timer (daily)
+Requires=zeptoclaw-fuzz.service
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

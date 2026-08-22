@@ -645,3 +645,29 @@ test "lineBelongsToChat rejects other jid" {
     try std.testing.expect(!lineBelongsToChat(line, ""));
     try std.testing.expect(!lineBelongsToChat(line, "62@lid"));
 }
+
+test "lineBelongsToChat rejects suffix jid" {
+    const line = "- 18:34 IST [in] (19082673946862@lid): i like ur top";
+    try std.testing.expect(!lineBelongsToChat(line, "62@lid"));
+    try std.testing.expect(!lineBelongsToChat(line, "lid"));
+    try std.testing.expect(!lineBelongsToChat(line, "@lid"));
+}
+
+test "dailyContextAt isolation is a property of two chats" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-dailyctx-prop";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    const path = try dailyPath(allocator, dir, civilNowIst(), 0);
+    defer allocator.free(path);
+    const peer = "15555550101@lid";
+    const self = "15555550102@lid";
+    const body = try std.fmt.allocPrint(allocator,
+        "# Journal\n- 18:34 IST [in] ({s}): peer-secret\n- 18:44 IST [in] ({s}): self-secret\n",
+        .{ peer, self });
+    defer allocator.free(body);
+    writeFile(path, body);
+    const got = dailyContextAt(allocator, dir, peer) orelse unreachable;
+    defer allocator.free(got);
+    try std.testing.expect(std.mem.indexOf(u8, got, "peer-secret") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "self-secret") == null);
+}

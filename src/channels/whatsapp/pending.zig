@@ -272,3 +272,20 @@ test "fuzz pending jsonl" {
         },
     });
 }
+
+test "pending round-trip ack" {
+    const a = std.testing.allocator;
+    const path = "/tmp/zeptoclaw-pending-roundtrip.jsonl";
+    writeAll(path, "");
+    enqueueAt(a, path, "id-a", "15555550101@lid", "alpha", true, true);
+    enqueueAt(a, path, "id-b", "15555550101@lid", "beta", false, true);
+    ackAt(a, path, "id-a");
+    const left = try loadFrom(a, path);
+    defer {
+        for (left) |*row| row.deinit(a);
+        a.free(left);
+    }
+    try std.testing.expectEqual(@as(usize, 1), left.len);
+    try std.testing.expectEqualStrings("id-b", left[0].id);
+    try std.testing.expectEqualStrings("beta", left[0].body);
+}

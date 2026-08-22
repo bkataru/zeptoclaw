@@ -485,7 +485,7 @@ pub fn deinit(self: *NIMClient) void {
         }
         defer self.allocator.free(response_bytes);
         // Parse JSON response
-        var parsed = std.json.parseFromSlice(types.ChatCompletionResponse, self.allocator, response_bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return types.ProviderError.InvalidResponse;
+        var parsed = tryParseCompletion(self.allocator, response_bytes) catch return types.ProviderError.InvalidResponse;
         defer parsed.deinit();
         // Deep copy out of arena before defer frees it — ChatCompletionResponse owns allocs
         const val = parsed.value;
@@ -507,6 +507,11 @@ pub fn deinit(self: *NIMClient) void {
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+/// Parse a NIM/OpenAI chat completion body. Invalid JSON or missing fields fail.
+pub fn tryParseCompletion(allocator: std.mem.Allocator, bytes: []const u8) !std.json.Parsed(types.ChatCompletionResponse) {
+    return std.json.parseFromSlice(types.ChatCompletionResponse, allocator, bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+}
 
 const TestConfig = config_module.Config;
 

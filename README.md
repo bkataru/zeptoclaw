@@ -120,6 +120,7 @@ zig build
 # Memory jobs (own process / own NIM backoff; share NVIDIA quota)
 ./zig-out/bin/zeptoclaw memory update    # ingest journals -> MEMORY.md
 ./zig-out/bin/zeptoclaw memory compact   # densify MEMORY.md
+./zig-out/bin/zeptoclaw fuzz 50000          # parser havoc (no NIM)
 
 # Run webhook server
 ./zig-out/bin/zeptoclaw-webhook

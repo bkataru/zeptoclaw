@@ -619,7 +619,7 @@ pub const WhatsAppChannel = struct {
         };
     }
 
-    fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
+    pub fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
         if (value != .object) return error.InvalidMessage;
         var msg = try WhatsAppMessage.init(allocator);
         errdefer msg.deinit();
@@ -705,7 +705,7 @@ pub const WhatsAppChannel = struct {
 
     /// Parse connection update from JSON
     /// Memory: Caller owns returned self_jid/self_e164/error strings; must free each non-null field.
-    fn parseConnectionUpdate(allocator: Allocator, value: std.json.Value) !ConnectionUpdate {
+    pub fn parseConnectionUpdate(allocator: Allocator, value: std.json.Value) !ConnectionUpdate {
         var update: ConnectionUpdate = .{
             .status = .disconnected,
             .self_jid = null,
