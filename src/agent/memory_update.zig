@@ -1,9 +1,11 @@
 //! Periodic MEMORY.md update via NVIDIA NIM.
-//! Own process (systemd oneshot) so rate-limit backoff never shares state
-//! with the live WhatsApp gateway.
+//! Own process (systemd oneshot / compact child) so rate-limit backoff never
+//! shares state with the live WhatsApp gateway.
 //!
-//! Each cycle: take current MEMORY.md (old memories) + recent daily journals
-//! (new memories) and produce a combined, transformed MEMORY.md.
+//! Cycle:
+//! 1. If journals have not changed since last stamp, skip (no NIM).
+//! 2. One NIM call: the model decides UPDATE or SKIP.
+//! 3. If UPDATE, a second NIM call synthesizes the new MEMORY.md.
 const std = @import("std");
 const compat = @import("../compat.zig");
 const openclaw = @import("../openclaw_compat/openclaw.zig");
@@ -29,6 +31,15 @@ fn readCapped(allocator: std.mem.Allocator, path: []const u8, cap: usize) ?[]u8 
         return null;
     };
     return buf;
+}
+
+fn fileMtime(path: []const u8) i64 {
+    const cwd = compat.cwd();
+    const f = cwd.openFile(path, .{}) catch return 0;
+    defer f.close(cwd.io);
+    const st = f.stat(cwd.io) catch return 0;
+    const ns = st.mtime.nanoseconds;
+    return @intCast(@divTrunc(ns, 1_000_000_000));
 }
 
 fn writeFile(path: []const u8, body: []const u8) !void {
@@ -63,7 +74,90 @@ pub fn looksLikeMemoryDoc(s: []const u8) bool {
         std.mem.startsWith(u8, s, "# ");
 }
 
-fn loadBundle(allocator: std.mem.Allocator, ws: []const u8) ![]u8 {
+pub const Decision = enum { update, skip };
+
+/// Parse the decide-turn reply. First token wins; default skip if unclear.
+pub fn parseDecision(raw: []const u8) Decision {
+    var s = std.mem.trim(u8, raw, " \t\r\n`");
+    if (std.mem.startsWith(u8, s, "```")) {
+        if (std.mem.indexOfScalar(u8, s, '\n')) |nl| s = std.mem.trim(u8, s[nl + 1 ..], " \t\r\n");
+    }
+    var it = std.mem.tokenizeAny(u8, s, " \t\r\n:.,;");
+    const first = it.next() orelse return .skip;
+    if (std.ascii.eqlIgnoreCase(first, "UPDATE") or
+        std.ascii.eqlIgnoreCase(first, "YES") or
+        std.ascii.eqlIgnoreCase(first, "TRUE"))
+        return .update;
+    return .skip;
+}
+
+fn journalHasTurns(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, "[in]") != null or
+        std.mem.indexOf(u8, text, "[out]") != null or
+        std.mem.indexOf(u8, text, "[note]") != null;
+}
+
+fn loadJournals(allocator: std.mem.Allocator, ws: []const u8) !struct { text: []u8, newest_mtime: i64, has_turns: bool } {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var newest: i64 = 0;
+    var has = false;
+    const civil = memory.civilNowIst();
+    var i: i64 = 0;
+    while (i < 2) : (i += 1) {
+        const path = try memory.dailyPath(allocator, ws, civil, -i);
+        defer allocator.free(path);
+        const mt = fileMtime(path);
+        if (mt > newest) newest = mt;
+        if (readCapped(allocator, path, 12 * 1024)) |buf| {
+            defer allocator.free(buf);
+            if (journalHasTurns(buf)) has = true;
+            try out.appendSlice(allocator, "--- daily ");
+            try out.appendSlice(allocator, path);
+            try out.appendSlice(allocator, " ---\n");
+            try out.appendSlice(allocator, buf);
+            try out.appendSlice(allocator, "\n\n");
+        }
+    }
+    return .{ .text = try out.toOwnedSlice(allocator), .newest_mtime = newest, .has_turns = has };
+}
+
+fn lastUpdateTs(allocator: std.mem.Allocator, ws: []const u8) i64 {
+    const path = std.fmt.allocPrint(allocator, "{s}/memory/heartbeat-state.json", .{ws}) catch return 0;
+    defer allocator.free(path);
+    const buf = readCapped(allocator, path, 4096) orelse return 0;
+    defer allocator.free(buf);
+    const key = "\"lastMemoryUpdate\":";
+    const idx = std.mem.indexOf(u8, buf, key) orelse return 0;
+    var p = idx + key.len;
+    while (p < buf.len and (buf[p] == ' ' or buf[p] == '\t')) p += 1;
+    var end = p;
+    while (end < buf.len and buf[end] >= '0' and buf[end] <= '9') end += 1;
+    if (end == p) return 0;
+    return std.fmt.parseInt(i64, buf[p..end], 10) catch 0;
+}
+
+fn loadDecidePrompt(allocator: std.mem.Allocator, journals: []const u8, mem_md: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\Decide whether Barvis MEMORY.md needs an update from recent journals.
+        \\Reply with exactly one line: UPDATE <reason>  or  SKIP <reason>
+        \\UPDATE only if journals contain durable facts, preferences, decisions, voice, or lessons not already in MEMORY.md.
+        \\SKIP if idle, no new conversations, only pings, tool JSON, duplicates, or nothing worth keeping.
+        \\Do not rewrite MEMORY.md in this turn.
+        \\
+        \\--- MEMORY.md (current, truncated) ---
+        \\
+    );
+    const mem_clip = if (mem_md.len > 6000) mem_md[0..6000] else mem_md;
+    try out.appendSlice(allocator, mem_clip);
+    try out.appendSlice(allocator, "\n\n--- recent journals ---\n");
+    try out.appendSlice(allocator, journals);
+    return out.toOwnedSlice(allocator);
+}
+
+fn loadUpdatePrompt(allocator: std.mem.Allocator, ws: []const u8, journals: []const u8, reason: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator,
@@ -75,8 +169,11 @@ fn loadBundle(allocator: std.mem.Allocator, ws: []const u8) ![]u8 {
         \\Preserve heading structure. Keep section `## Running notes (auto)` if present.
         \\Do not invent facts. Do not include secrets or API keys. Output ONLY the full updated MEMORY.md markdown.
         \\
+        \\Decision from previous turn: UPDATE
         \\
     );
+    try out.appendSlice(allocator, reason);
+    try out.appendSlice(allocator, "\n\n");
 
     const files = [_][]const u8{ "SOUL.md", "IDENTITY.md", "MEMORY.md" };
     for (files) |name| {
@@ -92,21 +189,7 @@ fn loadBundle(allocator: std.mem.Allocator, ws: []const u8) ![]u8 {
             try out.appendSlice(allocator, "\n\n");
         }
     }
-
-    const civil = memory.civilNowIst();
-    var i: i64 = 0;
-    while (i < 2) : (i += 1) {
-        const path = try memory.dailyPath(allocator, ws, civil, -i);
-        defer allocator.free(path);
-        if (readCapped(allocator, path, 12 * 1024)) |buf| {
-            defer allocator.free(buf);
-            try out.appendSlice(allocator, "--- new daily notes ");
-            try out.appendSlice(allocator, path);
-            try out.appendSlice(allocator, " ---\n");
-            try out.appendSlice(allocator, buf);
-            try out.appendSlice(allocator, "\n\n");
-        }
-    }
+    try out.appendSlice(allocator, journals);
     return out.toOwnedSlice(allocator);
 }
 
@@ -129,6 +212,18 @@ fn clipCap(s: []const u8) []const u8 {
     return s[0..MEMORY_CAP];
 }
 
+fn nimText(allocator: std.mem.Allocator, nim: *NIMClient, prompt: []const u8) ![]u8 {
+    var msgs = [_]types.Message{
+        try types.Message.user(allocator, prompt),
+    };
+    defer msgs[0].deinit(allocator);
+    var response = try nim.chat(&msgs);
+    defer response.deinit(allocator);
+    if (response.choices.len == 0) return error.EmptyUpdate;
+    const raw = response.choices[0].message.content orelse return error.EmptyUpdate;
+    return allocator.dupe(u8, raw);
+}
+
 /// One-shot update. Own process = own NVIDIA budget.
 pub fn runOnce(allocator: std.mem.Allocator) !void {
     const ws = try openclaw.resolveWorkspaceDir(allocator);
@@ -138,24 +233,41 @@ pub fn runOnce(allocator: std.mem.Allocator) !void {
     const old_mem = readCapped(allocator, mem_path, MEMORY_CAP * 2) orelse "";
     defer if (old_mem.len > 0) allocator.free(old_mem);
 
-    const bundle = try loadBundle(allocator, ws);
-    defer allocator.free(bundle);
-    std.log.info("[memory-update] prompt bytes={d}", .{bundle.len});
+    const journals = try loadJournals(allocator, ws);
+    defer allocator.free(journals.text);
+
+    if (!journals.has_turns) {
+        std.log.info("[memory-update] no journal turns; skipping NIM", .{});
+        return;
+    }
+    const last = lastUpdateTs(allocator, ws);
+    if (last > 0 and journals.newest_mtime > 0 and journals.newest_mtime <= last) {
+        std.log.info("[memory-update] journals unchanged since last update ({d}); skipping NIM", .{last});
+        return;
+    }
 
     var cfg = try config_mod.Config.load(allocator);
     defer cfg.deinit();
     var nim = NIMClient.init(allocator, cfg);
     defer nim.deinit();
 
-    var msgs = [_]types.Message{
-        try types.Message.user(allocator, bundle),
-    };
-    defer msgs[0].deinit(allocator);
+    const decide_prompt = try loadDecidePrompt(allocator, journals.text, old_mem);
+    defer allocator.free(decide_prompt);
+    std.log.info("[memory-update] decide prompt bytes={d}", .{decide_prompt.len});
+    const decide_raw = try nimText(allocator, &nim, decide_prompt);
+    defer allocator.free(decide_raw);
+    const decision = parseDecision(decide_raw);
+    std.log.info("[memory-update] decision={s} raw={s}", .{ @tagName(decision), decide_raw[0..@min(decide_raw.len, 200)] });
+    if (decision == .skip) {
+        stamp(allocator, ws, old_mem.len);
+        return;
+    }
 
-    var response = try nim.chat(&msgs);
-    defer response.deinit(allocator);
-    if (response.choices.len == 0) return error.EmptyUpdate;
-    const raw = response.choices[0].message.content orelse return error.EmptyUpdate;
+    const update_prompt = try loadUpdatePrompt(allocator, ws, journals.text, decide_raw);
+    defer allocator.free(update_prompt);
+    std.log.info("[memory-update] synthesize prompt bytes={d}", .{update_prompt.len});
+    const raw = try nimText(allocator, &nim, update_prompt);
+    defer allocator.free(raw);
     const md = extractMarkdown(raw);
     if (!looksLikeMemoryDoc(md)) {
         std.log.warn("[memory-update] model output did not look like MEMORY.md; leaving file unchanged", .{});
@@ -201,4 +313,13 @@ test "preserveAutoSection appends missing heading" {
     defer allocator.free(merged);
     try std.testing.expect(std.mem.indexOf(u8, merged, AUTO_HEADING) != null);
     try std.testing.expect(std.mem.indexOf(u8, merged, "keep me") != null);
+}
+
+test "parseDecision first token" {
+    try std.testing.expectEqual(Decision.update, parseDecision("UPDATE new preference about Zig"));
+    try std.testing.expectEqual(Decision.update, parseDecision("update: keep the voice note"));
+    try std.testing.expectEqual(Decision.update, parseDecision("```\nYES because he asked to remember\n```"));
+    try std.testing.expectEqual(Decision.skip, parseDecision("SKIP idle, only pings"));
+    try std.testing.expectEqual(Decision.skip, parseDecision("no new facts"));
+    try std.testing.expectEqual(Decision.skip, parseDecision(""));
 }
