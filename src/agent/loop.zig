@@ -180,34 +180,49 @@ pub const Agent = struct {
         }
 
         var iter: u32 = 0;
+        var last_err: ?types.ProviderError = null;
         while (iter < opts.max_iters) : (iter += 1) {
-            var response = self.nim_client.chatWithTools(self.session.getHistory(), defs) catch |err| {
+            const use_tools: ?[]const types.ToolDefinition = if (iter + 1 == opts.max_iters) null else defs;
+            var response = self.chatRecover(use_tools) catch |err| {
+                last_err = err;
                 std.log.err("[agent] NIM chat failed after retries: {}", .{err});
-                // Do not send a stub to the user; skip outbound.
-                return try self.allocator.dupe(u8, "");
+                return try recoveryMessage(self.allocator, err);
             };
             defer response.deinit(self.allocator);
-            if (response.choices.len == 0) return try self.allocator.dupe(u8, "");
+            if (response.choices.len == 0) {
+                std.log.warn("[agent] empty choices; retrying", .{});
+                sleepMs(5000);
+                if (iter + 1 >= opts.max_iters) return try recoveryMessage(self.allocator, error.InvalidResponse);
+                continue;
+            }
 
             var assistant = try response.choices[0].message.dupe(self.allocator);
             const has_tools = assistant.hasToolCalls();
-            try self.session.addMessage(assistant);
-
             if (!has_tools) {
                 if (core_tools.wantLeave()) {
+                    assistant.deinit(self.allocator);
                     engagement.unsubscribe(self.session_id);
                     std.log.info("[agent] leave chat={s}", .{self.session_id});
                     return try self.allocator.dupe(u8, "");
                 }
                 if (core_tools.wantSilent()) {
+                    assistant.deinit(self.allocator);
                     std.log.info("[agent] listen/silent chat={s}", .{self.session_id});
                     return try self.allocator.dupe(u8, "");
                 }
                 const text = assistant.content orelse "";
+                if (isBlank(text)) {
+                    assistant.deinit(self.allocator);
+                    std.log.warn("[agent] empty model content; waiting then retrying iter={d}", .{iter});
+                    sleepMs(8000);
+                    continue;
+                }
+                try self.session.addMessage(assistant);
                 self.transcripts.append(self.session_id, "assistant", text);
                 return try self.allocator.dupe(u8, text);
             }
 
+            try self.session.addMessage(assistant);
             const calls = assistant.tool_calls.?;
             for (calls) |call| {
                 std.log.info("[agent] tool {s} args={s}", .{ call.function.name, call.function.arguments });
@@ -227,14 +242,70 @@ pub const Agent = struct {
                 return try self.allocator.dupe(u8, "");
             }
         }
-        return try self.allocator.dupe(u8, "");
+        return try recoveryMessage(self.allocator, last_err orelse error.InvalidResponse);
+    }
+
+    fn chatRecover(self: *Agent, defs: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
+        var n: u32 = 0;
+        const max_n: u32 = 4;
+        while (n < max_n) : (n += 1) {
+            if (self.nim_client.chatWithTools(self.session.getHistory(), defs)) |resp| return resp else |err| {
+                if (err != error.RateLimit and err != error.Timeout and err != error.Network) return err;
+                if (n + 1 >= max_n) return err;
+                const wait: u64 = if (err == error.RateLimit) @min(@as(u64, 90), @as(u64, 20) * (n + 1)) else 8;
+                std.log.warn("[agent] {} — waiting {d}s then retrying ({d}/{d})", .{ err, wait, n + 1, max_n });
+                sleepMs(wait * 1000);
+            }
+        }
+        return error.RateLimit;
     }
 };
+
+fn sleepMs(ms: u64) void {
+    var left = ms;
+    while (left > 0) {
+        const chunk: u64 = @min(left, 1000);
+        const sec: i64 = @intCast(chunk / 1000);
+        const nsec: i64 = @intCast((chunk % 1000) * 1_000_000);
+        _ = std.c.nanosleep(&.{ .sec = sec, .nsec = nsec }, null);
+        left -= chunk;
+    }
+}
+
+fn isBlank(s: []const u8) bool {
+    return std.mem.trim(u8, s, " \t\r\n").len == 0;
+}
+
+fn recoveryMessage(allocator: std.mem.Allocator, err: types.ProviderError) ![]const u8 {
+    const text: []const u8 = switch (err) {
+        error.RateLimit => "NVIDIA is rate-limiting me. I waited and retried; still blocked. Ping me again in a minute.",
+        error.Timeout, error.Network => "The model timed out. I retried; still no reply. Ping me again shortly.",
+        error.Auth => "The model rejected the API key. Can't complete this turn.",
+        error.InvalidResponse, error.ParseError => "The model returned an empty or unreadable reply after I finished the tools. Ping me again and I'll pick it up.",
+    };
+    return allocator.dupe(u8, text);
+}
 
 test "agent loop basic" {
     const opts = TurnOpts{};
     try std.testing.expectEqual(@as(u32, 8), opts.max_iters);
     try std.testing.expect(opts.system_prompt == null);
+}
+
+test "isBlank treats whitespace as empty" {
+    try std.testing.expect(isBlank(""));
+    try std.testing.expect(isBlank("  \n\t"));
+    try std.testing.expect(!isBlank("ok"));
+}
+
+test "recoveryMessage is user-facing" {
+    const allocator = std.testing.allocator;
+    const a = try recoveryMessage(allocator, error.RateLimit);
+    defer allocator.free(a);
+    try std.testing.expect(std.mem.indexOf(u8, a, "rate-limiting") != null);
+    const b = try recoveryMessage(allocator, error.InvalidResponse);
+    defer allocator.free(b);
+    try std.testing.expect(b.len > 20);
 }
 
 test "setWorkspace does not drop transcript dir ownership" {

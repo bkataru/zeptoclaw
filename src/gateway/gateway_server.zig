@@ -450,22 +450,36 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
             .max_iters = 8,
         }) catch |err| {
             std.log.err("[whatsapp] agent run failed: {}", .{err});
-            return;
+            break :blk (g_whatsapp_alloc.dupe(u8, "I hit an internal error finishing that turn. Ping me again.") catch {
+                return;
+            });
         };
         break :blk reply;
     };
     defer g_whatsapp_alloc.free(reply_text);
     if (reply_text.len == 0) {
-        std.log.warn("[whatsapp] empty model reply; not sending", .{});
+        std.log.info("[whatsapp] silent/leave; not sending", .{});
         return;
     }
 
     // Outbound send via OutboundProcessor (chunking/retry/markdown) using channel.sendMessage.
     const ob = g_whatsapp_outbound orelse return;
-    const send_result = ob.sendText(gatewaySendMessage, chat_id_copy, reply_text) catch |err| {
-        std.log.err("[whatsapp] sendText failed: {}", .{err});
-        return;
-    };
+    var send_attempt: u32 = 0;
+    const send_result = while (send_attempt < 3) : (send_attempt += 1) {
+        break ob.sendText(gatewaySendMessage, chat_id_copy, reply_text) catch |err| {
+            std.log.err("[whatsapp] sendText failed: {} attempt {d}/3", .{ err, send_attempt + 1 });
+            if (send_attempt + 1 >= 3) return;
+            var left: u64 = 5000;
+            while (left > 0) {
+                const chunk: u64 = @min(left, 1000);
+                const sec: i64 = @intCast(chunk / 1000);
+                const nsec: i64 = @intCast((chunk % 1000) * 1_000_000);
+                _ = std.c.nanosleep(&.{ .sec = sec, .nsec = nsec }, null);
+                left -= chunk;
+            }
+            continue;
+        };
+    } else return;
     for (send_result.message_ids) |mid| {
         g_whatsapp_alloc.free(mid);
     }

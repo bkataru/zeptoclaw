@@ -19,10 +19,24 @@ fn sleepMs(ms: u64) void {
     }
 }
 
-/// NVIDIA integrate.api is 40 requests/minute (~1500ms). Pad to 1600ms.
+/// NVIDIA integrate.api is 40 requests/minute. After 429, widen the gap.
 var g_nim_pace_mu: std.Io.Mutex = .init;
 var g_nim_last_s: i64 = 0;
+var g_nim_min_gap_s: i64 = 2;
 const NIM_MIN_GAP_S: i64 = 2;
+const NIM_COOLDOWN_GAP_S: i64 = 4;
+
+fn noteRateLimit() void {
+    g_nim_pace_mu.lock(compat.getIo()) catch return;
+    defer g_nim_pace_mu.unlock(compat.getIo());
+    g_nim_min_gap_s = NIM_COOLDOWN_GAP_S;
+}
+
+fn noteOkPace() void {
+    g_nim_pace_mu.lock(compat.getIo()) catch return;
+    defer g_nim_pace_mu.unlock(compat.getIo());
+    if (g_nim_min_gap_s > NIM_MIN_GAP_S) g_nim_min_gap_s = NIM_MIN_GAP_S;
+}
 
 fn paceForRpm() void {
     g_nim_pace_mu.lock(compat.getIo()) catch return;
@@ -30,8 +44,9 @@ fn paceForRpm() void {
     const now = compat.timestamp();
     if (g_nim_last_s != 0) {
         const elapsed = now - g_nim_last_s;
-        if (elapsed < NIM_MIN_GAP_S) {
-            sleepMs(@intCast((NIM_MIN_GAP_S - elapsed) * 1000));
+        const gap = g_nim_min_gap_s;
+        if (elapsed < gap) {
+            sleepMs(@intCast((gap - elapsed) * 1000));
         }
     }
     g_nim_last_s = compat.timestamp();
@@ -292,19 +307,26 @@ pub fn deinit(self: *NIMClient) void {
         const body = out.written();
 
         var attempt: u32 = 0;
-        const max_attempts: u32 = 6;
+        const max_attempts: u32 = 10;
         while (attempt < max_attempts) : (attempt += 1) {
             paceForRpm();
-            return self.postOnce(body) catch |err| switch (err) {
+            if (self.postOnce(body)) |resp| {
+                noteOkPace();
+                return resp;
+            } else |err| switch (err) {
                 error.RateLimit, error.Timeout, error.Network => {
                     if (attempt + 1 >= max_attempts) return err;
-                    const wait: u64 = @min(@as(u64, 32), @as(u64, 2) << @intCast(@min(attempt, 4)));
-                    std.log.warn("[nim] {} attempt {d}/{d}, backing off {d}s", .{ err, attempt + 1, max_attempts, wait });
+                    if (err == error.RateLimit) noteRateLimit();
+                    const wait: u64 = if (err == error.RateLimit)
+                        @min(@as(u64, 90), @as(u64, 15) << @intCast(@min(attempt, 3)))
+                    else
+                        @min(@as(u64, 32), @as(u64, 2) << @intCast(@min(attempt, 4)));
+                    std.log.warn("[nim] {} attempt {d}/{d}, waiting {d}s then retrying", .{ err, attempt + 1, max_attempts, wait });
                     sleepMs(wait * 1000);
                     continue;
                 },
                 else => return err,
-            };
+            }
         }
         return types.ProviderError.RateLimit;
     }
