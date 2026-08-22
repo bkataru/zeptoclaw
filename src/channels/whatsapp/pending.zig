@@ -202,6 +202,29 @@ pub fn load(allocator: std.mem.Allocator) ![]PendingTurn {
     return loadFrom(allocator, path);
 }
 
+/// Memory: caller owns returned slice.
+pub fn mergeBurstPrompt(allocator: std.mem.Allocator, bodies: []const []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "The user sent several messages while a previous reply was generating. Answer the whole burst in one reply:\n");
+    for (bodies) |b| {
+        try out.appendSlice(allocator, "- ");
+        try out.appendSlice(allocator, b);
+        try out.appendSlice(allocator, "\n");
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "mergeBurstPrompt joins bodies" {
+    const a = std.testing.allocator;
+    const bodies = [_][]const u8{ "😊", "yayayay", "mfer" };
+    const s = try mergeBurstPrompt(a, &bodies);
+    defer a.free(s);
+    try std.testing.expect(std.mem.indexOf(u8, s, "😊") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "yayayay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "mfer") != null);
+}
+
 test "enqueue ack load filters id" {
     const a = std.testing.allocator;
     const path = "/tmp/zeptoclaw-pending-turns-test.jsonl";

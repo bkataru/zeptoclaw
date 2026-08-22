@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Burst coalesce: while NIM is in flight for a chat, later messages in that JID merge into one follow-up turn. Mutex released during NIM.
+
+
 - Pending inbound queue: `pending-turns.jsonl`. Enqueue before NIM, ack after send or listen. Replay on WhatsApp connect after SIGKILL.
 - `MEMORY.md` auto-injected only on Baala `fromMe` DMs. Peer inbound in that chat does not get it.
 - Same-chat journal hydrate (already in 0.1.0 follow-ups).

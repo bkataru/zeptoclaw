@@ -44,3 +44,9 @@ Before NIM, the gateway appends the inbound to `~/.zeptoclaw/sessions/whatsapp/p
 ## MEMORY.md in partner DMs
 
 Injected only when `fromMe=true` (Baala). Peer inbound in that DM does not get `MEMORY.md` auto-injected. Same-chat journal still hydrates both directions.
+
+## Burst coalesce
+
+Inbound is journaled immediately. If that chat already has a NIM turn in flight, extra bodies go into a per-chat buffer (cap 16). After send or listen, those lines become one follow-up turn (`mergeBurstPrompt`). The mutex is not held during NIM, so a burst is not stuck behind RateLimit sleep.
+
+Same-chat journal is keyed by WhatsApp JID (the thread), not by sender. That is the right isolation: both people in a DM share one history. Other JIDs and `MEMORY.md` stay out unless Baala `fromMe` in that DM.

@@ -47,6 +47,66 @@ var g_last_turn_ms: i64 = 0;
 var g_last_reply_buf: [2048]u8 = undefined;
 var g_last_reply_len: usize = 0;
 
+const BURST_CHATS: usize = 8;
+const BURST_CAP: usize = 16;
+const BurstChat = struct {
+    chat: [256]u8 = undefined,
+    chat_len: usize = 0,
+    busy: bool = false,
+    n: usize = 0,
+    ids: [BURST_CAP][128]u8 = undefined,
+    id_lens: [BURST_CAP]usize = [_]usize{0} ** BURST_CAP,
+    bodies: [BURST_CAP][1024]u8 = undefined,
+    body_lens: [BURST_CAP]usize = [_]usize{0} ** BURST_CAP,
+    from_me: [BURST_CAP]bool = [_]bool{false} ** BURST_CAP,
+};
+var g_burst: [BURST_CHATS]BurstChat = [_]BurstChat{.{}} ** BURST_CHATS;
+
+fn burstSlot(chat_id: []const u8) *BurstChat {
+    for (&g_burst) |*s| {
+        if (s.chat_len == chat_id.len and std.mem.eql(u8, s.chat[0..s.chat_len], chat_id)) return s;
+    }
+    for (&g_burst) |*s| {
+        if (s.chat_len == 0 and !s.busy) {
+            const n = @min(chat_id.len, s.chat.len);
+            @memcpy(s.chat[0..n], chat_id[0..n]);
+            s.chat_len = n;
+            return s;
+        }
+    }
+    var s = &g_burst[0];
+    const n = @min(chat_id.len, s.chat.len);
+    @memcpy(s.chat[0..n], chat_id[0..n]);
+    s.chat_len = n;
+    s.n = 0;
+    s.busy = false;
+    return s;
+}
+
+fn burstPush(chat_id: []const u8, id: []const u8, body: []const u8, from_me: bool) void {
+    const s = burstSlot(chat_id);
+    if (s.n >= BURST_CAP) {
+        var i: usize = 1;
+        while (i < BURST_CAP) : (i += 1) {
+            s.ids[i - 1] = s.ids[i];
+            s.id_lens[i - 1] = s.id_lens[i];
+            s.bodies[i - 1] = s.bodies[i];
+            s.body_lens[i - 1] = s.body_lens[i];
+            s.from_me[i - 1] = s.from_me[i];
+        }
+        s.n = BURST_CAP - 1;
+    }
+    const i = s.n;
+    const il = @min(id.len, s.ids[i].len);
+    @memcpy(s.ids[i][0..il], id[0..il]);
+    s.id_lens[i] = il;
+    const bl = @min(body.len, s.bodies[i].len);
+    @memcpy(s.bodies[i][0..bl], body[0..bl]);
+    s.body_lens[i] = bl;
+    s.from_me[i] = from_me;
+    s.n += 1;
+}
+
 // Signal handler for graceful shutdown
 fn sigHandler(sig: std.os.linux.SIG) callconv(.c) void {
     _ = sig;
@@ -258,20 +318,27 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     });
 
     try g_whatsapp_mu.lock(compat.getIo());
-    defer g_whatsapp_mu.unlock(compat.getIo());
 
     const eff_msg = if (opts.skip_inbound) &msg else blk: {
         const proc = inbound.process(msg) catch |err| {
             std.log.err("[whatsapp] inbound.process failed: {}", .{err});
+            g_whatsapp_mu.unlock(compat.getIo());
             return;
         };
         if (!proc.allowed) {
             std.log.info("[whatsapp] inbound denied reason={s} chat={s}", .{ proc.reason orelse "?", msg.chat_id });
+            g_whatsapp_mu.unlock(compat.getIo());
             return;
         }
-        break :blk proc.message orelse return;
+        break :blk proc.message orelse {
+            g_whatsapp_mu.unlock(compat.getIo());
+            return;
+        };
     };
-    if (eff_msg.body.len == 0) return;
+    if (eff_msg.body.len == 0) {
+        g_whatsapp_mu.unlock(compat.getIo());
+        return;
+    }
 
     // Always listen: persist inbound even when we choose not to speak.
     const chat_id_copy = try g_whatsapp_alloc.dupe(u8, eff_msg.chat_id);
@@ -289,6 +356,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             (last.len >= body_copy.len and body_copy.len > 24 and std.mem.startsWith(u8, last, body_copy));
         if (echo) {
             std.log.info("[whatsapp] skip own echo", .{});
+            g_whatsapp_mu.unlock(compat.getIo());
             return;
         }
     }
@@ -301,6 +369,17 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     // No trigger and not subscribed: keep journal only (still listening, no NIM).
     if (!triggered and !zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy)) {
         std.log.info("[whatsapp] listening only (unsubscribed) chat={s}", .{chat_id_copy});
+        g_whatsapp_mu.unlock(compat.getIo());
+        return;
+    }
+
+    const slot = burstSlot(chat_id_copy);
+    if (slot.busy and !opts.skip_inbound) {
+        const pid = if (eff_msg.id.len > 0) eff_msg.id else chat_id_copy;
+        burstPush(chat_id_copy, pid, body_copy, eff_msg.from_me);
+        zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pid, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
+        std.log.info("[whatsapp] coalesce while generating chat={s} n={d} body={s}", .{ chat_id_copy, slot.n, body_copy });
+        g_whatsapp_mu.unlock(compat.getIo());
         return;
     }
 
@@ -311,8 +390,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         std.mem.eql(u8, g_last_turn_body[0..g_last_turn_body_len], eff_msg.body);
     if (!opts.skip_dup_window and same_chat and same_body and now_ms - g_last_turn_ms < 20_000) {
         std.log.info("[whatsapp] skip duplicate turn chat={s}", .{eff_msg.chat_id});
+        g_whatsapp_mu.unlock(compat.getIo());
         return;
     }
+    slot.busy = true;
     const nchat = @min(eff_msg.chat_id.len, g_last_turn_chat.len);
     @memcpy(g_last_turn_chat[0..nchat], eff_msg.chat_id[0..nchat]);
     g_last_turn_chat_len = nchat;
@@ -325,6 +406,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const pending_id = try g_whatsapp_alloc.dupe(u8, pending_src);
     defer g_whatsapp_alloc.free(pending_id);
     zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pending_id, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
+    g_whatsapp_mu.unlock(compat.getIo());
 
     const ws_dir_const = zeptoclaw.openclaw_compat.resolveWorkspaceDir(g_whatsapp_alloc) catch null;
     defer if (ws_dir_const) |wd| g_whatsapp_alloc.free(wd);
@@ -436,6 +518,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     if (reply_text.len == 0) {
         std.log.info("[whatsapp] silent/leave; not sending", .{});
         zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
+        try drainBurstOrClear(chat_id_copy, is_dm, opts);
         return;
     }
 
@@ -468,6 +551,80 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);
     g_last_reply_len = rlen;
     zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
+    try drainBurstOrClear(chat_id_copy, is_dm, opts);
+}
+
+fn drainBurstOrClear(chat_id: []const u8, is_dm: bool, opts: TurnOpts) anyerror!void {
+    try g_whatsapp_mu.lock(compat.getIo());
+    const s = burstSlot(chat_id);
+    if (s.n == 0) {
+        s.busy = false;
+        g_whatsapp_mu.unlock(compat.getIo());
+        return;
+    }
+    var owned_bodies: [BURST_CAP][]u8 = undefined;
+    var owned_ids: [BURST_CAP][]u8 = undefined;
+    var n: usize = 0;
+    var last_id: [128]u8 = undefined;
+    var last_id_len: usize = 0;
+    var any_from_me = false;
+    var i: usize = 0;
+    while (i < s.n) : (i += 1) {
+        owned_bodies[n] = g_whatsapp_alloc.dupe(u8, s.bodies[i][0..s.body_lens[i]]) catch {
+            g_whatsapp_mu.unlock(compat.getIo());
+            return;
+        };
+        owned_ids[n] = g_whatsapp_alloc.dupe(u8, s.ids[i][0..s.id_lens[i]]) catch {
+            g_whatsapp_mu.unlock(compat.getIo());
+            return;
+        };
+        last_id_len = s.id_lens[i];
+        @memcpy(last_id[0..last_id_len], s.ids[i][0..last_id_len]);
+        if (s.from_me[i]) any_from_me = true;
+        n += 1;
+    }
+    s.n = 0;
+    g_whatsapp_mu.unlock(compat.getIo());
+    defer {
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            g_whatsapp_alloc.free(owned_bodies[j]);
+            g_whatsapp_alloc.free(owned_ids[j]);
+        }
+    }
+
+    var body_views: [BURST_CAP][]const u8 = undefined;
+    var k: usize = 0;
+    while (k < n) : (k += 1) body_views[k] = owned_bodies[k];
+    const merged = zeptoclaw.channels.whatsapp.pending.mergeBurstPrompt(g_whatsapp_alloc, body_views[0..n]) catch return;
+    defer g_whatsapp_alloc.free(merged);
+    std.log.info("[whatsapp] draining burst n={d} chat={s}", .{ n, chat_id });
+
+    var follow = zeptoclaw.channels.whatsapp.types.WhatsAppMessage.init(g_whatsapp_alloc) catch return;
+    defer follow.deinit();
+    g_whatsapp_alloc.free(follow.id);
+    g_whatsapp_alloc.free(follow.chat_id);
+    g_whatsapp_alloc.free(follow.body);
+    g_whatsapp_alloc.free(follow.from);
+    g_whatsapp_alloc.free(follow.sender_jid);
+    follow.id = g_whatsapp_alloc.dupe(u8, last_id[0..last_id_len]) catch return;
+    follow.chat_id = g_whatsapp_alloc.dupe(u8, chat_id) catch return;
+    follow.body = g_whatsapp_alloc.dupe(u8, merged) catch return;
+    follow.from = g_whatsapp_alloc.dupe(u8, chat_id) catch return;
+    follow.sender_jid = g_whatsapp_alloc.dupe(u8, chat_id) catch return;
+    follow.from_me = any_from_me;
+    follow.chat_type = if (is_dm) .direct else .group;
+    handleWhatsAppTurn(follow, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
+        std.log.err("[whatsapp] burst follow-up failed: {}", .{err});
+        try g_whatsapp_mu.lock(compat.getIo());
+        burstSlot(chat_id).busy = false;
+        g_whatsapp_mu.unlock(compat.getIo());
+    };
+    var a: usize = 0;
+    while (a < n) : (a += 1) {
+        zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, owned_ids[a]);
+    }
+    _ = opts;
 }
 
 pub fn main() !void {
