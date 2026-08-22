@@ -21,6 +21,13 @@ let isConnected = false;
 let selfJid = null;
 let selfE164 = null;
 let allowedFrom = new Set(); // E.164 strings from channels.whatsapp.allowFrom for symmetric DM wake
+let lastInitOptions = {};
+let sockGen = 0;
+let reconnectTimer = null;
+let reconnectBackoffMs = 2000;
+const RECONNECT_BACKOFF_MAX_MS = 60000;
+let reconnectInFlight = false;
+let shuttingDown = false;
 const seenMessageIds = new Set();
 const sentMessageIds = new Set();
 const MAX_SEEN = 2000;
@@ -102,8 +109,43 @@ const logger = pino({ level: 'silent' });
 /**
  * Initialize WhatsApp connection
  */
+function clearReconnectTimer() {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+}
+
+function discardSocket(sock) {
+    if (!sock) return;
+    try { sock.ev.removeAllListeners(); } catch (_) {}
+    try { sock.end(undefined); } catch (_) {}
+    try { sock.ws && sock.ws.close(); } catch (_) {}
+}
+
+function scheduleReconnect(reason) {
+    if (shuttingDown) return;
+    if (reconnectTimer || reconnectInFlight) return;
+    const delay = reconnectBackoffMs;
+    console.error('[zepto] whatsapp closed (' + String(reason) + '); reconnect in ' + delay + 'ms');
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, RECONNECT_BACKOFF_MAX_MS);
+        reconnectInFlight = true;
+        init(lastInitOptions).then(() => {
+            reconnectInFlight = false;
+        }).catch((err) => {
+            reconnectInFlight = false;
+            console.error('[zepto] reconnect failed:', err && err.message ? err.message : err);
+            scheduleReconnect('init-failed');
+        });
+    }, delay);
+}
+
 async function init(options = {}) {
-    const { auth_dir, print_qr = true, browser = ['zeptoclaw', 'cli', '1.0.0'], allow_from = [] } = options;
+    shuttingDown = false;
+    lastInitOptions = options && typeof options === 'object' ? options : lastInitOptions;
+    const { auth_dir, print_qr = true, browser = ['zeptoclaw', 'cli', '1.0.0'], allow_from = [] } = lastInitOptions;
     if (Array.isArray(allow_from)) {
         allowedFrom = new Set(allow_from.map(v => String(v).replace(/[^0-9]/g, '').replace(/^0+/, '')));
     }
@@ -115,6 +157,13 @@ async function init(options = {}) {
     if (!fs.existsSync(authDir)) {
         fs.mkdirSync(authDir, { recursive: true });
     }
+
+    clearReconnectTimer();
+    sockGen += 1;
+    const gen = sockGen;
+    const previous = socket;
+    socket = null;
+    discardSocket(previous);
 
     // Load auth state
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -141,6 +190,7 @@ async function init(options = {}) {
 
     // Handle connection updates
     socket.ev.on('connection.update', (update) => {
+        if (gen !== sockGen) return;
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -157,6 +207,9 @@ async function init(options = {}) {
         if (connection === 'open') {
             connectedAtMs = Date.now();
             isConnected = true;
+            reconnectBackoffMs = 2000;
+            reconnectInFlight = false;
+            clearReconnectTimer();
             selfJid = socket.user?.id;
             selfE164 = selfJid ? jidToE164(selfJid) : null;
 
@@ -167,19 +220,28 @@ async function init(options = {}) {
         if (connection === 'close') {
             isConnected = false;
             const status = lastDisconnect?.error?.output?.statusCode;
+            const loggedOut = status === DisconnectReason.loggedOut;
 
             // Notify connection handlers
             connectionHandlers.forEach(handler => handler({
                 type: 'disconnected',
                 status,
-                isLoggedOut: status === DisconnectReason.loggedOut,
+                isLoggedOut: loggedOut,
                 error: lastDisconnect?.error
             }));
+
+            if (shuttingDown) return;
+            if (loggedOut) {
+                console.error('[zepto] logged out; scan QR (no auto-reconnect)');
+                return;
+            }
+            scheduleReconnect(status == null ? 'close' : status);
         }
     });
 
     // Handle incoming messages
     socket.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (gen !== sockGen) return;
         // notify = live; append can also be live on LID/group. Dedup is ledger/isReplay.
         if (type !== 'notify' && type !== 'append') return;
 
@@ -500,14 +562,12 @@ async function getGroupMetadata(jid) {
  * Disconnect and cleanup
  */
 async function disconnect() {
-    if (socket) {
-        try {
-            socket.ws?.close();
-        } catch (err) {
-            // Ignore close errors
-        }
-        socket = null;
-    }
+    shuttingDown = true;
+    clearReconnectTimer();
+    reconnectInFlight = false;
+    const previous = socket;
+    socket = null;
+    discardSocket(previous);
 
     isConnected = false;
     selfJid = null;
@@ -836,11 +896,13 @@ if (require.main === module) {
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
+        shuttingDown = true;
         await disconnect();
         process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
+        shuttingDown = true;
         await disconnect();
         process.exit(0);
     });
@@ -859,6 +921,7 @@ module.exports = {
     getContactInfo,
     getGroupMetadata,
     disconnect,
+    scheduleReconnect,
     onMessage,
     onConnection,
     onQr,

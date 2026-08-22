@@ -4,6 +4,10 @@ Live path: Zig `WhatsAppChannel` spawns Node `src/channels/whatsapp/baileys_wrap
 
 Inbound runs `Agent.runTurn` (workspace markdown, tools, NIM retries, reply). Then `journal_append` `[in]`/`[out]` to `memory/YYYY-MM-DD.md`. See `memory.md`.
 
+## Reconnect
+
+On `connection.close`, Node rebuilds the Baileys socket with exponential backoff (2s, cap 60s) unless `DisconnectReason.loggedOut` (needs a new QR). `disconnect` / SIGTERM set `shuttingDown` so close does not reconnect. Zig still sees `disconnected` then `connected`; pending-turns replay on `connected`.
+
 ## RPC
 
 Zig writes JSON-RPC lines on Node stdin (`sendMessage`, `onMessage`, ...). Node writes JSON objects only on stdout. Non-`{` lines are ignored. QR and session errors go to stderr; Zig drains stderr so the pipe cannot stall.

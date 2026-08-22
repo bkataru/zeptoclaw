@@ -12,7 +12,7 @@
 
 - **Agent loop on WhatsApp** (2026-08-22): gateway inbound goes through `Agent.runTurn` (workspace markdown + tools + NIM), not `NIMClient.chat` once
 - **Memory**: daily journals `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (full `[in]`/`[out]`, no 2000-char clip). Tools `memory_get` / `memory_search` / `memory_append` / `memory_edit`. `zeptoclaw memory update` every 30 min (decide then synthesize). `zeptoclaw memory compact` every 2 h (densify MEMORY.md, does not dump journals)
-- **WhatsApp reliability**: inbound ledger (Baileys id + 3 min fingerprint), JSON-only RPC stdout, stderr drain, `RpcTimeout` on send ACK, LID/`fromMe` allowlist DMs, handler off the reader thread
+- **WhatsApp reliability**: inbound ledger (Baileys id + 3 min fingerprint), JSON-only RPC stdout, stderr drain, `RpcTimeout` on send ACK, LID/`fromMe` allowlist DMs, handler off the reader thread, Baileys auto-reconnect on `connection.close` (not `loggedOut`)
 - **Pending turns**: `pending-turns.jsonl` under `sessions/whatsapp/`. Enqueue before NIM, ack after send or silent `listen`/`leave`. Replay on `connection status=connected` after SIGKILL
 - **Burst coalesce**: while NIM is in flight for a chat, later messages on that JID merge into one follow-up turn (cap 16). First reply still answers the starter message
 - **Inbound images**: download to `sessions/whatsapp/media/`, last-image per JID, attach as NIM `image_url` on that chat's later turns (4MB cap)
