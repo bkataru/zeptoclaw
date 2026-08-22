@@ -1,6 +1,6 @@
 # Configuration
 
-ZeptoClaw reads OpenClaw-shaped JSON. Search order is in `src/openclaw_compat/openclaw.zig`: `~/.zeptoclaw/config.json`, `./zeptoclaw.json`, `./config.json`, then read-only `~/.openclaw/…`.
+ZeptoClaw reads OpenClaw-shaped JSON. Search order: `~/.zeptoclaw/config.json`, `./zeptoclaw.json`, `./config.json`, then read-only `~/.openclaw/…`.
 
 Important fields:
 
@@ -19,4 +19,6 @@ Important fields:
 }
 ```
 
-Prefer env for secrets (`NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`). Restart the gateway after edits. Do not store live tokens in the git tree.
+Prefer env for secrets (`NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`). Memory oneshots also read `~/.config/zeptoclaw/nim.env`. Restart the gateway after edits. Do not store live tokens in the git tree.
+
+Persona and journals: `~/.zeptoclaw/workspace`. See [memory.md](../memory.md).

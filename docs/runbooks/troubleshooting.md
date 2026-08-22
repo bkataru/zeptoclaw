@@ -4,7 +4,7 @@
 
 - `NVIDIA_API_KEY` missing → config load fails.
 - Zig 0.15 vs 0.16 mismatch → rebuild with 0.16.0.
-- `OutOfMemory` on WhatsApp connect → spawn used `compat.getIo()`; current code must use a dedicated `std.Io.Threaded`.
+- `OutOfMemory` on WhatsApp connect → spawn used the shared I/O that cannot fork; current code must use a dedicated threaded I/O for Node.
 
 ## Connected but no replies
 

@@ -1,11 +1,11 @@
 # OpenClaw compatibility
 
-Zig-only bridge (`src/openclaw_compat/openclaw.zig`). No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys + `Agent.runTurn`. Gateway port **18789**.
+Zig-only bridge. No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys plus the agent loop. Gateway port **18789**. Workspace markdown (soul, identity, daily journals, long-term memory) is served from `~/.zeptoclaw/workspace`.
 
 ## 1. Principles
 
 - **Zero npm `openclaw` dep** — the bridge never imports the npm package; it only parses on-disk formats and mirrors path/API conventions.
-- **ZeptoClaw primary → OpenClaw legacy fallback** — every resolver tries `~/.zeptoclaw` first, then falls back read-only to `~/.openclaw`.
+- **ZeptoClaw primary → OpenClaw leftover fallback** — every resolver tries `~/.zeptoclaw` first, then falls back read-only to `~/.openclaw`. Do not push persona from the leftover tree.
 - **Preserve wire + KV compat** — reuses Cloudflare KV `70a3dbb693e246d48a0fbdc7b32c7317` + `compatibility_date = 2026-01-01` so either side sees the same state.
 - **Canonical logic stays ZeptoClaw** — legacy aliases are normalized, not duplicated.
 

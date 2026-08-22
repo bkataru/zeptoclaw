@@ -10,7 +10,6 @@ main
 root
 
 # Build artifacts
-build.zig.zon
 build.zig.zon.bak
 build_*.log
 build_errors.txt
