@@ -6,29 +6,52 @@
 
 ## Build Status
 
-**v0.1.0** was tagged 2026-08-22 against Zig 0.16.0. `main` has moved since then: pending-turn replay, burst coalesce, inbound images, and parser fuzzing. The tag is a snapshot of the WhatsApp `runTurn` cutover plus journals and the memory jobs; install from current `main` if you want the durability work.
-
-`zig build test` compiles the tree and runs parser/unit tests. NIM integration tests skip when `NVIDIA_API_KEY` is unset. Zig 0.16.0's `zig build test --fuzz` fails to rebuild (`test_runner` mixes `builtin.StackTrace` and `debug.StackTrace`). Parser havoc lives in `zeptoclaw fuzz`; see [docs/fuzz.md](docs/fuzz.md).
+- **v0.1.0** tagged 2026-08-22, Zig 0.16.0. `main` adds WhatsApp durability (pending replay, burst coalesce, inbound vision) and parser fuzzing. History in [CHANGELOG.md](CHANGELOG.md).
+- `zig build test` is the compile and parser gate. NIM integration tests skip without `NVIDIA_API_KEY`.
+- `zig build test --fuzz` fails to rebuild on 0.16.0 (`test_runner` mixes `builtin.StackTrace` and `debug.StackTrace`). Parser havoc runs as `zeptoclaw fuzz [iters]`. See [docs/fuzz.md](docs/fuzz.md).
 
 ## Recent Updates
 
-WhatsApp inbound is handled by `Agent.runTurn`: workspace markdown as the system prompt, tools, NVIDIA NIM. Same-chat lines from today's and yesterday's journals (`memory/YYYY-MM-DD.md`) are injected so a restart still has thread. Before NIM, the gateway appends the inbound to `pending-turns.jsonl` and acks it after a send or a silent `listen`/`leave`; leftover rows replay when Baileys reports `connected`. While NIM is in flight for a JID, later messages on that JID buffer (cap 16) and merge into one follow-up turn. Inbound images land under `sessions/whatsapp/media/`; later text on the same JID can attach that file as a NIM `image_url`.
+Live WhatsApp turn:
 
-Journals are full `[in]`/`[out]` text (8 MiB reread cap on rewrite). Tools: `memory_get`, `memory_search`, `memory_append`, `memory_edit`. Every 30 minutes the gateway spawns `zeptoclaw memory update` (decide UPDATE/SKIP, then synthesize `MEMORY.md`). Every 2 hours `zeptoclaw memory compact` densifies `MEMORY.md` without dumping journals. `MEMORY.md` is auto-injected only on Baala `fromMe` DMs.
+- inbound JSON from Node
+- access check (allowlist, wake word, `fromMe`)
+- enqueue pending turn (`pending-turns.jsonl`)
+- journal `[in]` to `memory/YYYY-MM-DD.md`
+- `Agent.runTurn` (workspace markdown, tools, NIM)
+- send reply, journal `[out]`, ack pending
 
-Replay uses Baileys message ids plus a 3-minute fingerprint `chatId|fromMe|body`. Connecting does not mute inbound on wall-clock. `RpcTimeout` (~30s) means the send ACK never came back. State lives under `~/.zeptoclaw/{workspace,sessions,config.json}`; Baileys auth is `sessions/whatsapp/`.
+Durability and context:
 
-Details: [CHANGELOG.md](CHANGELOG.md), [docs/whatsapp.md](docs/whatsapp.md), [docs/memory.md](docs/memory.md).
+- same-chat hydrate from today's and yesterday's journals after restart
+- pending replay on `connection status=connected` (`skip_journal`)
+- burst coalesce: per-chat buffer (cap 16) while NIM is in flight; first reply answers the starter, later lines merge into the follow-up
+- inbound images under `sessions/whatsapp/media/`; later text on that JID attaches the last image as a NIM `image_url` data URL (4MB cap)
+
+Memory:
+
+- journals are full `[in]` / `[out]` text (8 MiB rewrite reread cap)
+- tools: `memory_get`, `memory_search`, `memory_append`, `memory_edit`
+- `zeptoclaw memory update` every 30 min: decide UPDATE/SKIP, then synthesize `MEMORY.md`
+- `zeptoclaw memory compact` every 2 h: densify `MEMORY.md`. Does not dump journals
+- `MEMORY.md` auto-injected only on Baala `fromMe` DMs
+
+Replay and transport:
+
+- ledger: Baileys id + 3-minute fingerprint `chatId|fromMe|body`
+- no wall-clock mute after connect
+- `RpcTimeout` (~30s) is a failed send ACK
+- state tree: `~/.zeptoclaw/{workspace,sessions,config.json}`; Baileys auth `sessions/whatsapp/`
+
+Details in [docs/whatsapp.md](docs/whatsapp.md) and [docs/memory.md](docs/memory.md).
 
 ## Project Metrics
-
-`src/` as of this writing. File and line counts drift; binaries, state root, and the listen port do not.
 
 | | |
 |--|--|
 | Zig files under `src/` | 106 |
 | Lines in those files | ~29k |
-| Binaries from `zig build` | 4 (`zeptoclaw`, `zeptoclaw-gateway`, `zeptoclaw-webhook`, `zeptoclaw-shell2http`) |
+| Binaries from `zig build` | 4 |
 | State root | `~/.zeptoclaw` |
 | Gateway listen | `18789` |
 
@@ -45,11 +68,15 @@ Details: [CHANGELOG.md](CHANGELOG.md), [docs/whatsapp.md](docs/whatsapp.md), [do
 
 ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+**. It's designed as a lean, purpose-built alternative to frameworks like NullClaw and KrillClaw, optimized specifically for the Barvis ecosystem.
 
-The loop is NVIDIA NIM (`thinkingmachines/inkling` by default). `chatWithTools` retries forever on RateLimit, Timeout, and Network; auth errors fail immediately (tests skip the sleep). CLI and WhatsApp both call `Agent.runTurn`. Tool rounds cap at 200. If the model prints `{"name":...}` as chat instead of a tool call, `hydrateToolCallsFromContent` still runs it.
-
-Tools: `read`, `write`, `edit`, `exec`, `web_search`, `listen`, `leave`, `skill`, `memory_get`, `memory_search`, `memory_append`, `memory_edit`. `exec` needs an approval line in `sessions/exec-approvals.txt` unless `ZEPTO_EXEC_APPROVE=1`.
-
-WhatsApp on the live host is Baileys via `baileys_wrapper.js`. `src/channels/whatsapp/native/` (whatsmeow-shaped Zig) compiles and is unwired. Groups stay deny until the group JID is on `allowFrom`. Workspace markdown (`SOUL.md`, identity, journals, `MEMORY.md`) is the system prompt. OpenClaw-shaped skills under `src/skills/` are optional (`skill` tool). The Cloudflare Worker is a separate OpenAI-compatible router with KV; it does not replace `zeptoclaw-gateway`.
+- NVIDIA NIM (`thinkingmachines/inkling` default). `chatWithTools` retries forever on RateLimit, Timeout, Network. Auth errors fail immediately (tests skip the sleep).
+- CLI and WhatsApp both call `Agent.runTurn`. `max_iters` = 200. Leaked `{"name":...}` chat JSON runs via `hydrateToolCallsFromContent`.
+- Tools: `read`, `write`, `edit`, `exec`, `web_search`, `listen`, `leave`, `skill`, `memory_get`, `memory_search`, `memory_append`, `memory_edit`.
+- `exec` runs only on approval in `sessions/exec-approvals.txt`, or unconditionally when `ZEPTO_EXEC_APPROVE=1`.
+- Live WhatsApp transport is Baileys (`baileys_wrapper.js`). `src/channels/whatsapp/native/` (whatsmeow-shaped) compiles and is unwired.
+- Groups stay deny until the group JID is on `allowFrom`.
+- Workspace markdown (`SOUL.md`, identity, journals, `MEMORY.md`) is the system prompt source.
+- `src/skills/` is optional (`skill` tool), independent of the WhatsApp path.
+- Cloudflare Worker: OpenAI-compatible router + KV. Separate from `zeptoclaw-gateway`.
 
 ## Installation
 
@@ -63,7 +90,7 @@ zig build
 
 - **Zig 0.16.0+** from [ziglang.org](https://ziglang.org/download/)
 - **NVIDIA NIM API key** from [build.nvidia.com](https://build.nvidia.com/)
-- **Node.js 18+** for the WhatsApp wrapper. Set `ZEPTO_NODE` if `node` is missing from `PATH`. systemd units must set it as well.
+- **Node.js 18+** for the WhatsApp wrapper. Set `ZEPTO_NODE` if `node` is missing from `PATH`. systemd units must set it too.
 
 ## Configuration
 
@@ -76,9 +103,10 @@ export ZEPTO_CRON_SECS=0
 export ZEPTO_MEMORY_SECS=1800
 ```
 
-`ZEPTO_CRON_SECS=0` turns off heartbeat turns (leave it at 0 while chatting). `ZEPTO_MEMORY_SECS` is how often the gateway child runs `memory update` (default 1800). The first ingest waits one full interval after gateway start.
-
-WhatsApp allowlist is config: `channels.whatsapp.allowFrom` and `dmPolicy`. Put `NVIDIA_API_KEY` and `GATEWAY_AUTH_TOKEN` on the local systemd unit, or in `chmod 600` files such as `~/.config/zeptoclaw/nim.env` for memory oneshots. Missing `GATEWAY_AUTH_TOKEN` fails closed on the gateway; `token_auth.zig` tests use placeholders only.
+- `ZEPTO_CRON_SECS=0`: disable heartbeat turns while chatting.
+- `ZEPTO_MEMORY_SECS`: gateway child `memory update` interval. Default 1800s. First ingest waits one full interval after start.
+- WhatsApp allowlist: `channels.whatsapp.allowFrom`, `dmPolicy`.
+- Secrets on the local systemd unit, or in `chmod 600` files (`~/.config/zeptoclaw/nim.env` for memory oneshots). Missing `GATEWAY_AUTH_TOKEN` fails closed. `token_auth.zig` tests use placeholders only.
 
 | Path | Meaning |
 |------|---------|
@@ -87,7 +115,7 @@ WhatsApp allowlist is config: `channels.whatsapp.allowFrom` and `dmPolicy`. Put 
 | `~/.zeptoclaw/sessions/whatsapp/` | Baileys auth, inbound ledger, `pending-turns.jsonl`, media |
 | `~/.zeptoclaw/sessions/transcripts/` | `Agent` transcripts |
 
-`openclaw_compat` looks at `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`.
+`openclaw_compat` resolves `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`.
 
 ## Usage
 
@@ -106,9 +134,15 @@ zig build
 
 ### Interactive CLI
 
-`zeptoclaw` with no subcommand reads stdin and runs the same `runTurn` as WhatsApp: workspace markdown, tools, final assistant text.
+`zeptoclaw` with no subcommand reads stdin through the same `runTurn` as WhatsApp: workspace markdown as the system prompt, tools until final text.
 
-WhatsApp path: Node emits inbound JSON, Zig checks access, enqueues pending, journals `[in]`, calls `runTurn`, sends, journals `[out]`, acks pending. After the model text, Zig appends ⚡ (U+26A1) via `engagement.appendSignature` if it is not already there. `listen` and `leave` send nothing, so they stay unsigned. Language rules live in `engagement.LANGUAGE_INSTRUCTIONS` and in workspace `SOUL.md`.
+WhatsApp path detail:
+
+- inbound JSON from Node
+- access check, enqueue pending
+- journal `[in]`, `runTurn`, send, journal `[out]`, ack pending
+- Zig appends ⚡ (U+26A1) after the model text (`engagement.appendSignature`). Idempotent.
+- `listen` and `leave` send nothing. Those turns stay unsigned.
 
 ## Architecture
 
@@ -151,18 +185,18 @@ src/
 
 ### Core Components
 
-| Component | What it does |
-|-----------|----------------|
-| **NIMClient** | OpenAI-compatible HTTP to NVIDIA NIM. Same-JID images go out as `image_url` data URLs (4MB cap). |
-| **Agent** | `runTurn` walks extra context and tools until a final assistant message. |
-| **Channels** | CLI vs WhatsApp. WhatsApp owns RPC, ledger, pending, and media. |
-| **Tools** | UTCP registry plus `core_tools` (workspace files, exec, search, `memory_*`). |
-| **Memory** | Daily journals are the trace. `MEMORY.md` is distilled later. Hydrate matches `] (chat_id):`. |
-| **Gateway** | Port 18789. Inbound is dispatched off the RPC reader thread. Burst mutex is released during NIM. |
+| Component | Contract |
+|-----------|----------|
+| **NIMClient** | OpenAI-compatible HTTP to NVIDIA NIM. Multimodal `image_url` when a same-JID image exists |
+| **Agent** | `runTurn`: extra context + tools until final assistant text |
+| **Channels** | CLI vs WhatsApp. WhatsApp owns RPC, ledger, pending, media |
+| **Tools** | UTCP registry + `core_tools` (workspace, exec, search, `memory_*`) |
+| **Memory** | Journals are the trace. `MEMORY.md` distilled later. Hydrate filters by `] (chat_id):` |
+| **Gateway** | Port 18789. Inbound off the RPC reader thread. Burst mutex released during NIM |
 
 ## Systemd Services
 
-Templates live in `systemd/` and `contrib/systemd/` (no secrets). Barvis on this host uses a local user unit: `ExecStart=%h/zeptoclaw/zig-out/bin/zeptoclaw-gateway` with `NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`, and `ZEPTO_NODE` only on that unit.
+Templates in `systemd/` and `contrib/systemd/`. No secrets in the templates. Barvis uses a local user gateway unit with `NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`, `ZEPTO_NODE` on that unit only.
 
 | Unit | Role |
 |------|------|
@@ -173,9 +207,9 @@ Templates live in `systemd/` and `contrib/systemd/` (no secrets). Barvis on this
 | `zeptoclaw-shell2http.service` | Port 9001 |
 | `gateway-watchdog.timer` | Health ping every 2 min |
 
-`systemd/` also has moltbook heartbeat, workspace-sync, and whatsapp-responder. Those are leftover OpenClaw-shaped ops; DMs work without them.
+`systemd/` also has moltbook heartbeat, workspace-sync, and whatsapp-responder. Those are OpenClaw-era ops; DMs do not need them.
 
-If `systemctl --user restart` hangs, `systemctl --user kill` plus `pkill` on the gateway and `baileys_wrapper`, then `start`.
+If `systemctl --user restart` hangs: `systemctl --user kill`, `pkill` the gateway and `baileys_wrapper`, then `start`.
 
 ### Installation
 
@@ -188,7 +222,7 @@ systemctl --user enable --now zeptoclaw-gateway.service
 systemctl --user enable --now barvis-memory-update.timer
 ```
 
-Edit the local gateway unit for keys after copying the template.
+Edit the local gateway unit for keys after copying.
 
 ### Management
 
@@ -200,7 +234,7 @@ journalctl --user -u zeptoclaw-gateway.service -f
 
 ## Migration from OpenClaw
 
-Path and config compatibility is `src/openclaw_compat/` ([docs/openclaw-compat.md](docs/openclaw-compat.md)). Copy scripts are in `scripts/migrate/`. Live WhatsApp auth is `~/.zeptoclaw/sessions/whatsapp/` and is not in this repo. Private `barvis` sync copies it into `zeptoclaw-state/`.
+Path and config compatibility is `src/openclaw_compat/` ([docs/openclaw-compat.md](docs/openclaw-compat.md)). Copy scripts in `scripts/migrate/`. Live WhatsApp auth is `~/.zeptoclaw/sessions/whatsapp/`, not in this repo. Private `barvis` sync copies it into `zeptoclaw-state/`.
 
 ### Data Migration
 
@@ -220,25 +254,23 @@ cd scripts/migrate
 
 ### Skills Migration
 
-`src/skills/` was ported from OpenClaw and is invoked with the `skill` tool. WhatsApp reliability does not depend on these modules.
-
-`adhd_workflow`, `discovery`, `dirmacs_docs`, `gateway_watchdog`, `git_workflow`, `github`, `github_stars`, `knowledge_base`, `local_http_services`, `local_llm`, `memory_tree_search`, `moltbook`, `moltbook_heartbeat`, `nufast_physics`, `operational_safety`, `planckeon_sites`, `rust_cargo`, `semantic_search`, `web_qa`, `wsl_troubleshooting`, `zig_dev`.
+`src/skills/` ported from OpenClaw, invoked via the `skill` tool. Names: `adhd_workflow`, `discovery`, `dirmacs_docs`, `gateway_watchdog`, `git_workflow`, `github`, `github_stars`, `knowledge_base`, `local_http_services`, `local_llm`, `memory_tree_search`, `moltbook`, `moltbook_heartbeat`, `nufast_physics`, `operational_safety`, `planckeon_sites`, `rust_cargo`, `semantic_search`, `web_qa`, `wsl_troubleshooting`, `zig_dev`.
 
 ### WhatsApp Channel
 
-Node `baileys_wrapper.js` writes JSON objects on stdout and QR / session errors on stderr. Zig `WhatsAppChannel` drains stderr so the pipe cannot stall, and ignores non-`{` stdout. Dispatch runs off the reader thread. `sendRequest` is single-flight; `RpcTimeout` (~30s) is a missing send ACK. Node races `socket.sendMessage` against a 20s timer.
+Live: Node `baileys_wrapper.js` (JSON objects on stdout, QR and session errors on stderr) + Zig `WhatsAppChannel`. Stderr is drained so the pipe cannot stall. Dispatch is off the reader thread. `sendRequest` is single-flight; `RpcTimeout` (~30s) is a missing send ACK. Node races `socket.sendMessage` against a 20s timer.
 
-Durability is documented in [docs/whatsapp.md](docs/whatsapp.md):
+Durability ([docs/whatsapp.md](docs/whatsapp.md)):
 
-- `inbound-ledger.json`: Baileys ids and fingerprint `chatId|fromMe|body` (3 min skip)
+- `inbound-ledger.json`: Baileys ids + fingerprint `chatId|fromMe|body` (3 min skip)
 - `pending-turns.jsonl`: enqueue before NIM, ack after send or silent listen/leave, replay on `connected`
-- Burst: per-chat buffer while NIM runs; the first reply is the message that started NIM; later lines merge into the follow-up
-- Vision: inbound image under `sessions/whatsapp/media/`; later text on that JID reuses `last-image/`
-- Access: `dmPolicy=allowlist`. Wake word **barvis** except allowlisted 1:1 and LID self-chat. `leave` unsubscribes until the next barvis
+- burst: per-chat buffer while NIM runs; first reply is the starter; later lines merge into the follow-up
+- vision: inbound image under `sessions/whatsapp/media/`; later same-JID text reuses `last-image/`
+- access: `dmPolicy=allowlist`. Wake word **barvis** except allowlisted 1:1 and LID self-chat. `leave` unsubscribes until the next barvis
 
 ## Cloudflare Worker
 
-A Cloudflare Worker exposes OpenAI-compatible `/v1/chat/completions` with failover. `BARVIS_STATE` and `ZEPTOCLAW_STATE` share one KV namespace id. It is a router, not the local WhatsApp gateway.
+OpenAI-compatible `/v1/chat/completions` with failover. `BARVIS_STATE` and `ZEPTOCLAW_STATE` share one KV namespace id. Router only; does not run WhatsApp.
 
 ```bash
 cd cloudflare-worker
@@ -271,7 +303,7 @@ zig build test
 - `systemd/` and `contrib/systemd/`
 - `scripts/migrate/`
 - `cloudflare-worker/`
-- `testdata/fuzz/` (redacted seed shapes: dummy `1555555010x`, bodies `x`)
+- `testdata/fuzz/` (redacted seed shapes, dummy `1555555010x`)
 - `docs/` (`whatsapp.md`, `memory.md`, `openclaw-compat.md`, `fuzz.md`, runbooks)
 
 ## Dependencies
@@ -287,7 +319,7 @@ zig build test
 | [zeitgeist](vendor/zeitgeist) | Time-series memory (vendored) |
 | [comprezz](vendor/comprezz) | Compression utilities (vendored) |
 
-There is no npm `openclaw` package. WhatsApp uses Baileys from the Node wrapper.
+No npm `openclaw` package. WhatsApp uses Baileys from the Node wrapper.
 
 ## Testing and Verification
 
@@ -297,7 +329,16 @@ ls -lh zig-out/bin/
 curl http://localhost:18789/health
 ```
 
-Fuzz corpora (`std.testing.fuzz`) plus `src/fuzz_mutate.zig` cover inbound JSON, journal JID filter, pending jsonl, tool-call hydrate, memory decide parsers, and NIM completion JSON. `zeptoclaw fuzz` is longer havoc without NIM HTTP or a Baileys connect.
+Fuzz surfaces (`std.testing.fuzz` corpora + `src/fuzz_mutate.zig`):
+
+- inbound JSON (`WhatsAppChannel.parseMessage`, `parseConnectionUpdate`)
+- journal JID filter (`memory.lineBelongsToChat`)
+- pending jsonl (`pending.loadFrom`)
+- tool-call hydrate (`hydrateToolCallsFromContent`)
+- memory decide (`memory_update` / `memory_compact` `parseDecision`)
+- NIM completion JSON (`nim.tryParseCompletion`)
+
+Do not fuzz `runTurn` or a live Baileys connect.
 
 ## Why "ZeptoClaw"?
 
