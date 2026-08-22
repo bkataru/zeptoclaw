@@ -52,7 +52,7 @@ fn skillHandler(allocator: std.mem.Allocator, name: []const u8, command: []const
 pub const TurnOpts = struct {
     system_prompt: ?[]const u8 = null,
     extra_context: ?[]const u8 = null,
-    max_iters: u32 = 8,
+    max_iters: u32 = 200,
 };
 
 pub const Agent = struct {
@@ -182,6 +182,9 @@ pub const Agent = struct {
 
         var tool_rounds: u32 = 0;
         while (true) {
+            if (tool_rounds >= opts.max_iters) {
+                std.log.warn("[agent] tool round cap {d}; asking for text without tools", .{opts.max_iters});
+            }
             const use_tools: ?[]const types.ToolDefinition = if (tool_rounds >= opts.max_iters) null else defs;
             var response = self.chatUntilDone(use_tools);
             defer response.deinit(self.allocator);
@@ -192,6 +195,9 @@ pub const Agent = struct {
             }
 
             var assistant = try response.choices[0].message.dupe(self.allocator);
+            if (!assistant.hasToolCalls()) {
+                try hydrateToolCallsFromContent(self.allocator, &assistant);
+            }
             const has_tools = assistant.hasToolCalls();
             if (!has_tools) {
                 if (core_tools.wantLeave()) {
@@ -256,9 +262,55 @@ fn isBlank(s: []const u8) bool {
     return std.mem.trim(u8, s, " \t\r\n").len == 0;
 }
 
+fn jsonValueToOwnedString(allocator: std.mem.Allocator, v: std.json.Value) ![]u8 {
+    if (v == .string) return allocator.dupe(u8, v.string);
+    var out = std.Io.Writer.Allocating.init(allocator);
+    defer out.deinit();
+    var stringifier = std.json.Stringify{ .writer = &out.writer, .options = .{} };
+    stringifier.write(v) catch return error.OutOfMemory;
+    return allocator.dupe(u8, out.written());
+}
+
+fn hydrateToolCallsFromContent(allocator: std.mem.Allocator, assistant: *types.Message) !void {
+    const raw = assistant.content orelse return;
+    const text = std.mem.trim(u8, raw, " \t\r\n");
+    if (text.len < 12 or text[0] != '{') return;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const obj = parsed.value.object;
+    const name = blk: {
+        if (obj.get("name")) |n| if (n == .string) break :blk n.string;
+        if (obj.get("tool")) |n| if (n == .string) break :blk n.string;
+        return;
+    };
+    const args = blk: {
+        if (obj.get("args")) |a| break :blk try jsonValueToOwnedString(allocator, a);
+        if (obj.get("arguments")) |a| break :blk try jsonValueToOwnedString(allocator, a);
+        return;
+    };
+    errdefer allocator.free(args);
+    const calls = try allocator.alloc(types.ToolCall, 1);
+    errdefer allocator.free(calls);
+    calls[0] = .{
+        .id = try allocator.dupe(u8, "text-tool-1"),
+        .@"type" = try allocator.dupe(u8, "function"),
+        .function = .{
+            .name = try allocator.dupe(u8, name),
+            .arguments = args,
+        },
+    };
+    if (assistant.content) |c| {
+        allocator.free(c);
+        assistant.content = null;
+    }
+    assistant.tool_calls = calls;
+    std.log.info("[agent] hydrated tool {s} from text JSON", .{name});
+}
+
 test "agent loop basic" {
     const opts = TurnOpts{};
-    try std.testing.expectEqual(@as(u32, 8), opts.max_iters);
+    try std.testing.expectEqual(@as(u32, 200), opts.max_iters);
     try std.testing.expect(opts.system_prompt == null);
 }
 
@@ -266,6 +318,24 @@ test "isBlank treats whitespace as empty" {
     try std.testing.expect(isBlank(""));
     try std.testing.expect(isBlank("  \n\t"));
     try std.testing.expect(!isBlank("ok"));
+}
+
+test "hydrateToolCallsFromContent parses exec json" {
+    const allocator = std.testing.allocator;
+    var msg = try message.assistantMessage(allocator, "{\"name\":\"exec\",\"args\":{\"command\":\"cat memory/2026-08-22.md\"}}");
+    defer msg.deinit(allocator);
+    try hydrateToolCallsFromContent(allocator, &msg);
+    try std.testing.expect(msg.hasToolCalls());
+    try std.testing.expectEqualStrings("exec", msg.tool_calls.?[0].function.name);
+    try std.testing.expect(std.mem.indexOf(u8, msg.tool_calls.?[0].function.arguments, "cat memory") != null);
+}
+
+test "hydrateToolCallsFromContent ignores normal chat" {
+    const allocator = std.testing.allocator;
+    var msg = try message.assistantMessage(allocator, "hey I read SOUL.md");
+    defer msg.deinit(allocator);
+    try hydrateToolCallsFromContent(allocator, &msg);
+    try std.testing.expect(!msg.hasToolCalls());
 }
 
 test "setWorkspace does not drop transcript dir ownership" {

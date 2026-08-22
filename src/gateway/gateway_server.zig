@@ -452,7 +452,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
             break agent.runTurn(prompt, .{
                 .system_prompt = sys_prompt,
                 .extra_context = extra.items,
-                .max_iters = 8,
+                .max_iters = 200,
             }) catch |err| {
                 std.log.err("[whatsapp] agent run failed: {}; keeping inbound, backing off", .{err});
                 zeptoclaw.providers.nim.sleepAfterFailure();
