@@ -1,0 +1,16 @@
+[Unit]
+Description=Barvis MEMORY.md update (merge old + new; isolated NVIDIA budget)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=900
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/zeptoclaw/nim.env
+ExecStart=%h/zeptoclaw/zig-out/bin/zeptoclaw memory update
+
+[Install]
+WantedBy=default.target

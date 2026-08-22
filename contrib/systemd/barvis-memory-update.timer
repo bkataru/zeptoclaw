@@ -1,0 +1,13 @@
+[Unit]
+Description=Barvis MEMORY.md update timer (every 2 hours)
+Requires=barvis-memory-update.service
+
+[Timer]
+OnBootSec=15min
+OnActiveSec=2h
+OnUnitActiveSec=2h
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -24,6 +24,7 @@ pub const agent = struct {
     pub const transcript = @import("agent/transcript.zig");
     pub const cron = @import("agent/cron.zig");
     pub const memory = @import("agent/memory.zig");
+    pub const memory_update = @import("agent/memory_update.zig");
 };
 
 // Channels
@@ -134,6 +135,7 @@ comptime {
         _ = agent.loop;
         _ = agent.cron;
         _ = agent.memory;
+        _ = agent.memory_update;
         _ = agent.tools;
         _ = agent.transcript;
         _ = channels.cli_utils;
