@@ -114,37 +114,57 @@ pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []
 }
 
 /// Memory: Caller owns returned slice if non-null.
-pub fn dailyContext(allocator: std.mem.Allocator, chat_id: []const u8, is_dm: bool) ?[]const u8 {
-    const ws = openclaw.resolveWorkspaceDir(allocator) catch return null;
-    defer allocator.free(ws);
+fn lineBelongsToChat(line: []const u8, chat_id: []const u8) bool {
+    if (chat_id.len == 0) return false;
+    var marker_buf: [160]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, "] ({s}):", .{chat_id}) catch return false;
+    return std.mem.indexOf(u8, line, marker) != null;
+}
+
+/// Same-chat journal lines from today + yesterday. Never dumps other chats or MEMORY.md.
+/// Memory: Caller owns returned slice if non-null.
+pub fn dailyContextAt(allocator: std.mem.Allocator, ws: []const u8, chat_id: []const u8) ?[]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    out.appendSlice(allocator, "\n--- Recent daily notes ---\n") catch return null;
+    out.appendSlice(allocator, "\n--- This chat only (daily journal; ignore other chats) ---\n") catch return null;
     const civil = civilNowIst();
-    var i: i64 = 0;
-    while (i < 2) : (i += 1) {
-        const path = dailyPath(allocator, ws, civil, -i) catch continue;
+    var day_i: i64 = 0;
+    while (day_i < 2) : (day_i += 1) {
+        const path = dailyPath(allocator, ws, civil, -day_i) catch continue;
         defer allocator.free(path);
-        const buf = readFileCapped(allocator, path, 12 * 1024) orelse continue;
+        const buf = readFileCapped(allocator, path, 8 * 1024 * 1024) orelse continue;
         defer allocator.free(buf);
-        if (is_dm) {
-            out.appendSlice(allocator, buf) catch return null;
-            out.appendSlice(allocator, "\n") catch return null;
-            continue;
-        }
         var it = std.mem.splitScalar(u8, buf, '\n');
         while (it.next()) |line| {
-            if (std.mem.indexOf(u8, line, chat_id) != null) {
-                out.appendSlice(allocator, line) catch return null;
-                out.appendSlice(allocator, "\n") catch return null;
-            }
+            if (!lineBelongsToChat(line, chat_id)) continue;
+            out.appendSlice(allocator, line) catch return null;
+            out.appendSlice(allocator, "\n") catch return null;
         }
     }
-    if (out.items.len < 32) {
+    const header_len: usize = 64;
+    if (out.items.len < header_len + 8) {
         out.deinit(allocator);
         return null;
     }
+    const cap: usize = 12 * 1024;
+    if (out.items.len > cap) {
+        const keep = out.items[out.items.len - cap ..];
+        const copy = allocator.dupe(u8, keep) catch {
+            out.deinit(allocator);
+            return null;
+        };
+        out.deinit(allocator);
+        return copy;
+    }
     return out.toOwnedSlice(allocator) catch return null;
+}
+
+/// Memory: Caller owns returned slice if non-null.
+pub fn dailyContext(allocator: std.mem.Allocator, chat_id: []const u8, is_dm: bool) ?[]const u8 {
+    _ = is_dm;
+    const ws = openclaw.resolveWorkspaceDir(allocator) catch return null;
+    defer allocator.free(ws);
+    return dailyContextAt(allocator, ws, chat_id);
 }
 
 fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
@@ -559,4 +579,25 @@ test "appendLongTerm and search and replaceIn" {
     const got2 = getLongTerm(allocator, dir) orelse unreachable;
     defer allocator.free(got2);
     try std.testing.expect(std.mem.indexOf(u8, got2, "Barvis (Jarvis)") != null);
+}
+
+
+test "dailyContextAt filters by chat id" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-dailyctx-test";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    const path = try dailyPath(allocator, dir, civilNowIst(), 0);
+    defer allocator.free(path);
+    const body =
+        "# Journal\n" ++
+        "- 18:34 IST [in] (19082673946862@lid): i like ur top\n" ++
+        "- 18:44 IST [in] (216638251077681@lid): hi barvis secret from selfchat\n" ++
+        "- 19:08 IST [in] (19082673946862@lid): hi barvis, i like her top\n";
+    writeFile(path, body);
+    const got = dailyContextAt(allocator, dir, "19082673946862@lid") orelse unreachable;
+    defer allocator.free(got);
+    try std.testing.expect(std.mem.indexOf(u8, got, "i like ur top") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "i like her top") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "secret from selfchat") == null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "MEMORY.md") == null);
 }

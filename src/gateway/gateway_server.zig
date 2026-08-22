@@ -307,6 +307,9 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         else
             null;
         defer if (hist_ctx) |hc| g_whatsapp_alloc.free(hc);
+        // Disk hydrate: same chat_id only. Survives gateway restart. Not MEMORY.md.
+        const journal_ctx: ?[]const u8 = memory.dailyContext(g_whatsapp_alloc, chat_id_copy, is_dm);
+        defer if (journal_ctx) |jc| g_whatsapp_alloc.free(jc);
         if (pre) |pc| {
             msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = pc }) catch {};
         }
@@ -315,12 +318,16 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
                 msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = hc }) catch {};
             }
         }
+        if (journal_ctx) |jc| {
+            msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = jc }) catch {};
+        }
 
         const prompt = body_copy;
         var extra = std.ArrayList(u8).empty;
         defer extra.deinit(g_whatsapp_alloc);
         if (pre) |pc| extra.appendSlice(g_whatsapp_alloc, pc) catch {};
         if (hist_ctx) |hc| extra.appendSlice(g_whatsapp_alloc, hc) catch {};
+        if (journal_ctx) |jc| extra.appendSlice(g_whatsapp_alloc, jc) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nUse memory_get, memory_search, memory_append, memory_edit when you need long-term or daily notes. They are not preloaded.\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.PRESENCE_INSTRUCTIONS) catch {};
