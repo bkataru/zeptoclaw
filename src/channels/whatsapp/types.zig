@@ -279,6 +279,16 @@ pub const WhatsAppConfig = struct {
         }
         return false;
     }
+
+    pub fn replaceAllowFrom(self: *WhatsAppConfig, entries: []const []const u8) !void {
+        for (self.allow_from.items) |item| {
+            self.allocator.free(item);
+        }
+        self.allow_from.clearRetainingCapacity();
+        for (entries) |entry| {
+            try self.allow_from.append(self.allocator, try self.allocator.dupe(u8, entry));
+        }
+    }
 };
 
 /// Send message options
@@ -386,6 +396,20 @@ test "WhatsAppConfig init/deinit" {
 
     try std.testing.expectEqual(false, cfg.enabled);
     try std.testing.expectEqual(DmPolicy.pairing, cfg.dm_policy);
+}
+
+test "replaceAllowFrom swaps entries and isAllowedSender sees the new number" {
+    const allocator = std.testing.allocator;
+    var cfg = try WhatsAppConfig.init(allocator);
+    defer cfg.deinit();
+
+    try cfg.replaceAllowFrom(&.{ "+917019895010" });
+    try std.testing.expect(cfg.isAllowedSender("917019895010"));
+    try std.testing.expect(!cfg.isAllowedSender("919999999999"));
+
+    try cfg.replaceAllowFrom(&.{ "+917019895010", "+919999999999" });
+    try std.testing.expect(cfg.isAllowedSender("919999999999"));
+    try std.testing.expect(cfg.isAllowedSender("917019895010"));
 }
 
 test "Debouncer basic" {

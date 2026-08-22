@@ -155,6 +155,20 @@ pub const WhatsAppChannel = struct {
         _ = try self.sendRequest(.{ .method = "onQr", .params = .{ .object = empty_obj } });
     }
 
+    pub fn setAllowFrom(self: *WhatsAppChannel, entries: []const []const u8) !void {
+        var allow_from_arr = std.json.Array.init(self.allocator);
+        defer allow_from_arr.deinit();
+        for (entries) |jid| {
+            try allow_from_arr.append(.{ .string = jid });
+        }
+        var obj = try std.json.ObjectMap.init(self.allocator, &.{}, &.{});
+        try obj.put(self.allocator, "allow_from", .{ .array = allow_from_arr });
+        try self.sendFireAndForget(.{
+            .method = "setAllowFrom",
+            .params = .{ .object = obj },
+        });
+    }
+
     /// Disconnect from WhatsApp
     pub fn disconnect(self: *WhatsAppChannel) !void {
         try self.mutex.lock(self.channelIo());
@@ -372,6 +386,21 @@ pub const WhatsAppChannel = struct {
     /// Send JSON-RPC request and wait for response (single-flight, 15s timeout).
 /// Memory: Caller owns Response.result strings via allocator; for fire-and-forget
     /// callers we still wait for the ack; they ignore the result.
+    fn sendFireAndForget(self: *WhatsAppChannel, request: Request) !void {
+        if (self.node_stdin == null) return error.NotConnected;
+        try self.rpc_mutex.lock(self.channelIo());
+        const id = self.next_rpc_id;
+        self.next_rpc_id +%= 1;
+        self.rpc_mutex.unlock(self.channelIo());
+        var req = request;
+        req.id = id;
+        const json_str = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(req, .{})});
+        defer self.allocator.free(json_str);
+        const line = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_str});
+        defer self.allocator.free(line);
+        try self.node_stdin.?.writeStreamingAll(self.channelIo(), line);
+    }
+
     fn sendRequest(self: *WhatsAppChannel, request: Request) !Response {
         if (self.node_stdin == null) return error.NotConnected;
 

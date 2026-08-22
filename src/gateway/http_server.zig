@@ -24,6 +24,7 @@ pub const HttpServer = struct {
     shutdown_requested: std.atomic.Value(bool),
     start_time: i64,
     request_counter: u64,
+    reload_fn: ?*const fn () anyerror!void = null,
 
     const WebSocketClient = struct {
         address: std.Io.net.IpAddress,
@@ -68,6 +69,7 @@ pub const HttpServer = struct {
             .start_time = compat.timestamp(),
             .request_counter = 0,
             .shutdown_requested = std.atomic.Value(bool).init(false),
+            .reload_fn = null,
         };
     }
 
@@ -107,15 +109,26 @@ pub const HttpServer = struct {
         self.running = false;
     }
 
+fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
+    var total: usize = 0;
+    while (total < buffer.len) {
+        const n = std.posix.read(connection.socket.handle, buffer[total..]) catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => return err,
+        };
+        if (n == 0) break;
+        total += n;
+        if (std.mem.indexOf(u8, buffer[0..total], "\r\n\r\n") != null) break;
+    }
+    return total;
+}
+
     /// Handle an incoming connection
     fn handleConnection(self: *HttpServer, connection: std.Io.net.Stream) !void {
         defer connection.close(compat.getIo());
 
         var buffer: [4096]u8 = undefined;
-        var read_buf: [4096]u8 = undefined;
-        var reader = connection.reader(compat.getIo(), &read_buf);
-        const request_data = reader.interface.readSliceShort(buffer[0..]) catch return;
-
+        const request_data = readHttpHead(connection, &buffer) catch return;
         if (request_data == 0) return;
 
         // Parse HTTP request
@@ -260,6 +273,8 @@ pub const HttpServer = struct {
             try self.handleAgentRun(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/exec/approve") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleExecApprove(stream, request.body);
+        } else if (std.mem.eql(u8, request.path, "/reload") and std.mem.eql(u8, request.method, "POST")) {
+            try self.handleReload(stream);
         } else if (std.mem.eql(u8, request.path, "/heartbeat") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleHeartbeat(stream);
         } else if (std.mem.eql(u8, request.path, "/state") and std.mem.eql(u8, request.method, "GET")) {
@@ -663,6 +678,23 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
         try compat.streamWriteAll(stream, response.items);
     }
 
+    fn handleReload(self: *HttpServer, stream: std.Io.net.Stream) !void {
+        const reload = self.reload_fn orelse {
+            try self.sendErrorResponse(stream, 503, "Service Unavailable", "reload unset");
+            return;
+        };
+        reload() catch |err| {
+            var msg_buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "{s}", .{@errorName(err)}) catch "reload failed";
+            try self.sendErrorResponse(stream, 500, "Internal Server Error", msg);
+            return;
+        };
+        const body = "{\"ok\":true}";
+        var hdr: [160]u8 = undefined;
+        const response = try std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
+        try compat.streamWriteAll(stream, response);
+    }
+
     fn handleExecApprove(_: *HttpServer, stream: std.Io.net.Stream, body: []const u8) !void {
         const command = jsonFieldString(body, "command") orelse std.mem.trim(u8, body, " \t\r\n");
         core_tools.approveExec(command);
@@ -793,13 +825,9 @@ fn handleGetGatewayIncidents(self: *HttpServer, stream: std.Io.net.Stream) !void
 fn sendErrorResponse(self: *HttpServer, stream: std.Io.net.Stream, status_code: u16, status_text: []const u8, message: []const u8) !void {
         _ = self;
         var response_buffer: [512]u8 = undefined;
-        const response = try std.fmt.bufPrint(&response_buffer,
-            \\HTTP/1.1 {d} {s}
-            \\Content-Type: application/json
-            \\
-            \\{{"error":"{s}"}}
-            \\
-        , .{ status_code, status_text, message });
+        var body_buf: [192]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"error\":\"{s}\"}}", .{message}) catch "{\"error\":\"request failed\"}";
+        const response = try std.fmt.bufPrint(&response_buffer, "HTTP/1.1 {d} {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ status_code, status_text, body.len, body });
 
         try compat.streamWriteAll(stream, response);
     }

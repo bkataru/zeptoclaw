@@ -3,6 +3,7 @@ Description=ZeptoClaw Gateway Server
 After=network.target
 
 [Service]
+# Environment=ZEPTO_EXEC_APPROVE=1
 Type=simple
 ExecStart=%h/zeptoclaw/zig-out/bin/zeptoclaw-gateway
 Restart=on-failure

@@ -412,7 +412,7 @@ fn spawnMemoryUpdate(allocator: std.mem.Allocator) bool {
     defer allocator.free(home);
     const path = std.fmt.allocPrint(allocator, "{s}/zeptoclaw/zig-out/bin/zeptoclaw", .{home}) catch return false;
     defer allocator.free(path);
-    const result = compat.runParentEnv(allocator, &.{ path, "memory", "update" }, .limited(16 * 1024), .limited(64 * 1024)) catch |err| {
+    const result = compat.runParentEnv(allocator, &.{ path, "memory", "update" }, .limited(16 * 1024), .limited(64 * 1024), null) catch |err| {
         std.log.warn("[memory] synthesis spawn failed: {s}", .{@errorName(err)});
         return false;
     };
@@ -676,7 +676,7 @@ test "memory update child argv uses HOME zeptoclaw binary" {
 
 test "runParentEnv printenv HOME is absolute like resolveWorkspaceDir needs" {
     const allocator = std.testing.allocator;
-    const result = try compat.runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096));
+    const result = try compat.runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096), null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     const home = std.mem.trim(u8, result.stdout, " \t\r\n");

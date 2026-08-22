@@ -24,6 +24,7 @@ const OutboundProcessor = zeptoclaw.channels.whatsapp.OutboundProcessor;
 const AccessControl = zeptoclaw.channels.whatsapp.AccessControl;
 const NIMClient = zeptoclaw.providers.nim.NIMClient;
 const memory = zeptoclaw.agent.memory;
+const core_tools = zeptoclaw.agent.core_tools;
 const whatsapp_types = zeptoclaw.channels.whatsapp.types;
 
 // Global server reference for signal handler
@@ -377,6 +378,8 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const is_main_target = std.ascii.indexOfIgnoreCase(body_copy, "barvis") != null;
     const media_dm = eff_msg.chat_type == .direct and eff_msg.message_type != .text;
     const is_dm = eff_msg.chat_type == .direct;
+    core_tools.setExecEnabled(is_dm and eff_msg.from_me);
+    defer core_tools.setExecEnabled(true);
     const triggered = is_main_target or media_dm;
     if (triggered) zeptoclaw.channels.whatsapp.engagement.subscribe(chat_id_copy);
     // No trigger and not subscribed: keep journal only (still listening, no NIM).
@@ -657,6 +660,45 @@ fn drainBurstOrClear(chat_id: []const u8, is_dm: bool, opts: TurnOpts) anyerror!
     _ = opts;
 }
 
+fn parseDmPolicy(s: []const u8) !whatsapp_types.DmPolicy {
+    if (std.mem.eql(u8, s, "allowlist")) return .allowlist;
+    if (std.mem.eql(u8, s, "pairing")) return .pairing;
+    if (std.mem.eql(u8, s, "open")) return .open;
+    if (std.mem.eql(u8, s, "disabled")) return .disabled;
+    return error.InvalidDmPolicy;
+}
+
+fn parseGroupPolicy(s: []const u8) !whatsapp_types.GroupPolicy {
+    if (std.mem.eql(u8, s, "allowlist")) return .allowlist;
+    if (std.mem.eql(u8, s, "open")) return .open;
+    if (std.mem.eql(u8, s, "disabled")) return .disabled;
+    return error.InvalidGroupPolicy;
+}
+
+fn applyAllowAndPolicy(cfg: *WhatsAppConfig, entries: []const []const u8, dm: whatsapp_types.DmPolicy, gp: whatsapp_types.GroupPolicy) !void {
+    try cfg.replaceAllowFrom(entries);
+    cfg.dm_policy = dm;
+    cfg.group_policy = gp;
+}
+
+fn reloadWhatsAppFromDisk() !void {
+    var fresh = try Config.load(g_whatsapp_alloc);
+    defer fresh.deinit();
+    if (g_whatsapp_channel == null) return error.WhatsAppDisabled;
+    const dm = try parseDmPolicy(fresh.whatsapp_dm_policy);
+    const gp = try parseGroupPolicy(fresh.whatsapp_group_policy);
+    {
+        try g_whatsapp_mu.lock(compat.getIo());
+        defer g_whatsapp_mu.unlock(compat.getIo());
+        if (g_whatsapp_channel) |c| try applyAllowAndPolicy(&c.config, fresh.whatsapp_allow_from, dm, gp);
+        if (g_whatsapp_session) |s| try applyAllowAndPolicy(&s.config, fresh.whatsapp_allow_from, dm, gp);
+        if (g_whatsapp_inbound) |ib| try applyAllowAndPolicy(&ib.config, fresh.whatsapp_allow_from, dm, gp);
+        if (g_whatsapp_outbound) |ob| try applyAllowAndPolicy(&ob.config, fresh.whatsapp_allow_from, dm, gp);
+        std.log.info("[whatsapp] reloaded allow_from={any} dmPolicy={s}", .{ fresh.whatsapp_allow_from, fresh.whatsapp_dm_policy });
+    }
+    try g_whatsapp_channel.?.setAllowFrom(fresh.whatsapp_allow_from);
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -826,6 +868,7 @@ pub fn main() !void {
         cfg.gateway_allow_insecure_auth,
         autonomous_agent,
     );
+    server.reload_fn = &reloadWhatsAppFromDisk;
 
     global_server = &server;
     const act = std.os.linux.Sigaction{
@@ -874,6 +917,7 @@ pub fn main() !void {
     std.debug.print("  POST /agent           - Run Agent.runTurn (JSON prompt field)\n", .{});
     std.debug.print("  POST /agent/wait      - Same as /agent (synchronous)\n", .{});
     std.debug.print("  POST /exec/approve    - Allow a mutating exec command (JSON command)\n", .{});
+    std.debug.print("  POST /reload          - Reload WhatsApp allowFrom from disk (no restart)\n", .{});
     std.debug.print("  GET  /state           - Full state + health metrics\n", .{});
     std.debug.print("  POST /gateway/incident - Report gateway incident\n", .{});
     std.debug.print("  GET  /gateway/incidents - View recent incidents\n", .{});

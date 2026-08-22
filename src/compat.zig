@@ -150,9 +150,18 @@ pub fn runParentEnv(
     argv: []const []const u8,
     stdout_limit: std.Io.Limit,
     stderr_limit: std.Io.Limit,
+    cwd_path: ?[]const u8,
 ) std.process.RunError!std.process.RunResult {
     var threaded = threadedIoWithOsEnviron(gpa);
     defer threaded.deinit();
+    if (cwd_path) |path| {
+        return std.process.run(gpa, threaded.io(), .{
+            .argv = argv,
+            .cwd = .{ .path = path },
+            .stdout_limit = stdout_limit,
+            .stderr_limit = stderr_limit,
+        });
+    }
     return std.process.run(gpa, threaded.io(), .{
         .argv = argv,
         .stdout_limit = stdout_limit,
@@ -162,7 +171,7 @@ pub fn runParentEnv(
 
 test "runParentEnv inherits HOME as an absolute path" {
     const allocator = std.testing.allocator;
-    const result = try runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096));
+    const result = try runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096), null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     try std.testing.expectEqual(@as(u8, 0), switch (result.term) {

@@ -142,6 +142,15 @@ function scheduleReconnect(reason) {
     }, delay);
 }
 
+function setAllowFrom(list) {
+    allowedFrom = new Set((Array.isArray(list) ? list : []).map(v => String(v).replace(/[^0-9]/g, '').replace(/^0+/, '')));
+    if (lastInitOptions && typeof lastInitOptions === 'object') {
+        lastInitOptions.allow_from = Array.isArray(list) ? list : [];
+    }
+    console.error('[zepto] setAllowFrom n=' + allowedFrom.size);
+    return { success: true, count: allowedFrom.size };
+}
+
 async function init(options = {}) {
     shuttingDown = false;
     lastInitOptions = options && typeof options === 'object' ? options : lastInitOptions;
@@ -781,6 +790,9 @@ async function handleRpcRequest(request) {
             case 'init':
                 await sendResponse(await init(params));
                 break;
+            case 'setAllowFrom':
+                await sendResponse(setAllowFrom(params?.allow_from));
+                break;
             case 'waitForConnection':
                 await sendResponse(await waitForConnection(params?.timeout));
                 break;
@@ -911,6 +923,7 @@ if (require.main === module) {
 // Export for testing
 module.exports = {
     init,
+    setAllowFrom,
     waitForConnection,
     sendMessage,
     sendMedia,

@@ -338,7 +338,7 @@ pub const ConfigLoader = struct {
         const api_key = if (openclaw.env.NVIDIA_API_KEY) |key|
             try self.allocator.dupe(u8, key)
         else
-            return error.MissingApiKey;
+            try self.allocator.dupe(u8, "");
 
         // Extract primary model and fallbacks
         const primary_model = try self.allocator.dupe(u8, openclaw.agents.defaults.model.primary);
