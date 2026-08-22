@@ -7,15 +7,27 @@ zig-out/
 *.o
 *.o.o
 main
+root
 
 # Build artifacts
 build.zig.zon
 build.zig.zon.bak
+build_*.log
+build_errors.txt
+test_output*.log
+test_json
+test_json2
+pending.txt
+completed.txt
 
 # Environment and secrets
 .env
 *.key
 *.secret
+sessions/
+
+# Local agent scratch
+.sisyphus/
 
 # Dependencies (submodules / vendored)
 hf-hub-zig/
@@ -45,11 +57,10 @@ test_nim_api.zig
 .DS_Store
 Thumbs.db
 
-*.a  # Static library build artifacts
+*.a
 
-# Node / Cloudflare
+# Node
 node_modules/
 package-lock.json
-sessions/
 zig-pkg/
 .zig-pkg-cache/

@@ -1,6 +1,8 @@
 # Native WhatsApp Zig Architecture — whatsmeow Port Audit
 
-**Source:** `tulir/whatsmeow` (Go, MPL-2.0) at `/tmp/whatsmeow` — Zig 0.16.0 target
+**Status:** compile-only stubs. Production still uses Baileys.
+
+**Source:** `tulir/whatsmeow` (Go, MPL-2.0) — Zig 0.16.0 target
 **Scope audited:** `client.go` 1066 lines, `store/store.go` 324, `store/sqlstore/*`, `appstate/*`, `qrchan.go` 222, `pair.go` 314, `pair-code.go` 248, `pair-passkey.go` 324, `handshake.go` 182, `socket/*`
 **Existing shim:** `src/channels/whatsapp/whatsapp_channel.zig` — Baileys Node.js bridge via JSON-RPC over stdio + reader thread (`compat.getIo()` Io API, `std.Thread`, `std.Io.Mutex`). Native port must implement same `WhatsAppChannel` surface so `zeptoclaw whatsapp pair` / gateway need no CLI change.
 

@@ -1,7 +1,6 @@
-# OpenClaw Compatibility / API Bridge
+# OpenClaw compatibility
 
-> **Bridge:** `src/openclaw_compat/openclaw.zig` re-exported as `zeptoclaw.openclaw_compat` via `src/root.zig`
-> **Invariant:** No `npm openclaw` dependency. Pure Zig bridge that reuses existing file formats, paths, KV, and API conventions so old gateways/scripts/workers keep working after migration to ZeptoClaw.
+Zig-only bridge (`src/openclaw_compat/openclaw.zig`). No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys + `Agent.runTurn`. Gateway port **18789**.
 
 ## 1. Principles
 
@@ -80,7 +79,7 @@ Both candidates share the **OpenClaw JSON schema** (`OpenClawConfig`):
   "channels": {
     "whatsapp": {
       "dmPolicy": "allowlist|pairing|open|disabled",
-      "allowFrom": ["+919...", "+917..."],
+      "allowFrom": ["+15555550100"],
       "groupPolicy": "allowlist|open|disabled"
     }
   }
