@@ -93,12 +93,12 @@ pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []
     defer allocator.free(ws);
     const path = dailyPath(allocator, ws, civilNowIst(), 0) catch return;
     defer allocator.free(path);
-    const existing = readFileCapped(allocator, path, 96 * 1024) orelse "";
+    // Full turn text: daily journals are the raw trace. Do not clip messages.
+    const existing = readFileCapped(allocator, path, 8 * 1024 * 1024) orelse "";
     defer if (existing.len > 0) allocator.free(existing);
     const clock = clockIst();
-    const clipped = if (text.len > 2000) text[0..2000] else text;
     const line = std.fmt.allocPrint(allocator, "\n- {d:0>2}:{d:0>2} IST [{s}] ({s}): {s}\n", .{
-        clock.h, clock.m, kind, chat_id, clipped,
+        clock.h, clock.m, kind, chat_id, text,
     }) catch return;
     defer allocator.free(line);
     var body = std.ArrayList(u8).empty;
