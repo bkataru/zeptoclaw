@@ -6,6 +6,10 @@ const compat = @import("../compat.zig");
 const token_auth = @import("token_auth.zig");
 const session_store = @import("session_store.zig");
 const autonomous = @import("../autonomous/autonomous.zig");
+const config_mod = @import("../config.zig");
+const NIMClient = @import("../providers/nim.zig").NIMClient;
+const Agent = @import("../agent/loop.zig").Agent;
+const core_tools = @import("../agent/core_tools.zig");
 pub const HttpServer = struct {
     allocator: std.mem.Allocator,
     address: std.Io.net.IpAddress,
@@ -252,6 +256,10 @@ pub const HttpServer = struct {
             try self.handleGetDiscoveries(stream);
         } else if (std.mem.eql(u8, request.path, "/discoveries/clear") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleClearDiscoveries(stream);
+        } else if ((std.mem.eql(u8, request.path, "/agent") or std.mem.eql(u8, request.path, "/agent/wait")) and std.mem.eql(u8, request.method, "POST")) {
+            try self.handleAgentRun(stream, request.body);
+        } else if (std.mem.eql(u8, request.path, "/exec/approve") and std.mem.eql(u8, request.method, "POST")) {
+            try self.handleExecApprove(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/heartbeat") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleHeartbeat(stream);
         } else if (std.mem.eql(u8, request.path, "/state") and std.mem.eql(u8, request.method, "GET")) {
@@ -617,18 +625,90 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
 
     /// Handle POST /heartbeat endpoint
+    fn jsonFieldString(body: []const u8, key: []const u8) ?[]const u8 {
+        // Tiny extractor for {"key":"value"} — not a full JSON parser.
+        var needle_buf: [64]u8 = undefined;
+        const quoted = std.fmt.bufPrint(&needle_buf, "\"{s}\"", .{key}) catch return null;
+        const i = std.mem.indexOf(u8, body, quoted) orelse return null;
+        const after = body[i + quoted.len ..];
+        const colon = std.mem.indexOfScalar(u8, after, ':') orelse return null;
+        var rest = std.mem.trimStart(u8, after[colon + 1 ..], " \t\r\n");
+        if (rest.len == 0 or rest[0] != '"') return null;
+        rest = rest[1..];
+        const endq = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+        return rest[0..endq];
+    }
+
+    fn handleAgentRun(self: *HttpServer, stream: std.Io.net.Stream, body: []const u8) !void {
+        const prompt = jsonFieldString(body, "prompt") orelse jsonFieldString(body, "message") orelse body;
+        const session_id = jsonFieldString(body, "session") orelse "http-agent";
+        const reply = self.runAgentPrompt(session_id, prompt) catch |err| {
+            try self.sendErrorResponse(stream, 500, "Agent Error", @errorName(err));
+            return;
+        };
+        defer self.allocator.free(reply);
+        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        defer response.deinit(self.allocator);
+        try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"reply\":");
+        try response.append(self.allocator, '"');
+        for (reply) |c| {
+            switch (c) {
+                '"' => try response.appendSlice(self.allocator, "\\\""),
+                '\\' => try response.appendSlice(self.allocator, "\\\\"),
+                '\n' => try response.appendSlice(self.allocator, "\\n"),
+                else => try response.append(self.allocator, c),
+            }
+        }
+        try response.appendSlice(self.allocator, "\"}\r\n");
+        try compat.streamWriteAll(stream, response.items);
+    }
+
+    fn handleExecApprove(_: *HttpServer, stream: std.Io.net.Stream, body: []const u8) !void {
+        const command = jsonFieldString(body, "command") orelse std.mem.trim(u8, body, " \t\r\n");
+        core_tools.approveExec(command);
+        const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}\r\n";
+        try compat.streamWriteAll(stream, response);
+    }
+
+    fn runAgentPrompt(self: *HttpServer, session_id: []const u8, prompt: []const u8) ![]const u8 {
+        const cfg = try config_mod.Config.load(self.allocator);
+        var nim = NIMClient.init(self.allocator, cfg);
+        defer nim.deinit();
+        var agent = try Agent.init(self.allocator, &nim, 32);
+        defer agent.deinit();
+        agent.setSessionId(session_id);
+        return agent.runTurn(prompt, .{ .max_iters = 6 });
+    }
+
     fn handleHeartbeat(self: *HttpServer, stream: std.Io.net.Stream) !void {
         if (self.autonomous_agent) |agent| {
-            // Parse JSON body to extract heartbeat data
-            // For now, just update the local agent timestamp
             const now = compat.timestamp();
             try agent.state_store.updateLocalAgentHeartbeat(now);
-
-            const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\r\n";
-            try compat.streamWriteAll(stream, response);
-        } else {
-            try self.sendErrorResponse(stream, 503, "Service Unavailable", "Autonomous agent not initialized");
         }
+        const hb_prompt = "HEARTBEAT: check workspace MEMORY.md if present, note anything that needs follow-up, reply in one short sentence.";
+        const reply = self.runAgentPrompt("heartbeat", hb_prompt) catch |err| {
+            const msg = try std.fmt.allocPrint(self.allocator, "heartbeat timestamp updated; agent turn failed: {s}", .{@errorName(err)});
+            defer self.allocator.free(msg);
+            var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+            defer response.deinit(self.allocator);
+            try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"agent_error\":true}\r\n");
+            try compat.streamWriteAll(stream, response.items);
+            return;
+        };
+        defer self.allocator.free(reply);
+        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        defer response.deinit(self.allocator);
+        try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"reply\":\"");
+        for (reply) |c| {
+            switch (c) {
+                '"' => try response.appendSlice(self.allocator, "\\\""),
+                '\\' => try response.appendSlice(self.allocator, "\\\\"),
+                '\n' => try response.appendSlice(self.allocator, "\\n"),
+                else => try response.append(self.allocator, c),
+            }
+        }
+        try response.appendSlice(self.allocator, "\"}\r\n");
+        try compat.streamWriteAll(stream, response.items);
     }
 
     /// Handle GET /state endpoint
