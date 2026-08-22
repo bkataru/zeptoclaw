@@ -46,16 +46,18 @@
 
 ## What is this?
 
-ZeptoClaw is a Zig 0.16.0 agent runtime for Barvis (Baala's Jarvis). NVIDIA NIM is the model path. WhatsApp and the CLI share `Agent.runTurn`.
+ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+**. It's designed as a lean, purpose-built alternative to frameworks like NullClaw and KrillClaw, optimized specifically for the Barvis ecosystem.
 
 **Key features:**
-- NVIDIA NIM (`thinkingmachines/inkling`)
-- UTCP tool-calling
-- Providers / agent loop / channels / tools / skills
-- WhatsApp: Node Baileys live; `src/channels/whatsapp/native/` compiles, not wired
-- Core tools: `read` / `write` / `edit` / `exec` / `web_search` / `listen` / `leave` / `skill` / `memory_*`
+- NVIDIA NIM native with `thinkingmachines/inkling`
+- Zero bloat, built from scratch
+- UTCP (Universal Tool Calling Protocol) support
+- Modular: providers, agents, channels, tools
+- WhatsApp channel integration (Baileys live path; Zig whatsmeow port is compile-only)
+- Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `listen` / `leave` / `skill` / `memory_*`
 - 21 skills ported from OpenClaw
-- Optional Cloudflare Worker router
+- Cloudflare Worker for resilient routing
+- WhatsApp and the CLI share `Agent.runTurn`
 
 ## Installation
 
