@@ -653,6 +653,12 @@ pub const WhatsAppChannel = struct {
                 if (msg.message_type == .text) msg.message_type = parseMessageType(mt.string);
             }
         }
+        if (value.object.get("mediaPath")) |mp| {
+            if (mp == .string and mp.string.len > 0) {
+                if (msg.media_path) |old| allocator.free(old);
+                msg.media_path = try allocator.dupe(u8, mp.string);
+            }
+        }
         if (value.object.get("caption")) |cap| {
             if (cap == .string and msg.body.len == 0) {
                 allocator.free(msg.body);
