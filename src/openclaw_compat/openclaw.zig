@@ -28,30 +28,23 @@ pub fn defaultConfigCandidates() []const []const u8 {
     return &(primary_config_paths ++ legacy_config_paths);
 }
 
-// Workspace resolution — prefers zeptoclaw, falls back to openclaw.
+fn dirExists(path: []const u8) bool {
+    const io = compat.getIo();
+    var d = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return false;
+    d.close(io);
+    return true;
+}
+
+// Workspace: ~/.zeptoclaw/workspace first (symlink to OpenClaw workspace on this host),
+// then ~/.openclaw/workspace. Both should be the bkataru/barvis git tree.
 pub fn resolveWorkspaceDir(allocator: Allocator) ![]const u8 {
     const home = compat.getEnvVarOwned(allocator, "HOME") catch try allocator.dupe(u8, "/home/user");
     defer allocator.free(home);
-    // Check zeptoclaw first
     const zepto_ws = try std.fmt.allocPrint(allocator, "{s}/.zeptoclaw/workspace", .{home});
-    {
-        const cwd = compat.cwd();
-        if (cwd.openFile(zepto_ws, .{})) |f| {
-            f.close(cwd.io);
-            return zepto_ws;
-        } else |_| {}
-    }
+    if (dirExists(zepto_ws)) return zepto_ws;
     allocator.free(zepto_ws);
-    // Check legacy openclaw workspace
     const legacy_ws = try std.fmt.allocPrint(allocator, "{s}/.openclaw/workspace", .{home});
-    {
-        const cwd = compat.cwd();
-        if (cwd.openFile(legacy_ws, .{})) |f| {
-            f.close(cwd.io);
-            return legacy_ws;
-        } else |_| {}
-    }
-    // Fall back to zepto workspace path even if missing
+    if (dirExists(legacy_ws)) return legacy_ws;
     return legacy_ws;
 }
 
