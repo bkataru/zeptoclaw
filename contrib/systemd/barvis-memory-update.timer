@@ -1,5 +1,5 @@
 [Unit]
-Description=Barvis MEMORY.md update timer (every 2 hours)
+Description=Barvis MEMORY.md compact timer (every 2 hours)
 Requires=barvis-memory-update.service
 
 [Timer]

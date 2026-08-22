@@ -28,6 +28,10 @@ pub fn main(init: std.process.Init) !void {
         try zeptoclaw.agent.memory_update.runOnce(allocator);
         return;
     }
+    if (args_vec.len >= 3 and std.mem.eql(u8, std.mem.span(args_vec[1]), "memory") and (std.mem.eql(u8, std.mem.span(args_vec[2]), "compact") or std.mem.eql(u8, std.mem.span(args_vec[2]), "compress"))) {
+        try zeptoclaw.agent.memory_compact.runOnce(allocator);
+        return;
+    }
     // Env fallback
     {
         const env_pair = compat.getEnvVarOwned(allocator, "ZEPTO_PAIR") catch "";
@@ -106,7 +110,8 @@ fn printHelp() void {
         \\  zeptoclaw                          Interactive CLI
         \\  zeptoclaw whatsapp pair            Pair WhatsApp (scan QR)
         \\  zeptoclaw channels login           Alias for whatsapp pair
-        \\  zeptoclaw memory update            Merge old MEMORY.md with new daily notes (own NIM budget)
+        \\  zeptoclaw memory update            Ingest journals into MEMORY.md (30-min job; own NIM budget)
+        \\  zeptoclaw memory compact           Compress MEMORY.md itself (2-hour job; own NIM budget)
         \\  zeptoclaw --help                   This help
         \\
         \\

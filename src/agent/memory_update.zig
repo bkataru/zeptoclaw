@@ -281,13 +281,26 @@ pub fn runOnce(allocator: std.mem.Allocator) !void {
     std.log.info("[memory-update] updated MEMORY.md ({d} bytes)", .{out.len});
 }
 
+fn jsonI64(buf: []const u8, key: []const u8) i64 {
+    const idx = std.mem.indexOf(u8, buf, key) orelse return 0;
+    var p = idx + key.len;
+    while (p < buf.len and (buf[p] == ' ' or buf[p] == '\t')) p += 1;
+    var end = p;
+    while (end < buf.len and buf[end] >= '0' and buf[end] <= '9') end += 1;
+    if (end == p) return 0;
+    return std.fmt.parseInt(i64, buf[p..end], 10) catch 0;
+}
+
 fn stamp(allocator: std.mem.Allocator, ws: []const u8, bytes: usize) void {
     const path = std.fmt.allocPrint(allocator, "{s}/memory/heartbeat-state.json", .{ws}) catch return;
     defer allocator.free(path);
+    const existing = readCapped(allocator, path, 4096) orelse "";
+    defer if (existing.len > 0) allocator.free(existing);
+    const last_compact = jsonI64(existing, "\"lastMemoryCompact\":");
     const body = std.fmt.allocPrint(
         allocator,
-        "{{\"lastMemoryUpdate\":{d},\"memoryBytes\":{d}}}\n",
-        .{ compat.timestamp(), bytes },
+        "{{\"lastMemoryUpdate\":{d},\"lastMemoryCompact\":{d},\"memoryBytes\":{d}}}\n",
+        .{ compat.timestamp(), last_compact, bytes },
     ) catch return;
     defer allocator.free(body);
     writeFile(path, body) catch {};
