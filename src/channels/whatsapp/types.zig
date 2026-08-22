@@ -84,18 +84,24 @@ pub const WhatsAppMessage = struct {
     timestamp: i64,
     from_me: bool = false,
 
+    /// Create a zero-value message with all string fields heap-allocated.
+/// Memory: Caller owns the returned WhatsAppMessage; must call `deinit()` to free all
+    /// duplicated strings and `mentioned_jids`. Each field is `allocator.dupe("")` so `deinit`
+    /// can unconditionally `allocator.free`.
     pub fn init(allocator: std.mem.Allocator) !WhatsAppMessage {
+        // All string fields are allocated (zero-length) so deinit can unconditionally free.
+        // Never assign static literals directly - always via allocator.dupe.
         return .{
             .allocator = allocator,
-            .id = "",
-            .from = "",
-            .to = "",
-            .chat_id = "",
+            .id = try allocator.dupe(u8, ""),
+            .from = try allocator.dupe(u8, ""),
+            .to = try allocator.dupe(u8, ""),
+            .chat_id = try allocator.dupe(u8, ""),
             .chat_type = .direct,
-            .sender_jid = "",
+            .sender_jid = try allocator.dupe(u8, ""),
             .sender_e164 = null,
             .sender_name = null,
-            .body = "",
+            .body = try allocator.dupe(u8, ""),
             .message_type = .text,
             .media_type = null,
             .location = null,
@@ -106,6 +112,32 @@ pub const WhatsAppMessage = struct {
         };
     }
 
+    /// Deep-copy a message into newly allocated memory owned by this struct's allocator.
+/// Memory: Caller owns returned WhatsAppMessage; must call `deinit()` on it. All string
+    /// fields are duplicated with `allocator.dupe`; caller must free with same allocator.
+    pub fn dupeAlloc(self: *const WhatsAppMessage) !WhatsAppMessage {
+        var m = try WhatsAppMessage.init(self.allocator);
+        errdefer m.deinit();
+        m.id = try self.allocator.dupe(u8, if (self.id.len > 0) self.id else "");
+        m.from = try self.allocator.dupe(u8, if (self.from.len > 0) self.from else "");
+        m.to = try self.allocator.dupe(u8, if (self.to.len > 0) self.to else "");
+        m.chat_id = try self.allocator.dupe(u8, if (self.chat_id.len > 0) self.chat_id else "");
+        m.sender_jid = try self.allocator.dupe(u8, if (self.sender_jid.len > 0) self.sender_jid else "");
+        m.sender_e164 = if (self.sender_e164) |v| try self.allocator.dupe(u8, v) else null;
+        m.sender_name = if (self.sender_name) |v| try self.allocator.dupe(u8, v) else null;
+        m.body = try self.allocator.dupe(u8, if (self.body.len > 0) self.body else "");
+        m.media_type = if (self.media_type) |v| try self.allocator.dupe(u8, v) else null;
+        m.message_type = self.message_type;
+        m.location = self.location;
+        m.chat_type = self.chat_type;
+        m.timestamp = self.timestamp;
+        m.from_me = self.from_me;
+        return m;
+    }
+
+    /// Free all heap-allocated fields of the message.
+/// Memory: Callee takes ownership of all strings/lists; frees with `self.allocator`. Does not
+    /// free `self` pointer itself when heap-boxed — caller must `allocator.destroy` after `deinit`.
     pub fn deinit(self: *WhatsAppMessage) void {
         self.allocator.free(self.id);
         self.allocator.free(self.from);
@@ -185,11 +217,8 @@ pub const WhatsAppConfig = struct {
     media_max_mb: u32,
     debounce_ms: u32,
     send_read_receipts: bool,
-
-    // Group settings
     group_require_mention: bool,
     group_activation_commands: std.ArrayList([]const u8),
-
     pub fn init(allocator: std.mem.Allocator) !WhatsAppConfig {
         return .{
             .allocator = allocator,
@@ -206,6 +235,9 @@ pub const WhatsAppConfig = struct {
         };
     }
 
+    /// Free all heap memory owned by the config.
+/// Memory: Callee takes ownership of `auth_dir` and each element in `allow_from` /
+    /// `group_activation_commands`; frees them and deinitializes the lists.
     pub fn deinit(self: *WhatsAppConfig) void {
         self.allocator.free(self.auth_dir);
         for (self.allow_from.items) |item| {
@@ -219,20 +251,28 @@ pub const WhatsAppConfig = struct {
     }
 
     pub fn isAllowedSender(self: *const WhatsAppConfig, sender_e164: []const u8) bool {
-        // Check wildcard
         for (self.allow_from.items) |item| {
-            if (std.mem.eql(u8, item, "*")) {
-                return true;
+            if (std.mem.eql(u8, item, "*")) return true;
+            if (std.mem.eql(u8, item, sender_e164)) return true;
+            // Strip device suffix :xx (e.g. 917...:51 -> 917...) before digit compare
+            const s_clean = if (std.mem.indexOfScalar(u8, sender_e164, ':')) |idx| sender_e164[0..idx] else sender_e164;
+            const a_clean = if (std.mem.indexOfScalar(u8, item, ':')) |idx| item[0..idx] else item;
+            var s_digits: [64]u8 = undefined;
+            var s_len: usize = 0;
+            for (s_clean) |c| {
+                if (c >= '0' and c <= '9') {
+                    if (s_len < s_digits.len) { s_digits[s_len] = c; s_len += 1; }
+                }
             }
-        }
-
-        // Check exact match
-        for (self.allow_from.items) |item| {
-            if (std.mem.eql(u8, item, sender_e164)) {
-                return true;
+            var a_digits: [64]u8 = undefined;
+            var a_len: usize = 0;
+            for (a_clean) |c| {
+                if (c >= '0' and c <= '9') {
+                    if (a_len < a_digits.len) { a_digits[a_len] = c; a_len += 1; }
+                }
             }
+            if (s_len == a_len and s_len != 0 and std.mem.eql(u8, s_digits[0..s_len], a_digits[0..a_len])) return true;
         }
-
         return false;
     }
 };
@@ -273,6 +313,7 @@ pub const Debouncer = struct {
         };
     }
 
+/// Memory: Callee takes ownership of all buffered messages and key dupes; frees them.
     pub fn deinit(self: *Debouncer) void {
         var entry_iter = self.entries.iterator();
         while (entry_iter.next()) |entry| {
@@ -291,6 +332,8 @@ pub const Debouncer = struct {
         self.last_flush.deinit();
     }
 
+    /// Enqueue a message; transfers ownership of `message` to the debouncer.
+/// Memory: Callee takes ownership of `message` (including all its duplicated strings and lists); caller must NOT call `message.deinit()` after enqueue.
     pub fn enqueue(self: *Debouncer, message: WhatsAppMessage) !void {
         const key = try self.allocator.dupe(u8, message.from);
 
@@ -311,16 +354,15 @@ pub const Debouncer = struct {
         return (now - last_flush_ms) * 1000 >= self.debounce_ms;
     }
 
-    pub fn flush(self: *Debouncer, key: []const u8) ![]DebouncedEntry {
-        const entries = self.entries.fetchRemove(key) orelse return &[_]DebouncedEntry{};
-        defer {
-            self.allocator.free(key);
-            entries.value.deinit(self.allocator);
-        }
+    /// Flush all debounced entries for `key`. Returns the owning ArrayList.
+/// Memory: Caller owns returned ArrayList and each `DebouncedEntry.message` inside; must call `list.deinit(allocator)` and `entry.message.deinit()` for each entry when done.
+    pub fn flush(self: *Debouncer, key: []const u8) !std.ArrayList(DebouncedEntry) {
+        const entries = self.entries.fetchRemove(key) orelse return std.ArrayList(DebouncedEntry).initCapacity(self.allocator, 0) catch unreachable;
+        defer self.allocator.free(entries.key);
 
         try self.last_flush.put(try self.allocator.dupe(u8, key), compat.timestamp());
 
-        return entries.value.items;
+        return entries.value;
     }
 };
 

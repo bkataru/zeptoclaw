@@ -21,6 +21,80 @@ let isConnected = false;
 let selfJid = null;
 let selfE164 = null;
 let allowedFrom = new Set(); // E.164 strings from channels.whatsapp.allowFrom for symmetric DM wake
+const seenMessageIds = new Set();
+const sentMessageIds = new Set();
+const MAX_SEEN = 2000;
+let connectedAtMs = 0;
+let ledgerPath = null;
+const fingerprints = new Map(); // key -> lastSeenMs
+
+function ledgerFile(dir) {
+    return path.join(dir, 'inbound-ledger.json');
+}
+
+function loadLedger(dir) {
+    ledgerPath = ledgerFile(dir);
+    try {
+        const raw = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+        for (const id of raw.seen || []) seenMessageIds.add(id);
+        for (const id of raw.sent || []) {
+            sentMessageIds.add(id);
+            seenMessageIds.add(id);
+        }
+        for (const [k, ts] of Object.entries(raw.fingerprints || {})) {
+            fingerprints.set(k, ts);
+        }
+    } catch (_) {}
+}
+
+function saveLedger() {
+    if (!ledgerPath) return;
+    try {
+        const seen = Array.from(seenMessageIds).slice(-MAX_SEEN);
+        const sent = Array.from(sentMessageIds).slice(-MAX_SEEN);
+        const fps = {};
+        const cutoff = Date.now() - 24 * 3600 * 1000;
+        for (const [k, ts] of fingerprints.entries()) {
+            if (ts >= cutoff) fps[k] = ts;
+        }
+        fs.writeFileSync(ledgerPath, JSON.stringify({ seen, sent, fingerprints: fps }));
+    } catch (err) {
+        console.error('ledger save failed:', err.message);
+    }
+}
+
+function rememberId(set, id) {
+    if (!id) return;
+    set.add(id);
+    if (set.size > MAX_SEEN) {
+        const first = set.values().next().value;
+        set.delete(first);
+    }
+}
+
+function fpKey(chatId, fromMe, body) {
+    const b = String(body || '').trim().replace(/\s+/g, ' ').slice(0, 400);
+    return `${chatId}|${fromMe ? '1' : '0'}|${b}`;
+}
+
+function isReplay(chatId, fromMe, body, id) {
+    if (id && (sentMessageIds.has(id) || seenMessageIds.has(id))) return true;
+    const k = fpKey(chatId, fromMe, body);
+    const prev = fingerprints.get(k);
+    // Same text+chat already handled recently = reconnect replay or echo.
+    // A later identical ping (new id, after TTL) is allowed.
+    if (prev && Date.now() - prev < 3 * 60 * 1000) return true;
+    return false;
+}
+
+function markHandled(chatId, fromMe, body, id, sent) {
+    if (id) {
+        rememberId(seenMessageIds, id);
+        if (sent) rememberId(sentMessageIds, id);
+    }
+    fingerprints.set(fpKey(chatId, fromMe, body), Date.now());
+    saveLedger();
+}
 
 // Logger
 const logger = pino({ level: 'silent' });
@@ -35,6 +109,7 @@ async function init(options = {}) {
     }
 
     authDir = auth_dir || path.join(process.env.HOME, '.local', 'share', 'zeptoclaw', 'sessions', 'whatsapp');
+    loadLedger(authDir);
 
     // Ensure auth directory exists
     if (!fs.existsSync(authDir)) {
@@ -74,12 +149,13 @@ async function init(options = {}) {
 
             // Print QR to terminal if requested
             if (print_qr) {
-                console.log('\nScan this QR code in WhatsApp (Linked Devices):');
-                qrcode.generate(qr, { small: true });
+                console.error('\nScan this QR code in WhatsApp (Linked Devices):');
+                qrcode.generate(qr, { small: true }, function (q) { console.error(q); });
             }
         }
 
         if (connection === 'open') {
+            connectedAtMs = Date.now();
             isConnected = true;
             selfJid = socket.user?.id;
             selfE164 = selfJid ? jidToE164(selfJid) : null;
@@ -104,6 +180,7 @@ async function init(options = {}) {
 
     // Handle incoming messages
     socket.ev.on('messages.upsert', async ({ messages, type }) => {
+        // notify = live; append can also be live on LID/group. Dedup is ledger/isReplay.
         if (type !== 'notify' && type !== 'append') return;
 
         for (const msg of messages) {
@@ -112,33 +189,43 @@ async function init(options = {}) {
             const remoteJid = msg.key.remoteJid;
             if (!remoteJid) continue;
 
+            const mid = msg.key.id;
+
             // Skip status and broadcast messages
             if (remoteJid.endsWith('@status') || remoteJid.endsWith('@broadcast')) continue;
 
-            // fromMe handling: symmetric DM wake for allowlisted 1:1
-            // DMs have no participantJid. If fromMe and peer is allowlisted,
-            // treat as inbound so Baala can wake barvis in the peer's DM.
+            const isGroupChat = remoteJid.endsWith('@g.us');
             if (msg.key.fromMe) {
-                const isGroupChat = remoteJid.endsWith('@g.us');
-                if (isGroupChat) continue; // groups stay mention-gated (fromMe irrelevant)
                 const peerE164 = jidToE164(remoteJid);
                 const peerDigits = String(peerE164 || '').replace(/[^0-9]/g, '');
-                // Only forward self-sent DM when peer is in allowFrom (e.g. peer)
-                // self messages are Baala's; they will be re-tagged below.
-                if (!peerDigits || !allowedFrom.has(peerDigits)) continue;
+                const selfDigits = String(selfE164 || '').replace(/[^0-9]/g, '');
+                const isOwnPhoneJid = Boolean(selfDigits && peerDigits === selfDigits && remoteJid.endsWith('@s.whatsapp.net'));
+                if (isOwnPhoneJid) continue;
+                if (!isGroupChat) {
+                    const pn = jidToE164(msg.key.remoteJidAlt || msg.key.senderPn || '');
+                    const pnDigits = String(pn || peerDigits).replace(/[^0-9]/g, '');
+                    const allowed = remoteJid.endsWith('@lid') || (pnDigits && allowedFrom.has(pnDigits));
+                    if (!allowed) continue;
+                }
             }
 
-            // Extract message data
             const messageData = extractMessageData(msg);
+            if ((!messageData.body || !String(messageData.body).trim()) && !messageData.mediaType) continue;
+            if (msg.key.fromMe && isGroupChat && !/barvis/i.test(String(messageData.body || ''))) continue;
+            if (isReplay(remoteJid, !!msg.key.fromMe, messageData.body, mid)) continue;
 
-            // Notify message handlers
+            let emitted = false;
             messageHandlers.forEach(handler => {
                 try {
                     handler(messageData);
+                    emitted = true;
                 } catch (err) {
                     console.error('Message handler error:', err);
                 }
             });
+            if (emitted || messageHandlers.length === 0) {
+                markHandled(remoteJid, !!msg.key.fromMe, messageData.body, mid, false);
+            }
         }
     });
 
@@ -184,17 +271,27 @@ async function waitForConnection(timeout = 60000) {
 /**
  * Send a text message
  */
+function withTimeout(promise, ms, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label || `timeout ${ms}ms`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function sendMessage(to, text, options = {}) {
     if (!socket || !isConnected) {
         throw new Error('Not connected to WhatsApp');
     }
 
     const jid = normalizeJid(to);
-    const result = await socket.sendMessage(jid, { text });
+    const result = await withTimeout(socket.sendMessage(jid, { text }), 20000, 'sendMessage timeout');
+    const sid = result?.key?.id;
+    markHandled(jid, true, text, sid, true);
 
     return {
         success: true,
-        messageId: result?.key?.id,
+        messageId: sid,
         timestamp: result?.messageTimestamp
     };
 }
@@ -456,7 +553,7 @@ function normalizeJid(input) {
 
 function jidToE164(jid) {
     if (!jid) return null;
-    return jid.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, '');
+    return String(jid).replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, '').replace(/@lid$/, '');
 }
 
 function extractMessageData(msg) {
@@ -464,13 +561,19 @@ function extractMessageData(msg) {
     const isGroup = remoteJid && remoteJid.endsWith('@g.us');
     const participantJid = msg.key.participant;
     const fromMe = !!msg.key.fromMe;
+    const altJid = msg.key.remoteJidAlt || msg.key.senderPn || msg.key.participantAlt || null;
 
     let body = '';
     let mediaType = null;
     let location = null;
     let mentionedJids = [];
 
-    const message = msg.message;
+    const message = (function unwrap(m) {
+        if (!m) return m;
+        const inner = m.ephemeralMessage?.message || m.viewOnceMessage?.message || m.viewOnceMessageV2?.message || m.viewOnceMessageV2Extension?.message || m.documentWithCaptionMessage?.message || m.editedMessage?.message || m.protocolMessage?.editedMessage;
+        return inner ? unwrap(inner) : m;
+    })(msg.message);
+
 
     if (message) {
         // Extract text
@@ -525,15 +628,17 @@ function extractMessageData(msg) {
         to: selfE164,
         chatId: remoteJid,
         chatType: isGroup ? 'group' : 'direct',
-        senderJid: isGroup ? participantJid : (fromMe ? selfJid : remoteJid),
-        senderE164: isGroup ? jidToE164(participantJid) : (fromMe ? selfE164 : jidToE164(remoteJid)),
+        senderJid: isGroup ? (participantJid || altJid || remoteJid) : (fromMe ? selfJid : (altJid || remoteJid)),
+        senderE164: fromMe
+            ? (selfE164 || null)
+            : (jidToE164(altJid) || (isGroup ? jidToE164(participantJid) : jidToE164(remoteJid))),
         fromMe,
         senderName: fromMe ? 'Baala' : msg.pushName,
         body,
         mediaType,
         location,
         mentionedJids,
-        replyContext,
+        replyContext: replyContext ? { messageId: replyContext.messageId, participant: replyContext.participant } : null,
         timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()
     };
 }
@@ -616,13 +721,33 @@ async function handleRpcRequest(request) {
                 break;
             case 'onMessage':
                 onMessage((msg) => {
-                    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'message', params: msg }));
+                    const params = {
+                        id: String(msg.id || ''),
+                        from: String(msg.from || ''),
+                        to: String(msg.to || ''),
+                        chatId: String(msg.chatId || ''),
+                        chatType: msg.chatType || 'direct',
+                        senderJid: String(msg.senderJid || ''),
+                        senderE164: String(msg.senderE164 || ''),
+                        senderName: String(msg.senderName || ''),
+                        fromMe: !!msg.fromMe,
+                        body: String(msg.body || ''),
+                        timestamp: Number(msg.timestamp || 0),
+                    };
+                    const line = JSON.stringify({ jsonrpc: '2.0', method: 'message', params });
+                    console.error('[zepto] emit', params.chatId, params.fromMe, (params.body || '').slice(0, 80));
+                    console.log(line);
                 });
                 await sendResponse({ success: true });
                 break;
             case 'onConnection':
                 onConnection((update) => {
-                    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'connection', params: update }));
+                    const params = {
+                        type: update && update.type ? update.type : 'disconnected',
+                        selfJid: (update && update.selfJid) || '',
+                        selfE164: (update && update.selfE164) || '',
+                    };
+                    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'connection', params }));
                 });
                 await sendResponse({ success: true });
                 break;

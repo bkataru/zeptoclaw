@@ -36,6 +36,23 @@ pub const WhatsAppChannel = struct {
     use_native: bool = false,
     native_client: ?@import("native/client.zig").Client = null,
 
+    // JSON-RPC pending response (single-flight; gateway is single-threaded caller,
+    // reader thread delivers responses)
+    next_rpc_id: u64 = 1,
+    rpc_pending_id: ?u64 = null,
+    rpc_response_line: ?[]u8 = null,
+    rpc_has_response: bool = false,
+    rpc_mutex: std.Io.Mutex = .init,
+    /// Threaded Io used for process spawn and child pipes. `self.channelIo()` is
+    /// `global_single_threaded`, whose processSpawn vtable always returns OutOfMemory.
+    spawn_threaded: ?*std.Io.Threaded = null,
+
+    fn channelIo(self: *WhatsAppChannel) std.Io {
+        if (self.spawn_threaded) |t| return t.io();
+        return compat.getIo();
+    }
+
+    /// Memory: Callee borrows `config` (not freed by deinit); caller owns returned channel and must call deinit().
     pub fn init(allocator: Allocator, config: WhatsAppConfig) WhatsAppChannel {
         return .{
             .allocator = allocator,
@@ -55,47 +72,63 @@ pub const WhatsAppChannel = struct {
         };
     }
 
+    /// Memory: Callee takes responsibility for child process, Threaded Io, and duped self_jid/self_e164/rpc_response_line.
     pub fn deinit(self: *WhatsAppChannel) void {
         self.disconnect() catch {};
 
         if (self.self_jid) |jid| self.allocator.free(jid);
         if (self.self_e164) |e164| self.allocator.free(e164);
+        if (self.rpc_response_line) |line| self.allocator.free(line);
+        if (self.spawn_threaded) |t| {
+            t.deinit();
+            self.allocator.destroy(t);
+            self.spawn_threaded = null;
+        }
     }
 
     /// Connect to WhatsApp
+    /// Memory: Callee owns Node child, pipes, and Threaded Io until disconnect/deinit.
     pub fn connect(self: *WhatsAppChannel) !void {
-        try self.mutex.lock(compat.getIo());
+        try self.mutex.lock(self.channelIo());
         const already_connected = self.connected;
-        self.mutex.unlock(compat.getIo());
+        self.mutex.unlock(self.channelIo());
         if (already_connected) return;
 
-        // Get path to Node.js wrapper
-        const exe_dir = compat.getSelfExeDir(self.allocator) catch try self.allocator.dupe(u8, ".");
-        defer self.allocator.free(exe_dir);
-        const wrapper_path = try std.fs.path.join(self.allocator, &[_][]const u8{
-            exe_dir,
-            "src",
-            "channels",
-            "whatsapp",
-            "baileys_wrapper.js",
-        });
-        defer self.allocator.free(wrapper_path);
+        if (self.spawn_threaded == null) {
+            const t = try self.allocator.create(std.Io.Threaded);
+            t.* = std.Io.Threaded.init(self.allocator, .{});
+            self.spawn_threaded = t;
+        }
+        const spawn_io = self.channelIo();
 
-        // Spawn Node.js process (Zig 0.16 Io API)
-        const child = try std.process.spawn(compat.getIo(), .{
-            .argv = &[_][]const u8{ "node", wrapper_path },
+        const home = compat.getEnvVarOwned(self.allocator, "HOME") catch try self.allocator.dupe(u8, ".");
+        defer self.allocator.free(home);
+        const wrapper_path = try std.fmt.allocPrint(self.allocator, "{s}/zeptoclaw/src/channels/whatsapp/baileys_wrapper.js", .{home});
+        defer self.allocator.free(wrapper_path);
+        const node_owned = compat.getEnvVarOwned(self.allocator, "ZEPTO_NODE") catch null;
+        defer if (node_owned) |n| self.allocator.free(n);
+        const node_bin = node_owned orelse "node";
+
+        std.log.info("[whatsapp] connect: spawning {s} {s}", .{ node_bin, wrapper_path });
+        const child = try std.process.spawn(spawn_io, .{
+            .argv = &[_][]const u8{ node_bin, wrapper_path },
             .stdin = .pipe,
             .stdout = .pipe,
             .stderr = .pipe,
         });
+        std.log.info("[whatsapp] connect: node spawned ok", .{});
 
         self.node_process = child;
         self.node_stdin = child.stdin.?;
         self.node_stdout = child.stdout.?;
         self.node_stderr = child.stderr.?;
 
+        const stderr_thread = try std.Thread.spawn(.{}, stderrLoop, .{self});
+        stderr_thread.detach();
+
         // Start reader thread
         self.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{self});
+        std.log.err("[whatsapp] connect: reader spawned ok", .{});
 
         // Initialize WhatsApp connection (pass allowFrom so wrapper can symmetric-wake fromMe DMs)
         {
@@ -104,28 +137,30 @@ pub const WhatsAppChannel = struct {
             for (self.config.allow_from.items) |jid| {
                 try allow_from_arr.append(.{ .string = jid });
             }
-            try self.sendRequest(.{
+            // Build the init params object.
+            var obj = try std.json.ObjectMap.init(self.allocator, &.{}, &.{});
+            try obj.put(self.allocator, "auth_dir", .{ .string = self.config.auth_dir });
+            try obj.put(self.allocator, "print_qr", .{ .bool = false });
+            try obj.put(self.allocator, "allow_from", .{ .array = allow_from_arr });
+            _ = try self.sendRequest(.{
                 .method = "init",
-                .params = .{
-                    .auth_dir = self.config.auth_dir,
-                    .print_qr = true,
-                    .allow_from = std.json.Value{ .array = allow_from_arr },
-                },
+                .params = .{ .object = obj },
             });
         }
 
         // Register event handlers
-        try self.sendRequest(.{ .method = "onMessage" });
-        try self.sendRequest(.{ .method = "onConnection" });
-        try self.sendRequest(.{ .method = "onQr" });
+        const empty_obj = try std.json.ObjectMap.init(self.allocator, &.{}, &.{});
+        _ = try self.sendRequest(.{ .method = "onMessage", .params = .{ .object = empty_obj } });
+        _ = try self.sendRequest(.{ .method = "onConnection", .params = .{ .object = empty_obj } });
+        _ = try self.sendRequest(.{ .method = "onQr", .params = .{ .object = empty_obj } });
     }
 
     /// Disconnect from WhatsApp
     pub fn disconnect(self: *WhatsAppChannel) !void {
-        try self.mutex.lock(compat.getIo());
+        try self.mutex.lock(self.channelIo());
         const was_connected = self.connected;
         if (was_connected) self.connected = false;
-        self.mutex.unlock(compat.getIo());
+        self.mutex.unlock(self.channelIo());
         if (!was_connected) return;
 
         _ = try self.sendRequest(.{ .method = "disconnect", .params = .{ .object = try std.json.ObjectMap.init(self.allocator, &.{}, &.{}) } });
@@ -134,8 +169,8 @@ pub const WhatsAppChannel = struct {
         _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 100 * 1000000 }, null);
 
         if (self.node_process) |*proc| {
-            proc.kill(compat.getIo());
-            _ = proc.wait(compat.getIo()) catch {};
+            proc.kill(self.channelIo());
+            _ = proc.wait(self.channelIo()) catch {};
             self.node_process = null;
         }
 
@@ -151,9 +186,9 @@ pub const WhatsAppChannel = struct {
         const timeout_sec = timeout_ms / 1000;
 
         while (true) {
-            try self.mutex.lock(compat.getIo());
+            try self.mutex.lock(self.channelIo());
             const is_connected = self.connected;
-            self.mutex.unlock(compat.getIo());
+            self.mutex.unlock(self.channelIo());
             if (is_connected) break;
             const now = compat.timestamp();
             if (now - start >= timeout_sec) {
@@ -162,25 +197,30 @@ pub const WhatsAppChannel = struct {
             _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 100 * 1000000 }, null);
         }
     }
+/// Memory: Caller owns returned messageId slice; must free with allocator.free (allocator.dupe).
     /// Send a text message
     pub fn sendMessage(self: *WhatsAppChannel, to: []const u8, text: []const u8) ![]const u8 {
+        var params_obj = try std.json.ObjectMap.init(self.allocator, &.{}, &.{});
+        try params_obj.put(self.allocator, "to", .{ .string = to });
+        try params_obj.put(self.allocator, "text", .{ .string = text });
         const response = try self.sendRequest(.{
             .method = "sendMessage",
-            .params = .{
-                .to = to,
-                .text = text,
-            },
+            .params = .{ .object = params_obj },
         });
 
+        if (response.message_id) |mid| return mid;
         if (response.result) |result| {
-            if (result.message_id) |id| {
-                return try self.allocator.dupe(u8, id);
+            if (result == .object) {
+                if (result.object.get("messageId") orelse result.object.get("message_id")) |id_val| {
+                    if (id_val == .string) return try self.allocator.dupe(u8, id_val.string);
+                }
             }
         }
 
         return error.SendMessageFailed;
     }
 
+/// Memory: Caller owns returned messageId slice; must free with allocator.free.
     /// Send a media message
     pub fn sendMedia(self: *WhatsAppChannel, to: []const u8, media_path: []const u8, caption: ?[]const u8) ![]const u8 {
         const response = try self.sendRequest(.{
@@ -193,8 +233,10 @@ pub const WhatsAppChannel = struct {
         });
 
         if (response.result) |result| {
-            if (result.message_id) |id| {
-                return try self.allocator.dupe(u8, id);
+            if (result == .object) {
+                if (result.object.get("messageId") orelse result.object.get("message_id")) |id_val| {
+                    if (id_val == .string) return try self.allocator.dupe(u8, id_val.string);
+                }
             }
         }
 
@@ -213,6 +255,7 @@ pub const WhatsAppChannel = struct {
         });
     }
 
+/// Memory: Caller owns returned messageId slice; must free with allocator.free.
     /// Send a poll
     pub fn sendPoll(self: *WhatsAppChannel, to: []const u8, poll: types.Poll) ![]const u8 {
         const response = try self.sendRequest(.{
@@ -224,8 +267,10 @@ pub const WhatsAppChannel = struct {
         });
 
         if (response.result) |result| {
-            if (result.message_id) |id| {
-                return try self.allocator.dupe(u8, id);
+            if (result == .object) {
+                if (result.object.get("messageId") orelse result.object.get("message_id")) |id_val| {
+                    if (id_val == .string) return try self.allocator.dupe(u8, id_val.string);
+                }
             }
         }
 
@@ -258,6 +303,7 @@ pub const WhatsAppChannel = struct {
         });
     }
 
+/// Memory: Caller owns returned jid dupe inside struct; must free with allocator.free.
     /// Get contact info
     pub fn getContactInfo(self: *WhatsAppChannel, jid: []const u8) !struct {
         exists: bool,
@@ -280,6 +326,7 @@ pub const WhatsAppChannel = struct {
         return error.ContactNotFound;
     }
 
+/// Memory: Caller owns returned subject dupe; must free with allocator.free. Participants slice is static empty in this stub.
     /// Get group metadata
     pub fn getGroupMetadata(self: *WhatsAppChannel, jid: []const u8) !struct {
         subject: []const u8,
@@ -322,21 +369,77 @@ pub const WhatsAppChannel = struct {
     }
 
     /// Send JSON-RPC request
+    /// Send JSON-RPC request and wait for response (single-flight, 15s timeout).
+/// Memory: Caller owns Response.result strings via allocator; for fire-and-forget
+    /// callers we still wait for the ack; they ignore the result.
     fn sendRequest(self: *WhatsAppChannel, request: Request) !Response {
         if (self.node_stdin == null) return error.NotConnected;
 
-        const json_str = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(request, .{})});
+        // Assign id and clear pending slot
+        try self.rpc_mutex.lock(self.channelIo());
+        const id = self.next_rpc_id;
+        self.next_rpc_id +%= 1;
+        if (self.rpc_response_line) |old| {
+            self.allocator.free(old);
+            self.rpc_response_line = null;
+        }
+        self.rpc_has_response = false;
+        self.rpc_pending_id = id;
+        self.rpc_mutex.unlock(self.channelIo());
+
+        var req = request;
+        req.id = id;
+        const json_str = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(req, .{})});
         defer self.allocator.free(json_str);
 
         const line = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_str});
         defer self.allocator.free(line);
 
-        try self.node_stdin.?.writeStreamingAll(compat.getIo(), line);
+        try self.node_stdin.?.writeStreamingAll(self.channelIo(), line);
 
-        // Response will be handled by reader thread
-        // For now, return a placeholder response
-        // In a real implementation, we'd use a channel/future pattern
-        return Response{};
+        const start = compat.timestamp();
+        while (true) {
+            try self.rpc_mutex.lock(self.channelIo());
+            const done = self.rpc_has_response;
+            const resp_line = self.rpc_response_line;
+            self.rpc_mutex.unlock(self.channelIo());
+            if (done) {
+                var out = Response{};
+                if (resp_line) |rl| {
+                    const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, rl, .{}) catch return out;
+                    defer parsed.deinit();
+                    if (parsed.value == .object) {
+                        if (parsed.value.object.get("result")) |result| {
+                            if (result == .object) {
+                                const mid = result.object.get("messageId") orelse result.object.get("messageId") orelse result.object.get("message_id");
+                                if (mid) |id_val| {
+                                    if (id_val == .string) {
+                                        out.message_id = try self.allocator.dupe(u8, id_val.string);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return out;
+            }
+            if (compat.timestamp() - start >= 30) {
+                std.log.err("[whatsapp] RpcTimeout waiting for rpc id={d} method={s}", .{ id, request.method });
+                return error.RpcTimeout;
+            }
+            _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 20 * 1_000_000 }, null);
+        }
+    }
+
+    fn stderrLoop(self: *WhatsAppChannel) void {
+        const f = self.node_stderr orelse return;
+        var buffer: [2048]u8 = undefined;
+        while (true) {
+            const n = f.readStreaming(self.channelIo(), &.{buffer[0..]}) catch break;
+            if (n == 0) break;
+            const chunk = buffer[0..n];
+            if (chunk.len > 0) std.log.warn("[whatsapp][js] {s}", .{chunk});
+        }
     }
 
     /// Reader loop for processing Node.js output
@@ -345,17 +448,17 @@ pub const WhatsAppChannel = struct {
 
         var buffer: [8192]u8 = undefined;
         var line_buffer = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
-        defer line_buffer.deinit();
+        defer line_buffer.deinit(self.allocator);
 
         while (true) {
-            const bytes_read = self.node_stdout.?.readStreaming(compat.getIo(), &.{buffer[0..]}) catch |err| {
+            const bytes_read = self.node_stdout.?.readStreaming(self.channelIo(), &.{buffer[0..]}) catch |err| {
                 if (err == error.EndOfStream) break;
                 continue;
             };
 
             if (bytes_read == 0) break;
 
-            try line_buffer.appendSlice(buffer[0..bytes_read]);
+            try line_buffer.appendSlice(self.allocator, buffer[0..bytes_read]);
 
             // Process complete lines
             var start: usize = 0;
@@ -364,9 +467,14 @@ pub const WhatsAppChannel = struct {
                 const line = line_buffer.items[start .. start + end];
 
                 if (line.len > 0) {
-                    self.processLine(line) catch |err| {
-                        std.debug.print("Error processing line: {}\n", .{err});
-                    };
+                    const trimmed = std.mem.trim(u8, line, " \t\r");
+                    if (trimmed.len != 0 and trimmed[0] == '{') {
+                        self.processLine(trimmed) catch |err| {
+                            if (err != error.SyntaxError and err != error.UnexpectedToken) {
+                                std.log.warn("[whatsapp] rpc line: {}", .{err});
+                            }
+                        };
+                    }
                 }
 
                 start += end + 1;
@@ -376,7 +484,7 @@ pub const WhatsAppChannel = struct {
             if (start < line_buffer.items.len) {
                 const remaining = try self.allocator.dupe(u8, line_buffer.items[start..]);
                 line_buffer.clearRetainingCapacity();
-                try line_buffer.appendSlice(remaining);
+                try line_buffer.appendSlice(self.allocator, remaining);
                 self.allocator.free(remaining);
             } else {
                 line_buffer.clearRetainingCapacity();
@@ -389,18 +497,55 @@ pub const WhatsAppChannel = struct {
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, line, .{});
         defer parsed.deinit();
 
+        if (parsed.value != .object) return;
         const value = parsed.value;
+        // JSON-RPC response (has id, no method) — deliver to waiting sendRequest
+        if (value.object.get("id") != null and value.object.get("method") == null) {
+            const id_val = value.object.get("id").?;
+            const resp_id: u64 = switch (id_val) {
+                .integer => |i| @intCast(i),
+                .float => |f| @intFromFloat(f),
+                .number_string => |s| std.fmt.parseInt(u64, s, 10) catch 0,
+                .string => |str| std.fmt.parseInt(u64, str, 10) catch 0,
+                else => 0,
+            };
+            self.rpc_mutex.lock(self.channelIo()) catch {};
+            const pending = self.rpc_pending_id;
+            if (pending != null and pending.? == resp_id) {
+                if (self.rpc_response_line) |old| self.allocator.free(old);
+                self.rpc_response_line = try self.allocator.dupe(u8, line);
+                self.rpc_has_response = true;
+            }
+            self.rpc_mutex.unlock(self.channelIo());
+            return;
+        }
 
-        if (value.object.get("method")) |method| {
-            // Event notification
-            if (std.mem.eql(u8, method.string, "message")) {
+        if (value.object.get("method")) |method_val| {
+            const method = jsonStr(method_val) orelse return;
+            if (std.mem.eql(u8, method, "message")) {
                 if (value.object.get("params")) |params| {
-                    const msg = try parseMessage(self.allocator, params);
+                    if (params != .object) {
+                        std.log.err("[whatsapp] message params not object", .{});
+                        return;
+                    }
+                    const msg = parseMessage(self.allocator, params) catch |err| {
+                        std.log.err("[whatsapp] parseMessage failed: {}", .{err});
+                        return;
+                    };
                     if (self.message_handler) |handler| {
-                        try handler(msg);
+                        const th = std.Thread.spawn(.{}, dispatchMessage, .{ handler, msg }) catch |err| {
+                            std.log.err("[whatsapp] failed to spawn message handler: {}", .{err});
+                            var doomed = msg;
+                            doomed.deinit();
+                            return;
+                        };
+                        th.detach();
+                    } else {
+                        var unused = msg;
+                        unused.deinit();
                     }
                 }
-            } else if (std.mem.eql(u8, method.string, "connection")) {
+            } else if (std.mem.eql(u8, method, "connection")) {
                 if (value.object.get("params")) |params| {
                     const update = try parseConnectionUpdate(self.allocator, params);
                     const status = update.status;
@@ -409,7 +554,7 @@ pub const WhatsAppChannel = struct {
                         errdefer if (new_jid) |nj| self.allocator.free(nj);
                         var new_e164 = if (update.self_e164) |e164| try self.allocator.dupe(u8, e164) else null;
                         errdefer if (new_e164) |ne| self.allocator.free(ne);
-                        try self.mutex.lock(compat.getIo());
+                        try self.mutex.lock(self.channelIo());
                         if (self.self_jid) |old| self.allocator.free(old);
                         self.self_jid = new_jid;
                         new_jid = null;
@@ -417,16 +562,16 @@ pub const WhatsAppChannel = struct {
                         self.self_e164 = new_e164;
                         new_e164 = null;
                         self.connected = true;
-                        self.mutex.unlock(compat.getIo());
+                        self.mutex.unlock(self.channelIo());
                     } else if (status == .disconnected) {
-                        try self.mutex.lock(compat.getIo());
+                        try self.mutex.lock(self.channelIo());
                         self.connected = false;
-                        self.mutex.unlock(compat.getIo());
+                        self.mutex.unlock(self.channelIo());
                     }
                     if (self.connection_handler) |handler| {
                         try handler(update);
                     }
-                } else if (std.mem.eql(u8, method.string, "qr")) {
+                } else if (std.mem.eql(u8, method, "qr")) {
                     if (value.object.get("params")) |params| {
                         if (params.object.get("qr")) |qr| {
                             const event = QrEvent{
@@ -442,24 +587,91 @@ pub const WhatsAppChannel = struct {
         }
     }
 
-    fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
-        var msg = WhatsAppMessage.init(allocator);
+/// Memory: Caller owns returned WhatsAppMessage; must call deinit() to free all duped strings. All fields are allocator.dupe'd.
 
-        if (value.object.get("id")) |id| msg.id = try allocator.dupe(u8, id.string);
-        if (value.object.get("from")) |from| msg.from = try allocator.dupe(u8, from.string);
-        if (value.object.get("to")) |to| msg.to = try allocator.dupe(u8, to.string);
-        if (value.object.get("chatId")) |chat_id| msg.chat_id = try allocator.dupe(u8, chat_id.string);
-        if (value.object.get("chatType")) |chat_type| {
-            msg.chat_type = if (std.mem.eql(u8, chat_type.string, "group"))
-                .group
-            else
-                .direct;
+    fn parseMessageType(s: []const u8) types.MessageType {
+        if (std.mem.eql(u8, s, "image") or std.mem.startsWith(u8, s, "image")) return .image;
+        if (std.mem.eql(u8, s, "video") or std.mem.startsWith(u8, s, "video")) return .video;
+        if (std.mem.eql(u8, s, "audio") or std.mem.startsWith(u8, s, "audio")) return .audio;
+        if (std.mem.eql(u8, s, "document") or std.mem.startsWith(u8, s, "document")) return .document;
+        if (std.mem.eql(u8, s, "location")) return .location;
+        return .text;
+    }
+
+    fn jsonStr(v: std.json.Value) ?[]const u8 {
+        return switch (v) {
+            .string => |s| s,
+            else => null,
+        };
+    }
+
+    fn jsonI64(v: std.json.Value) i64 {
+        return switch (v) {
+            .integer => |i| i,
+            .float => |f| @intFromFloat(f),
+            .number_string => |ns| std.fmt.parseInt(i64, ns, 10) catch 0,
+            else => 0,
+        };
+    }
+
+    fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
+        var msg = try WhatsAppMessage.init(allocator);
+
+        if (value.object.get("id")) |id| {
+            if (jsonStr(id)) |s| msg.id = try allocator.dupe(u8, s);
         }
-        if (value.object.get("senderJid")) |sender_jid| msg.sender_jid = try allocator.dupe(u8, sender_jid.string);
-        if (value.object.get("senderE164")) |sender_e164| msg.sender_e164 = try allocator.dupe(u8, sender_e164.string);
-        if (value.object.get("senderName")) |sender_name| msg.sender_name = try allocator.dupe(u8, sender_name.string);
-        if (value.object.get("body")) |body| msg.body = try allocator.dupe(u8, body.string);
-        if (value.object.get("timestamp")) |timestamp| msg.timestamp = timestamp.integer;
+        if (value.object.get("from")) |from| {
+            if (jsonStr(from)) |s| msg.from = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("to")) |to| {
+            if (jsonStr(to)) |s| msg.to = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("chatId")) |chat_id| {
+            if (jsonStr(chat_id)) |s| msg.chat_id = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("chatType")) |chat_type| {
+            if (jsonStr(chat_type)) |s| {
+                msg.chat_type = if (std.mem.eql(u8, s, "group")) .group else .direct;
+            }
+        }
+        if (value.object.get("senderJid")) |sender_jid| {
+            if (jsonStr(sender_jid)) |s| msg.sender_jid = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("senderE164")) |sender_e164| {
+            if (jsonStr(sender_e164)) |s| msg.sender_e164 = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("senderName")) |sender_name| {
+            if (jsonStr(sender_name)) |s| msg.sender_name = try allocator.dupe(u8, s);
+        }
+        if (value.object.get("messageType")) |mt| {
+            if (mt == .string) msg.message_type = parseMessageType(mt.string);
+        }
+        if (value.object.get("mediaType")) |mt| {
+            if (mt == .string) {
+                if (msg.media_type) |oldm| allocator.free(oldm);
+                msg.media_type = try allocator.dupe(u8, mt.string);
+                if (msg.message_type == .text) msg.message_type = parseMessageType(mt.string);
+            }
+        }
+        if (value.object.get("caption")) |cap| {
+            if (cap == .string and msg.body.len == 0) {
+                allocator.free(msg.body);
+                msg.body = try allocator.dupe(u8, cap.string);
+            }
+        }
+        if (value.object.get("body")) |body| {
+            if (body == .string and body.string.len > 0) {
+                allocator.free(msg.body);
+                msg.body = try allocator.dupe(u8, body.string);
+            }
+        }
+        // Synthesize a body so empty media still reaches the agent loop.
+        if (msg.body.len == 0 and msg.message_type != .text) {
+            allocator.free(msg.body);
+            const tag = @tagName(msg.message_type);
+            msg.body = try std.fmt.allocPrint(allocator, "[{s} attached] barvis", .{tag});
+        }
+        if (value.object.get("timestamp")) |timestamp| msg.timestamp = jsonI64(timestamp);
         if (value.object.get("fromMe")) |fm| msg.from_me = switch (fm) {
             .bool => |b| b,
             .integer => |i| i != 0,
@@ -469,7 +681,17 @@ pub const WhatsAppChannel = struct {
         return msg;
     }
 
+    /// Memory: Callee takes ownership of `msg` and calls deinit() when the handler returns.
+    fn dispatchMessage(handler: *const fn (message: WhatsAppMessage) anyerror!void, msg: WhatsAppMessage) void {
+        var owned = msg;
+        defer owned.deinit();
+        handler(owned) catch |err| {
+            std.log.err("[whatsapp] message handler failed: {}", .{err});
+        };
+    }
+
     /// Parse connection update from JSON
+    /// Memory: Caller owns returned self_jid/self_e164/error strings; must free each non-null field.
     fn parseConnectionUpdate(allocator: Allocator, value: std.json.Value) !ConnectionUpdate {
         var update: ConnectionUpdate = .{
             .status = .disconnected,
@@ -513,6 +735,7 @@ const Response = struct {
     jsonrpc: []const u8 = "2.0",
     id: u64 = 0,
     result: ?std.json.Value = null,
+    message_id: ?[]const u8 = null,
     @"error": ?struct {
         code: i32,
         message: []const u8,
