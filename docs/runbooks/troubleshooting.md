@@ -2,9 +2,9 @@
 
 ## Gateway will not start
 
-- `NVIDIA_API_KEY` missing → config load fails.
-- Zig 0.15 vs 0.16 mismatch → rebuild with 0.16.0.
-- `OutOfMemory` on WhatsApp connect → spawn used the shared I/O that cannot fork; current code must use a dedicated threaded I/O for Node.
+- `NVIDIA_API_KEY` missing -> config load fails.
+- Zig 0.15 vs 0.16 mismatch -> rebuild with 0.16.0.
+- `OutOfMemory` on WhatsApp connect -> spawn used `compat.getIo()`; current code must use a dedicated `std.Io.Threaded`.
 
 ## Connected but no replies
 
@@ -15,7 +15,7 @@
 
 ## `RpcTimeout` on send
 
-Zig waited ~30s for a JSON-RPC ACK to `sendMessage`. Causes: Baileys hang (LID), stderr pipe full (fixed by drain), RPC `id` type mismatch (string vs number). Node now times out `sendMessage` at 20s. Check journal for `RpcTimeout waiting for rpc id=`.
+Zig waited ~30s for a JSON-RPC ACK to `sendMessage`. Causes: Baileys hang (LID), stderr pipe full (fixed by drain), RPC `id` type mismatch (string vs number). Node times out `sendMessage` at 20s. Check journal for `RpcTimeout waiting for rpc id=`.
 
 ## WhatsApp `Bad MAC`
 

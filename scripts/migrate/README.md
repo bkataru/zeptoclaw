@@ -1,4 +1,4 @@
-# OpenClaw → ZeptoClaw file copy
+# OpenClaw to ZeptoClaw file copy
 
 Optional. Copies credentials, sessions, memory, and webhook secrets from `~/.openclaw` to `~/.zeptoclaw`.
 
@@ -7,4 +7,4 @@ Optional. Copies credentials, sessions, memory, and webhook secrets from `~/.ope
 ./migrate-all.sh
 ```
 
-Baileys auth used by the current gateway is `sessions/whatsapp/` in the repo working tree, not necessarily `~/.zeptoclaw/credentials/`.
+Baileys auth used by the current gateway is `~/.zeptoclaw/sessions/whatsapp/`, not `~/.zeptoclaw/credentials/`.

@@ -1,10 +1,10 @@
 # Cloudflare worker
 
-Optional backup router in front of NIM / the local gateway. Secrets: `wrangler secret put NVIDIA_API_KEY` (and Moltbook if used). KV bindings are in `wrangler.toml`.
+Optional OpenAI-compatible router in front of NIM / the local gateway. Secrets: `wrangler secret put NVIDIA_API_KEY` (and Moltbook if used). KV bindings are in `wrangler.toml` (`BARVIS_STATE` and `ZEPTOCLAW_STATE` share one namespace).
 
 ```bash
 cd cloudflare-worker
 npx wrangler deploy
 ```
 
-This worker is not required for local WhatsApp. Do not commit API keys or `package-lock.json` churn without a reason.
+Not required for local WhatsApp (`zeptoclaw-gateway`). Do not commit API keys.

@@ -1,13 +1,13 @@
 # OpenClaw compatibility
 
-Zig-only bridge. No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys plus the agent loop. Gateway port **18789**. Workspace markdown (soul, identity, daily journals, long-term memory) is served from `~/.zeptoclaw/workspace`.
+Zig-only bridge (`src/openclaw_compat/openclaw.zig`). No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys + `Agent.runTurn`. Gateway port **18789**. Workspace markdown (soul, identity, journals, `MEMORY.md`) is `~/.zeptoclaw/workspace`.
 
 ## 1. Principles
 
-- **Zero npm `openclaw` dep** — the bridge never imports the npm package; it only parses on-disk formats and mirrors path/API conventions.
-- **ZeptoClaw primary → OpenClaw leftover fallback** — every resolver tries `~/.zeptoclaw` first, then falls back read-only to `~/.openclaw`. Do not push persona from the leftover tree.
-- **Preserve wire + KV compat** — reuses Cloudflare KV `70a3dbb693e246d48a0fbdc7b32c7317` + `compatibility_date = 2026-01-01` so either side sees the same state.
-- **Canonical logic stays ZeptoClaw** — legacy aliases are normalized, not duplicated.
+- **Zero npm `openclaw` dep** - the bridge never imports the npm package; it only parses on-disk formats and mirrors path/API conventions.
+- **ZeptoClaw primary → OpenClaw legacy fallback** - every resolver tries `~/.zeptoclaw` first, then falls back read-only to `~/.openclaw`.
+- **Preserve wire + KV compat** - reuses Cloudflare KV `70a3dbb693e246d48a0fbdc7b32c7317` + `compatibility_date = 2026-01-01` so either side sees the same state.
+- **Canonical logic stays ZeptoClaw** - legacy aliases are normalized, not duplicated.
 
 **Build deps:** `build.zig` / `build.zig.zon` import only `utcp` + `zeitgeist` (vendored `vendor/zeitgeist`), plus `mcp`/`raikage`/`hf-hub-zig`/`niza`/`zenmap`. No `openclaw` entry.
 
@@ -27,7 +27,7 @@ binding = "ZEPTOCLAW_STATE"
 id = "70a3dbb693e246d48a0fbdc7b32c7317"
 ```
 
-Both bindings point at the **same KV id** — old gateways writing `BARVIS_STATE` remain visible to new gateways reading `ZEPTOCLAW_STATE` (and vice versa). State key is `state` (BarvisState: `replied_comments`, `seen_posts`, `last_heartbeat`, `heartbeat_history`, etc.). Cron trigger `*/30 * * * *` preserved.
+Both bindings point at the **same KV id** - old gateways writing `BARVIS_STATE` remain visible to new gateways reading `ZEPTOCLAW_STATE` (and vice versa). State key is `state` (BarvisState: `replied_comments`, `seen_posts`, `last_heartbeat`, `heartbeat_history`, etc.). Cron trigger `*/30 * * * *` preserved.
 
 > Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `thinkingmachines/inkling` @ `https://integrate.api.nvidia.com/v1/chat/completions`. Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Alias `barvis-router` 182dc8e2 remains until route cutover.
 
@@ -192,7 +192,7 @@ test "isLegacyGatewayAlias" { ... }
 
 ## 9. Migration: `~/.openclaw` → `~/.zeptoclaw`
 
-### 9.1 Manual migration (non-destructive — keep legacy for fallback)
+### 9.1 Manual migration (non-destructive - keep legacy for fallback)
 
 ```bash
 mkdir -p ~/.zeptoclaw
@@ -218,7 +218,7 @@ Until `~/.openclaw` is deleted, every resolver is `try ~/.zeptoclaw/<path> else 
 
 ### 9.2 Worker / KV
 
-No KV migration needed — dual bindings already share `70a3dbb693e246d48a0fbdc7b32c7317`. Deploy with `wrangler deploy` once `CLOUDFLARE_API_TOKEN` is set; `compatibility_date = 2026-01-01` stays.
+No KV migration needed - dual bindings already share `70a3dbb693e246d48a0fbdc7b32c7317`. Deploy with `wrangler deploy` once `CLOUDFLARE_API_TOKEN` is set; `compatibility_date = 2026-01-01` stays.
 
 ### 9.3 Rollback
 
@@ -259,5 +259,5 @@ curl -s http://localhost:18789/gateway/health; echo
 ## 12. Notes
 
 - Do **not** add `openclaw` to `package.json` or `build.zig.zon`.
-- Keep legacy aliases (`/gateway/*`, `openclaw-gateway.service`, `~/.openclaw/**`) — cheap, prevents breakage for old scripts/crons/workers.
+- Keep legacy aliases (`/gateway/*`, `openclaw-gateway.service`, `~/.openclaw/**`) - cheap, prevents breakage for old scripts/crons/workers.
 - Removing the fallback is a breaking change; gate behind a major version.

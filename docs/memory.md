@@ -1,55 +1,54 @@
 # Memory
 
-Three tempos. They are not the same job.
+Three jobs. They write different files.
 
 ## Daily journal (raw)
 
-Every WhatsApp turn appends to `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (Gregorian date in IST).
+`gateway_server.zig` calls `memory.journalAppend` on every WhatsApp turn:
 
-- `[in]` before the model runs
+- `[in]` before `runTurn`
 - `[out]` after a successful send
-- Full message text. Distillation happens later, in long-term memory.
+- Path: `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (Gregorian IST via `civilFromUnixDays`)
+- Full message text (no 2000-char clip). Rewrite-on-append rereads at most 8MB of the existing daily file.
 
-This file is the trace. Do not treat it as curated knowledge.
+This is the trace. `MEMORY.md` is distilled later.
 
-## Tools (on demand)
+## Tools (`core_tools.zig`)
 
-The chat model is not given the long-term file on every turn. It can call:
+Turns do not inject `MEMORY.md` or daily files into the system prompt. The model can call:
 
-| Tool | Idea |
-|------|------|
-| `memory_get` | Read long-term, today, or yesterday |
-| `memory_search` | Search long-term + recent journals |
-| `memory_append` | Append to long-term or today’s journal |
-| `memory_edit` | Replace a span in long-term or today |
+| Tool | Args | File |
+|------|------|------|
+| `memory_get` | `which=long\|daily\|yesterday` | `MEMORY.md` or today's/yesterday's journal |
+| `memory_search` | `query`, optional `include_long` | `MEMORY.md` + recent journals |
+| `memory_append` | `text`, `target=long\|daily` | `MEMORY.md` or today |
+| `memory_edit` | `old_str`, `new_str`, `target=long\|daily` | replace span |
 
-Use these when a fact should be remembered *in the conversation*, not as a mandatory state-machine step.
+`core_tools.setChatId` is called from `loop.zig` so appends tag the chat.
 
-## Ingest (about every 30 minutes)
+## Ingest (30 min): `zeptoclaw memory update`
 
-`zeptoclaw memory update`, spawned from the gateway compact loop (`ZEPTO_MEMORY_SECS`, default 1800). Own process, own NVIDIA backoff.
+`memory.runLoop` sleeps `ZEPTO_MEMORY_SECS` (default 1800) then `std.process.run`s `~/zeptoclaw/zig-out/bin/zeptoclaw memory update`. Own process, own NIM backoff (`NIMClient` in the child). Account quota is still shared.
 
-1. No NIM if journals have no turns, or files have not changed since the last stamp.
-2. One decide turn: `UPDATE <reason>` or `SKIP <reason>`.
-3. Only UPDATE: synthesize long-term memory from the current document plus recent journals. Prompt asks for facts, not a dump of `[in]`/`[out]`.
+`memory_update.runOnce`:
 
-If the child fails, the gateway may copy a few long `[out]` lines under `## Running notes (auto)` as a last resort.
+1. Load today + yesterday journals. Exit with no NIM if no `[in]`/`[out]`/`[note]`, or if journal mtime `<= lastMemoryUpdate` in `memory/heartbeat-state.json`.
+2. Decide turn: reply must start with `UPDATE` or `SKIP` (`parseDecision`).
+3. On `UPDATE`, second `nim.chat` synthesizes `MEMORY.md` (prompt: facts, not dump of `[in]`/`[out]`). Cap 32KB. `preserveAutoSection` keeps `## Running notes (auto)` if the model dropped it.
 
-The first ingest waits one interval after gateway start so a restart does not steal the first chat.
+If the child fails, `compactFromDaily` copies up to 8 long `[out]` lines (skip `{"name"`) under `## Running notes (auto)`.
 
-## Compact (about every 2 hours)
+First ingest waits one interval after gateway start.
 
-`zeptoclaw memory compact` via `barvis-memory-update.timer`. Different role from ingest.
+## Compact (2 h): `zeptoclaw memory compact`
 
-It does **not** fold new chat logs in. It compresses the long-term document: fold auto notes into durable sections, merge duplicates, drop pings and tool JSON. Decide `COMPACT` / `SKIP`; skip if the file has not changed since the last compact.
+`barvis-memory-update.timer` -> `barvis-memory-update.service` -> `zeptoclaw memory compact`.
 
-NVIDIA key for this oneshot: `~/.config/zeptoclaw/nim.env` (not git).
+Does not load journals. `memory_compact.runOnce` reads `MEMORY.md`, skips if `< 80` bytes or mtime `<= lastMemoryCompact`. Decide `COMPACT`/`SKIP`, then rewrite: fold auto notes into durable sections, merge duplicates, drop pings/tool JSON. NVIDIA key: `~/.config/zeptoclaw/nim.env`.
 
-## Caps
-
-Long-term memory is capped at 32KB when written back by ingest/compact. Journals are not given that cap; a rewrite of a huge daily file still rereads at most 8MB when appending.
+Stamps keep both `lastMemoryUpdate` and `lastMemoryCompact` in `heartbeat-state.json`.
 
 ## Disable
 
-- Ingest loop: `ZEPTO_MEMORY_SECS=0` on the gateway.
-- Two-hour compact: `systemctl --user disable --now barvis-memory-update.timer`.
+- Ingest: `ZEPTO_MEMORY_SECS=0` on the gateway unit.
+- Compact: `systemctl --user disable --now barvis-memory-update.timer`.

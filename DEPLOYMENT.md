@@ -8,7 +8,7 @@ zig build
 ls zig-out/bin
 ```
 
-Need Zig **0.16.0**. WhatsApp needs Node on `PATH` or `ZEPTO_NODE`.
+Zig **0.16.0**. WhatsApp needs Node on `PATH` or `ZEPTO_NODE`.
 
 ## Live directories
 
@@ -16,9 +16,9 @@ Need Zig **0.16.0**. WhatsApp needs Node on `PATH` or `ZEPTO_NODE`.
 |------|------|
 | `~/.zeptoclaw/workspace` | Persona, daily journals, `MEMORY.md` |
 | `~/.zeptoclaw/sessions/whatsapp` | Baileys auth |
-| `~/.zeptoclaw/config.json` | Policy (allowlist, port, model) — no live tokens in git |
+| `~/.zeptoclaw/config.json` | Policy (allowlist, port, model). No live tokens in git |
 | `~/.config/zeptoclaw/nim.env` | NVIDIA key for memory oneshots (`chmod 600`) |
-| `~/.config/systemd/user/zeptoclaw-gateway.service` | Live unit with NVIDIA + gateway token |
+| `~/.config/systemd/user/zeptoclaw-gateway.service` | Live unit: NVIDIA + `GATEWAY_AUTH_TOKEN` + `ZEPTO_NODE` |
 
 ## Environment
 
@@ -28,14 +28,14 @@ Keep secrets in systemd or `chmod 600` env files. Do not put live keys in git.
 |----------|----------|--------|
 | `NVIDIA_API_KEY` | yes | NIM (gateway and memory jobs) |
 | `NVIDIA_MODEL` | no | default `thinkingmachines/inkling` |
-| `GATEWAY_AUTH_TOKEN` | recommended | HTTP auth |
+| `GATEWAY_AUTH_TOKEN` | recommended | HTTP auth; config `gateway.auth.token` also works |
 | `ZEPTO_NODE` | if `node` missing | absolute path to Node |
 | `ZEPTO_CRON_SECS` | no | `0` or unset = no heartbeat turns on the chat path |
-| `ZEPTO_MEMORY_SECS` | no | default 1800; `0` disables 30-min ingest |
+| `ZEPTO_MEMORY_SECS` | no | default 1800; `0` disables 30-min `memory update` child |
 | `ZEPTO_EXEC_APPROVE` | no | `1` allows all `exec` tools |
 | `WHATSAPP_AUTH_DIR` | no | default `~/.zeptoclaw/sessions/whatsapp` |
 
-WhatsApp allowlist is **config**, not env: `channels.whatsapp.allowFrom` and `dmPolicy` (`allowlist` recommended).
+WhatsApp allowlist is config, not env: `channels.whatsapp.allowFrom` and `dmPolicy` (`allowlist` recommended).
 
 ## systemd --user
 
@@ -63,24 +63,24 @@ systemctl --user start zeptoclaw-gateway.service
 
 Expect `connection status=connected` then inbound logs. First connect after an empty ledger may process unseen history once.
 
-The 2-hour timer runs **compact** (`zeptoclaw memory compact`), not journal ingest. Ingest is the gateway’s 30-minute child. See [docs/memory.md](docs/memory.md).
+`barvis-memory-update.timer` runs `zeptoclaw memory compact` every 2 hours. Journal ingest is the gateway child `zeptoclaw memory update` (`ZEPTO_MEMORY_SECS`). See `docs/memory.md`.
 
 ## Optional services
 
-`zeptoclaw-webhook` (9000) and `zeptoclaw-shell2http` (9001) have templates in `systemd/`. Heartbeat/watchdog timers are optional. `whatsapp-responder.timer` is a leftover checker; live replies come from the gateway.
+`zeptoclaw-webhook` (9000) and `zeptoclaw-shell2http` (9001) have templates in `systemd/`. Heartbeat/watchdog timers are optional. `whatsapp-responder.timer` is leftover; live replies come from the gateway.
 
 ## OpenClaw data
 
-If you still have `~/.openclaw`, `scripts/migrate/` copies credentials/sessions/memory into `~/.zeptoclaw`. Do not treat `~/.openclaw/workspace` as the live tree.
+`scripts/migrate/` copies credentials/sessions/memory from `~/.openclaw` into `~/.zeptoclaw`. Do not treat `~/.openclaw/workspace` as the live tree.
 
 ## Cloudflare worker
 
-See `cloudflare-worker/README.md`. Secrets go through `wrangler secret put`, never commits.
+See `cloudflare-worker/README.md`. Secrets via `wrangler secret put`, never commits.
 
 ## After Zig changes
 
 ```bash
 zig build
 zig build test --summary all
-# then restart the user unit as above
+# then kill + start the user unit as above
 ```
