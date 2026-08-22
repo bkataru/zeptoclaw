@@ -437,22 +437,27 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
 
         var nim_client = NIMClient.init(g_whatsapp_alloc, cfg);
         defer nim_client.deinit();
-        var agent = zeptoclaw.agent.loop.Agent.init(g_whatsapp_alloc, &nim_client, 64) catch {
-            break :blk fallback_reply(g_whatsapp_alloc, prompt, cfg.nim_model) catch "barvis ack";
+        var agent = while (true) {
+            break zeptoclaw.agent.loop.Agent.init(g_whatsapp_alloc, &nim_client, 64) catch |err| {
+                std.log.err("[whatsapp] agent init failed: {}; keeping inbound, backing off", .{err});
+                zeptoclaw.providers.nim.sleepAfterFailure();
+                continue;
+            };
         };
         defer agent.deinit();
         if (ws_dir_const) |wd| agent.setWorkspace(wd);
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
-        const reply = agent.runTurn(prompt, .{
-            .system_prompt = sys_prompt,
-            .extra_context = extra.items,
-            .max_iters = 8,
-        }) catch |err| {
-            std.log.err("[whatsapp] agent run failed: {}", .{err});
-            break :blk (g_whatsapp_alloc.dupe(u8, "I hit an internal error finishing that turn. Ping me again.") catch {
-                return;
-            });
+        const reply = while (true) {
+            break agent.runTurn(prompt, .{
+                .system_prompt = sys_prompt,
+                .extra_context = extra.items,
+                .max_iters = 8,
+            }) catch |err| {
+                std.log.err("[whatsapp] agent run failed: {}; keeping inbound, backing off", .{err});
+                zeptoclaw.providers.nim.sleepAfterFailure();
+                continue;
+            };
         };
         break :blk reply;
     };
@@ -463,23 +468,19 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     }
 
     // Outbound send via OutboundProcessor (chunking/retry/markdown) using channel.sendMessage.
-    const ob = g_whatsapp_outbound orelse return;
     var send_attempt: u32 = 0;
-    const send_result = while (send_attempt < 3) : (send_attempt += 1) {
-        break ob.sendText(gatewaySendMessage, chat_id_copy, reply_text) catch |err| {
-            std.log.err("[whatsapp] sendText failed: {} attempt {d}/3", .{ err, send_attempt + 1 });
-            if (send_attempt + 1 >= 3) return;
-            var left: u64 = 5000;
-            while (left > 0) {
-                const chunk: u64 = @min(left, 1000);
-                const sec: i64 = @intCast(chunk / 1000);
-                const nsec: i64 = @intCast((chunk % 1000) * 1_000_000);
-                _ = std.c.nanosleep(&.{ .sec = sec, .nsec = nsec }, null);
-                left -= chunk;
-            }
+    const send_result = while (true) : (send_attempt += 1) {
+        const ob = g_whatsapp_outbound orelse {
+            std.log.err("[whatsapp] outbound not ready attempt {d}; keeping outbound, backing off", .{send_attempt + 1});
+            zeptoclaw.providers.nim.sleepAfterFailure();
             continue;
         };
-    } else return;
+        break ob.sendText(gatewaySendMessage, chat_id_copy, reply_text) catch |err| {
+            std.log.err("[whatsapp] sendText failed: {} attempt {d}; keeping outbound, backing off", .{ err, send_attempt + 1 });
+            zeptoclaw.providers.nim.sleepAfterFailure();
+            continue;
+        };
+    };
     for (send_result.message_ids) |mid| {
         g_whatsapp_alloc.free(mid);
     }

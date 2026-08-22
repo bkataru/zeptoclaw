@@ -19,37 +19,74 @@ fn sleepMs(ms: u64) void {
     }
 }
 
-/// NVIDIA integrate.api is 40 requests/minute. After 429, widen the gap.
+/// NVIDIA integrate.api is 40 requests/minute. Failures slow us down; successes speed us back up.
 var g_nim_pace_mu: std.Io.Mutex = .init;
 var g_nim_last_s: i64 = 0;
 var g_nim_min_gap_s: i64 = 2;
+var g_nim_backoff_s: u64 = 2;
 const NIM_MIN_GAP_S: i64 = 2;
-const NIM_COOLDOWN_GAP_S: i64 = 4;
+const NIM_BACKOFF_MIN_S: u64 = 2;
+const NIM_BACKOFF_MAX_S: u64 = 180;
 
-fn noteRateLimit() void {
-    g_nim_pace_mu.lock(compat.getIo()) catch return;
-    defer g_nim_pace_mu.unlock(compat.getIo());
-    g_nim_min_gap_s = NIM_COOLDOWN_GAP_S;
+pub fn nextBackoff(current: u64) u64 {
+    const doubled = if (current > NIM_BACKOFF_MAX_S / 2) NIM_BACKOFF_MAX_S else current * 2;
+    return @max(NIM_BACKOFF_MIN_S, @min(NIM_BACKOFF_MAX_S, doubled));
 }
 
-fn noteOkPace() void {
+pub fn decayBackoff(current: u64) u64 {
+    const half = current / 2;
+    return if (half < NIM_BACKOFF_MIN_S) NIM_BACKOFF_MIN_S else half;
+}
+
+fn jitterMs(base_s: u64) u64 {
+    var n: u8 = 0;
+    compat.fillRandom(std.mem.asBytes(&n));
+    const extra = (base_s * 1000 * @as(u64, n)) / (4 * 255);
+    return base_s * 1000 + extra;
+}
+
+/// Wait after a failed NVIDIA call. Doubles the backoff (capped). Does not give up.
+pub fn sleepAfterFailure() void {
+    if (@import("builtin").is_test) return;
+    var wait_s: u64 = NIM_BACKOFF_MIN_S;
+    g_nim_pace_mu.lock(compat.getIo()) catch {
+        wait_s = g_nim_backoff_s;
+        g_nim_backoff_s = nextBackoff(g_nim_backoff_s);
+        std.log.warn("[nim] backing off {d}s then retrying", .{wait_s});
+        sleepMs(jitterMs(wait_s));
+        return;
+    };
+    wait_s = g_nim_backoff_s;
+    g_nim_min_gap_s = @intCast(@min(@as(u64, 60), wait_s));
+    g_nim_backoff_s = nextBackoff(g_nim_backoff_s);
+    g_nim_pace_mu.unlock(compat.getIo());
+    std.log.warn("[nim] backing off {d}s (next {d}s) then retrying; turn is not dropped", .{ wait_s, g_nim_backoff_s });
+    sleepMs(jitterMs(wait_s));
+}
+
+/// After a successful NVIDIA call, speed the gap back toward normal.
+pub fn noteSuccess() void {
     g_nim_pace_mu.lock(compat.getIo()) catch return;
     defer g_nim_pace_mu.unlock(compat.getIo());
-    if (g_nim_min_gap_s > NIM_MIN_GAP_S) g_nim_min_gap_s = NIM_MIN_GAP_S;
+    g_nim_backoff_s = decayBackoff(g_nim_backoff_s);
+    g_nim_min_gap_s = @intCast(@max(NIM_MIN_GAP_S, @as(i64, @intCast(g_nim_backoff_s))));
+    if (g_nim_backoff_s <= NIM_BACKOFF_MIN_S) g_nim_min_gap_s = NIM_MIN_GAP_S;
 }
 
 fn paceForRpm() void {
+    var wait_ms: u64 = 0;
     g_nim_pace_mu.lock(compat.getIo()) catch return;
-    defer g_nim_pace_mu.unlock(compat.getIo());
     const now = compat.timestamp();
     if (g_nim_last_s != 0) {
         const elapsed = now - g_nim_last_s;
         const gap = g_nim_min_gap_s;
-        if (elapsed < gap) {
-            sleepMs(@intCast((gap - elapsed) * 1000));
-        }
+        if (elapsed < gap) wait_ms = @intCast((gap - elapsed) * 1000);
     }
+    g_nim_pace_mu.unlock(compat.getIo());
+    if (wait_ms > 0) sleepMs(wait_ms);
+    g_nim_pace_mu.lock(compat.getIo()) catch return;
     g_nim_last_s = compat.timestamp();
+    g_nim_pace_mu.unlock(compat.getIo());
 }
 
 pub const NIMClient = struct {
@@ -307,28 +344,19 @@ pub fn deinit(self: *NIMClient) void {
         const body = out.written();
 
         var attempt: u32 = 0;
-        const max_attempts: u32 = 10;
-        while (attempt < max_attempts) : (attempt += 1) {
+        while (true) : (attempt += 1) {
             paceForRpm();
             if (self.postOnce(body)) |resp| {
-                noteOkPace();
+                noteSuccess();
                 return resp;
             } else |err| switch (err) {
                 error.RateLimit, error.Timeout, error.Network => {
-                    if (attempt + 1 >= max_attempts) return err;
-                    if (err == error.RateLimit) noteRateLimit();
-                    const wait: u64 = if (err == error.RateLimit)
-                        @min(@as(u64, 90), @as(u64, 15) << @intCast(@min(attempt, 3)))
-                    else
-                        @min(@as(u64, 32), @as(u64, 2) << @intCast(@min(attempt, 4)));
-                    std.log.warn("[nim] {} attempt {d}/{d}, waiting {d}s then retrying", .{ err, attempt + 1, max_attempts, wait });
-                    sleepMs(wait * 1000);
-                    continue;
+                    std.log.warn("[nim] {} attempt {d}; will keep retrying until this request succeeds", .{ err, attempt + 1 });
+                    sleepAfterFailure();
                 },
                 else => return err,
             }
         }
-        return types.ProviderError.RateLimit;
     }
 
     fn postOnce(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
@@ -790,4 +818,17 @@ test "NIMClient model name flexibility" {
 
         try std.testing.expectEqualStrings(model_name, client.model);
     }
+}
+
+test "nim backoff doubles then caps" {
+    try std.testing.expectEqual(@as(u64, 4), nextBackoff(2));
+    try std.testing.expectEqual(@as(u64, 8), nextBackoff(4));
+    try std.testing.expectEqual(@as(u64, 180), nextBackoff(128));
+    try std.testing.expectEqual(@as(u64, 180), nextBackoff(180));
+}
+
+test "nim backoff decays toward minimum" {
+    try std.testing.expectEqual(@as(u64, 90), decayBackoff(180));
+    try std.testing.expectEqual(@as(u64, 2), decayBackoff(3));
+    try std.testing.expectEqual(@as(u64, 2), decayBackoff(2));
 }
