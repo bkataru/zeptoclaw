@@ -19,9 +19,16 @@ pub const legacy_config_home_rel = [_][]const u8{
     ".openclaw/workspace/openclaw.json",
 };
 
-fn dirExists(path: []const u8) bool {
+/// Must not panic on relative paths. Zig's openDirAbsolute asserts isAbsolute.
+pub fn dirExists(path: []const u8) bool {
+    if (path.len == 0) return false;
     const io = compat.getIo();
-    var d = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return false;
+    if (std.fs.path.isAbsolute(path)) {
+        var d = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return false;
+        d.close(io);
+        return true;
+    }
+    var d = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
     d.close(io);
     return true;
 }
@@ -211,4 +218,28 @@ test "findExistingConfig prefers zeptoclaw" {
 test "canonicalizeGatewayPath passthrough" {
     try std.testing.expectEqualStrings("/health", canonicalizeGatewayPath("/health"));
     try std.testing.expectEqualStrings("/state", canonicalizeGatewayPath("/gateway/state"));
+}
+
+test "dirExists relative path does not panic" {
+    try std.testing.expect(!dirExists(""));
+    try std.testing.expect(!dirExists("this-is-not-an-absolute-path"));
+    try std.testing.expect(!dirExists("./.zeptoclaw/workspace"));
+}
+
+test "dirExists absolute missing is false" {
+    try std.testing.expect(!dirExists("/tmp/zeptoclaw-no-such-workspace-dir"));
+}
+
+test "dirExists absolute existing is true" {
+    try std.testing.expect(dirExists("/tmp"));
+}
+
+test "resolveWorkspaceDir prefers HOME/.zeptoclaw/workspace" {
+    const allocator = std.testing.allocator;
+    const home = compat.getEnvVarOwned(allocator, "HOME") catch return;
+    defer allocator.free(home);
+    const ws = try resolveWorkspaceDir(allocator);
+    defer allocator.free(ws);
+    try std.testing.expect(std.fs.path.isAbsolute(ws));
+    try std.testing.expect(std.mem.indexOf(u8, ws, ".zeptoclaw/workspace") != null or std.mem.indexOf(u8, ws, ".openclaw/workspace") != null);
 }

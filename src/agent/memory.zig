@@ -412,14 +412,7 @@ fn spawnMemoryUpdate(allocator: std.mem.Allocator) bool {
     defer allocator.free(home);
     const path = std.fmt.allocPrint(allocator, "{s}/zeptoclaw/zig-out/bin/zeptoclaw", .{home}) catch return false;
     defer allocator.free(path);
-    var threaded = std.Io.Threaded.init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-    const result = std.process.run(allocator, io, .{
-        .argv = &.{ path, "memory", "update" },
-        .stdout_limit = .limited(16 * 1024),
-        .stderr_limit = .limited(16 * 1024),
-    }) catch |err| {
+    const result = compat.runParentEnv(allocator, &.{ path, "memory", "update" }, .limited(16 * 1024), .limited(64 * 1024)) catch |err| {
         std.log.warn("[memory] synthesis spawn failed: {s}", .{@errorName(err)});
         return false;
     };
@@ -670,4 +663,24 @@ test "dailyContextAt isolation is a property of two chats" {
     defer allocator.free(got);
     try std.testing.expect(std.mem.indexOf(u8, got, "peer-secret") != null);
     try std.testing.expect(std.mem.indexOf(u8, got, "self-secret") == null);
+}
+
+test "memory update child argv uses HOME zeptoclaw binary" {
+    const allocator = std.testing.allocator;
+    const home = compat.getEnvVarOwned(allocator, "HOME") catch return;
+    defer allocator.free(home);
+    const path = try std.fmt.allocPrint(allocator, "{s}/zeptoclaw/zig-out/bin/zeptoclaw", .{home});
+    defer allocator.free(path);
+    try std.testing.expect(std.fs.path.isAbsolute(path));
+}
+
+test "runParentEnv printenv HOME is absolute like resolveWorkspaceDir needs" {
+    const allocator = std.testing.allocator;
+    const result = try compat.runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096));
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const home = std.mem.trim(u8, result.stdout, " \t\r\n");
+    const ws = try std.fmt.allocPrint(allocator, "{s}/.zeptoclaw/workspace", .{home});
+    defer allocator.free(ws);
+    try std.testing.expect(std.fs.path.isAbsolute(ws));
 }

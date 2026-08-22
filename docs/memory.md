@@ -56,3 +56,7 @@ Stamps keep both `lastMemoryUpdate` and `lastMemoryCompact` in `heartbeat-state.
 ## Same-chat hydrate (after restart)
 
 `memory.dailyContext` injects today+yesterday **journal lines for this `chat_id` only** into the WhatsApp turn (RAM history is empty after a gateway restart). Marker is `] (JID):`. Other chats and `MEMORY.md` are not included. Cap 12KB of matching lines.
+
+## Isolated NIM child
+
+The 30-minute ingest is `zeptoclaw memory update` spawned from the gateway. Zig 0.16 `std.Io.Threaded.init(gpa, .{})` defaults to an empty environment. The child must be spawned with `compat.runParentEnv` so HOME and NVIDIA_API_KEY exist. `dirExists` must not call `openDirAbsolute` on a relative path (that asserts).

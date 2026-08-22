@@ -96,7 +96,7 @@ pub const WhatsAppChannel = struct {
 
         if (self.spawn_threaded == null) {
             const t = try self.allocator.create(std.Io.Threaded);
-            t.* = std.Io.Threaded.init(self.allocator, .{});
+            t.* = compat.threadedIoWithOsEnviron(self.allocator);
             self.spawn_threaded = t;
         }
         const spawn_io = self.channelIo();

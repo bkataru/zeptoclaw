@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Memory ingest child inherits process env (`compat.runParentEnv`). `dirExists` no longer panics on relative paths. Compact oneshot `TimeoutStartSec=0` so NIM retries are not SIGTERM at 15 min.
+
+
 - Baileys auto-reconnect after `connection.close` (backoff 2s..60s). `loggedOut` stays dead until QR. Pending-turns still replay on the following `connected`.
 
 

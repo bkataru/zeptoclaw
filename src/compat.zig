@@ -128,3 +128,63 @@ pub fn streamWriteAll(stream: std.Io.net.Stream, data: []const u8) !void {
     try writer.interface.writeAll(data);
     try writer.interface.flush();
 }
+
+
+/// Zig 0.16 `Threaded.init(gpa, .{})` defaults `environ` to empty. Children then
+/// have no HOME/PATH/NVIDIA_API_KEY. Copy the process environ block from libc.
+pub fn osEnviron() std.process.Environ {
+    const c_environ = std.c.environ;
+    var n: usize = 0;
+    while (c_environ[n] != null) : (n += 1) {}
+    const slice: [:null]const ?[*:0]const u8 = c_environ[0..n :null];
+    return .{ .block = .{ .slice = slice } };
+}
+
+pub fn threadedIoWithOsEnviron(gpa: std.mem.Allocator) std.Io.Threaded {
+    return std.Io.Threaded.init(gpa, .{ .environ = osEnviron() });
+}
+
+/// Spawn argv, wait, collect stdout/stderr. Child inherits this process env.
+pub fn runParentEnv(
+    gpa: std.mem.Allocator,
+    argv: []const []const u8,
+    stdout_limit: std.Io.Limit,
+    stderr_limit: std.Io.Limit,
+) std.process.RunError!std.process.RunResult {
+    var threaded = threadedIoWithOsEnviron(gpa);
+    defer threaded.deinit();
+    return std.process.run(gpa, threaded.io(), .{
+        .argv = argv,
+        .stdout_limit = stdout_limit,
+        .stderr_limit = stderr_limit,
+    });
+}
+
+test "runParentEnv inherits HOME as an absolute path" {
+    const allocator = std.testing.allocator;
+    const result = try runParentEnv(allocator, &.{ "/usr/bin/printenv", "HOME" }, .limited(4096), .limited(4096));
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try std.testing.expectEqual(@as(u8, 0), switch (result.term) {
+        .exited => |c| c,
+        else => 1,
+    });
+    const home = std.mem.trim(u8, result.stdout, " \t\r\n");
+    try std.testing.expect(home.len > 0);
+    try std.testing.expect(std.fs.path.isAbsolute(home));
+}
+
+test "empty Threaded environ does not pass HOME" {
+    const allocator = std.testing.allocator;
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    defer threaded.deinit();
+    const result = try std.process.run(allocator, threaded.io(), .{
+        .argv = &.{ "/usr/bin/printenv", "HOME" },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const home = std.mem.trim(u8, result.stdout, " \t\r\n");
+    try std.testing.expectEqual(@as(usize, 0), home.len);
+}
