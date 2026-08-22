@@ -336,3 +336,22 @@ test "parseDecision first token" {
     try std.testing.expectEqual(Decision.skip, parseDecision("no new facts"));
     try std.testing.expectEqual(Decision.skip, parseDecision(""));
 }
+
+fn fuzzDecision(_: void, smith: *std.testing.Smith) !void {
+    var buf: [256]u8 = undefined;
+    const n = smith.slice(&buf);
+    _ = parseDecision(buf[0..n]);
+}
+
+test "fuzz parseDecision update" {
+    try std.testing.fuzz({}, fuzzDecision, .{
+        .corpus = &.{
+            "UPDATE",
+            "SKIP",
+            "```\nYES\n```",
+            "",
+            "update please",
+            "NOPE",
+        },
+    });
+}

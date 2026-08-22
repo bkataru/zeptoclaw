@@ -608,14 +608,21 @@ pub const WhatsAppChannel = struct {
     fn jsonI64(v: std.json.Value) i64 {
         return switch (v) {
             .integer => |i| i,
-            .float => |f| @intFromFloat(f),
+            .float => |f| blk: {
+                if (!std.math.isFinite(f)) break :blk 0;
+                if (f > @as(f64, @floatFromInt(std.math.maxInt(i64)))) break :blk std.math.maxInt(i64);
+                if (f < @as(f64, @floatFromInt(std.math.minInt(i64)))) break :blk std.math.minInt(i64);
+                break :blk @intFromFloat(f);
+            },
             .number_string => |ns| std.fmt.parseInt(i64, ns, 10) catch 0,
             else => 0,
         };
     }
 
     fn parseMessage(allocator: Allocator, value: std.json.Value) !WhatsAppMessage {
+        if (value != .object) return error.InvalidMessage;
         var msg = try WhatsAppMessage.init(allocator);
+        errdefer msg.deinit();
 
         if (value.object.get("id")) |id| {
             if (jsonStr(id)) |s| msg.id = try allocator.dupe(u8, s);
@@ -706,22 +713,25 @@ pub const WhatsAppChannel = struct {
             .@"error" = null,
         };
 
+        if (value != .object) return error.InvalidConnection;
         if (value.object.get("type")) |type_str| {
-            if (std.mem.eql(u8, type_str.string, "connected")) {
-                update.status = .connected;
-            } else if (std.mem.eql(u8, type_str.string, "disconnected")) {
-                update.status = .disconnected;
+            if (jsonStr(type_str)) |s| {
+                if (std.mem.eql(u8, s, "connected")) {
+                    update.status = .connected;
+                } else if (std.mem.eql(u8, s, "disconnected")) {
+                    update.status = .disconnected;
+                }
             }
         }
 
         if (value.object.get("selfJid")) |self_jid| {
-            update.self_jid = try allocator.dupe(u8, self_jid.string);
+            if (jsonStr(self_jid)) |s| update.self_jid = try allocator.dupe(u8, s);
         }
         if (value.object.get("selfE164")) |self_e164| {
-            update.self_e164 = try allocator.dupe(u8, self_e164.string);
+            if (jsonStr(self_e164)) |s| update.self_e164 = try allocator.dupe(u8, s);
         }
         if (value.object.get("error")) |err_val| {
-            update.@"error" = try allocator.dupe(u8, err_val.string);
+            if (jsonStr(err_val)) |s| update.@"error" = try allocator.dupe(u8, s);
         }
 
         return update;
@@ -757,4 +767,37 @@ test "WhatsAppChannel init/deinit" {
     defer channel.deinit();
 
     try std.testing.expectEqual(false, channel.connected);
+}
+
+
+fn fuzzParseInbound(_: void, smith: *std.testing.Smith) !void {
+    var buf: [1024]u8 = undefined;
+    const n = smith.slice(&buf);
+    const slice = buf[0..n];
+    const allocator = std.testing.allocator;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, slice, .{}) catch return;
+    defer parsed.deinit();
+    var msg = WhatsAppChannel.parseMessage(allocator, parsed.value) catch return;
+    defer msg.deinit();
+    _ = msg.body.len;
+    const upd = WhatsAppChannel.parseConnectionUpdate(allocator, parsed.value) catch return;
+    if (upd.self_jid) |s| allocator.free(s);
+    if (upd.self_e164) |s| allocator.free(s);
+    if (upd.@"error") |s| allocator.free(s);
+}
+
+test "fuzz inbound json parse" {
+    try std.testing.fuzz({}, fuzzParseInbound, .{
+        .corpus = &.{
+            "{}",
+            "[]",
+            "null",
+            "not-json",
+            "{\"chatId\":\"19082673946862@lid\",\"body\":\"hi barvis\",\"fromMe\":true,\"id\":\"m1\"}",
+            "{\"type\":\"connected\",\"selfJid\":\"917019895010:55@s.whatsapp.net\"}",
+            "{\"id\":1,\"fromMe\":\"yes\",\"timestamp\":1e308,\"body\":{\"x\":1}}",
+            "{\"mediaType\":\"image\",\"mediaPath\":\"/tmp/x.jpg\",\"caption\":\"top\"}",
+            "{\"chatType\":\"group\",\"mentionedJids\":[1,2]}",
+        },
+    });
 }

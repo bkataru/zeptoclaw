@@ -226,3 +226,20 @@ test "parseDecision compact tokens" {
     try std.testing.expectEqual(Decision.skip, parseDecision("no need"));
     try std.testing.expectEqual(Decision.skip, parseDecision(""));
 }
+
+fn fuzzCompactDecision(_: void, smith: *std.testing.Smith) !void {
+    var buf: [256]u8 = undefined;
+    const n = smith.slice(&buf);
+    _ = parseDecision(buf[0..n]);
+}
+
+test "fuzz parseDecision compact" {
+    try std.testing.fuzz({}, fuzzCompactDecision, .{
+        .corpus = &.{
+            "COMPACT",
+            "SKIP",
+            "TRUE",
+            "maybe later",
+        },
+    });
+}

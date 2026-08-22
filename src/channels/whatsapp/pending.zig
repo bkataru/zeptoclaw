@@ -248,3 +248,27 @@ test "enqueue ack load filters id" {
     try std.testing.expectEqualStrings("m2", left[0].id);
     try std.testing.expect(std.mem.indexOf(u8, left[0].body, "hi barvis") != null);
 }
+
+fn fuzzPendingJsonl(_: void, smith: *std.testing.Smith) !void {
+    var buf: [800]u8 = undefined;
+    const n = smith.slice(&buf);
+    const path = "/tmp/zeptoclaw-fuzz-pending.jsonl";
+    writeAll(path, buf[0..n]);
+    const a = std.testing.allocator;
+    const rows = loadFrom(a, path) catch return;
+    defer {
+        for (rows) |*row| row.deinit(a);
+        a.free(rows);
+    }
+}
+
+test "fuzz pending jsonl" {
+    try std.testing.fuzz({}, fuzzPendingJsonl, .{
+        .corpus = &.{
+            "",
+            "{\"id\":\"m1\",\"chat_id\":\"190@lid\",\"body\":\"hi\",\"from_me\":true,\"direct\":true}\n",
+            "not json\n{\"id\":1}\n",
+            "{\"id\":\"x\",\"chat_id\":\"c\",\"body\":\"\\\"\\\n\"}\n",
+        },
+    });
+}

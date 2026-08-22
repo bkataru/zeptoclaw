@@ -29,3 +29,7 @@ Update `README.md` / `CHANGELOG.md` / `DEPLOYMENT.md` / `docs/` when behavior ch
 ## PRs
 
 Small, focused diffs. Do not add logs, `node_modules`, or `.sisyphus` scratch.
+
+## Fuzzing
+
+`std.testing.fuzz` tests live next to parsers (inbound JSON, journal JID, pending jsonl, tool hydrate, memory decide). Corpus runs in `zig build test`. `zig build test --fuzz` is broken on Zig 0.16.0 (`test_runner` StackTrace). Extra mutations: `src/fuzz_mutate.zig`. See `docs/fuzz.md`.

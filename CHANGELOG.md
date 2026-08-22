@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fuzz targets (`std.testing.fuzz`) for inbound JSON, journal JID filter, pending-turns jsonl, tool-call hydrate, memory decide parsers. `zig build test --fuzz`.
+
+
 - Inbound images: download to `sessions/whatsapp/media`, last-image per JID, attach as NIM vision on that chat's later turns.
 
 

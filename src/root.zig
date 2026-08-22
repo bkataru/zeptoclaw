@@ -127,6 +127,7 @@ test "agent.message module loads" {
 
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("fuzz_mutate.zig");
         _ = @import("channels/whatsapp/whatsapp_channel_test.zig");
         _ = @import("skills/git_workflow/git_workflow_test.zig");
         _ = @import("config/validator_test.zig");

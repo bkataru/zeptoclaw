@@ -415,7 +415,7 @@ zig build test
 - `systemd/` and `contrib/systemd/` (unit templates, no secrets)
 - `scripts/migrate/`
 - `cloudflare-worker/`
-- `docs/` (`whatsapp.md`, `memory.md`, `openclaw-compat.md`, runbooks)
+- `docs/` (`whatsapp.md`, `memory.md`, `openclaw-compat.md`, `fuzz.md`, runbooks)
 
 ## Dependencies
 

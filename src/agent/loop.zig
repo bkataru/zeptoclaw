@@ -381,3 +381,24 @@ test "setWorkspace does not drop transcript dir ownership" {
         agent.owns_transcript_dir = false;
     }
 }
+fn fuzzHydrate(_: void, smith: *std.testing.Smith) !void {
+    var buf: [512]u8 = undefined;
+    const n = smith.slice(&buf);
+    const allocator = std.testing.allocator;
+    var msg = try message.assistantMessage(allocator, buf[0..n]);
+    defer msg.deinit(allocator);
+    hydrateToolCallsFromContent(allocator, &msg) catch return;
+}
+
+test "fuzz hydrate tool json" {
+    try std.testing.fuzz({}, fuzzHydrate, .{
+        .corpus = &.{
+            "hello",
+            "{\"name\":\"exec\",\"args\":{\"command\":\"true\"}}",
+            "{\"tool\":\"memory_get\",\"arguments\":[]}",
+            "{",
+            "{\"name\":1}",
+            "{\"name\":\"x\"}",
+        },
+    });
+}

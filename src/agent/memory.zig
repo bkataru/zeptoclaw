@@ -114,7 +114,7 @@ pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []
 }
 
 /// Memory: Caller owns returned slice if non-null.
-fn lineBelongsToChat(line: []const u8, chat_id: []const u8) bool {
+pub fn lineBelongsToChat(line: []const u8, chat_id: []const u8) bool {
     if (chat_id.len == 0) return false;
     var marker_buf: [160]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, "] ({s}):", .{chat_id}) catch return false;
@@ -600,4 +600,48 @@ test "dailyContextAt filters by chat id" {
     try std.testing.expect(std.mem.indexOf(u8, got, "i like her top") != null);
     try std.testing.expect(std.mem.indexOf(u8, got, "secret from selfchat") == null);
     try std.testing.expect(std.mem.indexOf(u8, got, "MEMORY.md") == null);
+}
+
+fn fuzzJournalJid(_: void, smith: *std.testing.Smith) !void {
+    const ascii: []const std.testing.Smith.Weight = &.{
+        .rangeAtMost(u8, '0', '9', 3),
+        .rangeAtMost(u8, 'a', 'z', 2),
+        .value(u8, '@', 1),
+        .value(u8, '.', 1),
+        .value(u8, '-', 1),
+        .value(u8, '_', 1),
+    };
+    var a: [48]u8 = undefined;
+    var b: [48]u8 = undefined;
+    smith.bytesWeighted(&a, ascii);
+    smith.bytesWeighted(&b, ascii);
+    var line_buf: [160]u8 = undefined;
+    const line = std.fmt.bufPrint(&line_buf, "- 18:34 IST [in] ({s}): secret-from-a", .{a[0..]}) catch return;
+    try std.testing.expect(lineBelongsToChat(line, a[0..]));
+    if (!std.mem.eql(u8, &a, &b)) {
+        var mb: [160]u8 = undefined;
+        const marker_b = std.fmt.bufPrint(&mb, "] ({s}):", .{b[0..]}) catch {
+            try std.testing.expect(!lineBelongsToChat(line, b[0..]));
+            return;
+        };
+        try std.testing.expectEqual(std.mem.indexOf(u8, line, marker_b) != null, lineBelongsToChat(line, b[0..]));
+    }
+}
+
+test "fuzz journal jid isolation" {
+    try std.testing.fuzz({}, fuzzJournalJid, .{
+        .corpus = &.{
+            "19082673946862@lid\x00216638251077681@lid",
+            "x@lid\x00x@lid.extra",
+            "\x00peer",
+        },
+    });
+}
+
+test "lineBelongsToChat rejects other jid" {
+    const line = "- 18:34 IST [in] (19082673946862@lid): i like ur top";
+    try std.testing.expect(lineBelongsToChat(line, "19082673946862@lid"));
+    try std.testing.expect(!lineBelongsToChat(line, "216638251077681@lid"));
+    try std.testing.expect(!lineBelongsToChat(line, ""));
+    try std.testing.expect(!lineBelongsToChat(line, "62@lid"));
 }
