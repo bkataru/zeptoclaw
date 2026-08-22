@@ -345,7 +345,20 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     defer g_whatsapp_alloc.free(chat_id_copy);
     const body_copy = try g_whatsapp_alloc.dupe(u8, eff_msg.body);
     defer g_whatsapp_alloc.free(body_copy);
-    if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, body_copy);
+    var journal_body = body_copy;
+    var journal_body_owned = false;
+    if (eff_msg.media_path) |mp| {
+        if (mp.len > 0) {
+            const mime = if (eff_msg.media_type) |mt| mt else "image";
+            zeptoclaw.channels.whatsapp.inbound_media.remember(g_whatsapp_alloc, chat_id_copy, mime, mp);
+            if (std.fmt.allocPrint(g_whatsapp_alloc, "{s} [image {s}]", .{ body_copy, mp })) |jb| {
+                journal_body = jb;
+                journal_body_owned = true;
+            } else |_| {}
+        }
+    }
+    defer if (journal_body_owned) g_whatsapp_alloc.free(journal_body);
+    if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body);
     session.addMessage(eff_msg.*) catch {};
 
     // Skip our own outbound echo (self-chat fromMe replies). Exact or prefix match.
@@ -502,10 +515,27 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
         const reply = while (true) {
+            var mime_buf: [64]u8 = [_]u8{0} ** 64;
+            var vision_path: ?[]u8 = null;
+            var vision_mime: []const u8 = "image/jpeg";
+            if (eff_msg.media_path) |mp| {
+                if (mp.len > 0) vision_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                if (eff_msg.media_type) |mt| vision_mime = mt;
+            } else if (is_dm) {
+                if (zeptoclaw.channels.whatsapp.inbound_media.loadLast(g_whatsapp_alloc, chat_id_copy, &mime_buf)) |p| {
+                    vision_path = p;
+                    vision_mime = std.mem.sliceTo(mime_buf[0..], 0);
+                    if (vision_mime.len == 0) vision_mime = "image/jpeg";
+                }
+            }
+            defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
+            if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is attached for vision. Use it if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
             break agent.runTurn(prompt, .{
                 .system_prompt = sys_prompt,
                 .extra_context = extra.items,
                 .max_iters = 200,
+                .image_path = vision_path,
+                .image_mime = if (vision_path != null) vision_mime else null,
             }) catch |err| {
                 std.log.err("[whatsapp] agent run failed: {}; keeping inbound, backing off", .{err});
                 zeptoclaw.providers.nim.sleepAfterFailure();

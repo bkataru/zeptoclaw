@@ -5,7 +5,7 @@
  * Provides a JSON-RPC interface to Baileys WhatsApp library
  */
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
@@ -209,7 +209,10 @@ async function init(options = {}) {
                 }
             }
 
-            const messageData = extractMessageData(msg);
+            let messageData = extractMessageData(msg);
+            if (messageData.mediaType === 'image') {
+                messageData = await saveInboundMedia(msg, messageData);
+            }
             if ((!messageData.body || !String(messageData.body).trim()) && !messageData.mediaType) continue;
             if (msg.key.fromMe && isGroupChat && !/barvis/i.test(String(messageData.body || ''))) continue;
             if (isReplay(remoteJid, !!msg.key.fromMe, messageData.body, mid)) continue;
@@ -636,11 +639,40 @@ function extractMessageData(msg) {
         senderName: fromMe ? 'Baala' : msg.pushName,
         body,
         mediaType,
+        mediaPath: null,
+        mediaMime: null,
         location,
         mentionedJids,
         replyContext: replyContext ? { messageId: replyContext.messageId, participant: replyContext.participant } : null,
         timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()
     };
+}
+
+async function saveInboundMedia(msg, messageData) {
+    try {
+        const buf = await downloadMediaMessage(msg, 'buffer', {});
+        if (!buf || !buf.length || buf.length > 6 * 1024 * 1024) {
+            console.error('media skip: empty or too large', buf && buf.length);
+            return messageData;
+        }
+        const dir = path.join(authDir || '.', 'media');
+        fs.mkdirSync(dir, { recursive: true });
+        const mime = (msg.message && msg.message.imageMessage && msg.message.imageMessage.mimetype) || 'image/jpeg';
+        const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : '.jpg';
+        const id = String(msg.key.id || Date.now()).replace(/[^A-Za-z0-9_-]/g, '_');
+        const dest = path.join(dir, id + ext);
+        fs.writeFileSync(dest, buf);
+        messageData.mediaPath = dest;
+        messageData.mediaMime = mime;
+        const lastDir = path.join(authDir || '.', 'last-image');
+        fs.mkdirSync(lastDir, { recursive: true });
+        const safe = String(messageData.chatId || 'chat').replace(/[^A-Za-z0-9._-]/g, '_');
+        fs.writeFileSync(path.join(lastDir, safe + '.txt'), mime + '\n' + dest);
+        console.error('[zepto] saved inbound image', dest, buf.length);
+    } catch (err) {
+        console.error('media download failed:', err && err.message ? err.message : err);
+    }
+    return messageData;
 }
 
 function getMimeType(filePath) {

@@ -76,6 +76,7 @@ pub const WhatsAppMessage = struct {
     body: []const u8,
     message_type: MessageType,
     media_type: ?[]const u8,
+    media_path: ?[]const u8 = null,
     location: ?Location,
 
     // Metadata
@@ -104,6 +105,7 @@ pub const WhatsAppMessage = struct {
             .body = try allocator.dupe(u8, ""),
             .message_type = .text,
             .media_type = null,
+            .media_path = null,
             .location = null,
             .mentioned_jids = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             .reply_context = null,
@@ -127,6 +129,7 @@ pub const WhatsAppMessage = struct {
         m.sender_name = if (self.sender_name) |v| try self.allocator.dupe(u8, v) else null;
         m.body = try self.allocator.dupe(u8, if (self.body.len > 0) self.body else "");
         m.media_type = if (self.media_type) |v| try self.allocator.dupe(u8, v) else null;
+        m.media_path = if (self.media_path) |v| try self.allocator.dupe(u8, v) else null;
         m.message_type = self.message_type;
         m.location = self.location;
         m.chat_type = self.chat_type;
@@ -148,6 +151,7 @@ pub const WhatsAppMessage = struct {
         if (self.sender_name) |s| self.allocator.free(s);
         self.allocator.free(self.body);
         if (self.media_type) |s| self.allocator.free(s);
+        if (self.media_path) |s| self.allocator.free(s);
         if (self.location) |*loc| {
             _ = loc;
             // Location is a value type, no cleanup needed

@@ -43,6 +43,7 @@ pub const channels = struct {
         pub const OutboundProcessor = @import("channels/whatsapp/outbound.zig").OutboundProcessor;
         pub const engagement = @import("channels/whatsapp/engagement.zig");
         pub const pending = @import("channels/whatsapp/pending.zig");
+        pub const inbound_media = @import("channels/whatsapp/inbound_media.zig");
         pub const AccessControl = @import("channels/whatsapp/access_control.zig").AccessControl;
         pub const native = struct {
             pub const tokens = @import("channels/whatsapp/native/tokens.zig");
@@ -158,6 +159,7 @@ comptime {
         _ = gateway.token_auth;
         _ = gateway.session_store;
         _ = channels.whatsapp.pending;
+        _ = channels.whatsapp.inbound_media;
         _ = channels.whatsapp.native.noise_crypto;
         _ = channels.whatsapp.native.noise_handshake;
         _ = channels.whatsapp.native.ws_client;

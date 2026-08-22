@@ -208,7 +208,62 @@ pub fn deinit(self: *NIMClient) void {
             stringifier.write(msg.role.toString()) catch |err| return switch (err) {
                 error.WriteFailed => types.ProviderError.Network,
             };
-            if (msg.content) |content| {
+            if (msg.image_data_url) |url| {
+                stringifier.objectField("content") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.objectField("type") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write("text") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.objectField("text") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write(msg.content orelse "") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.endObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.objectField("type") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write("image_url") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.objectField("image_url") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.objectField("url") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write(url) catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.endObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.endObject() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.endArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+            } else if (msg.content) |content| {
                 stringifier.objectField("content") catch |err| return switch (err) {
                     error.WriteFailed => types.ProviderError.Network,
                 };

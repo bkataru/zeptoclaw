@@ -10,6 +10,7 @@ const transcript = @import("transcript.zig");
 const openclaw = @import("../openclaw_compat/openclaw.zig");
 const compat = @import("../compat.zig");
 const engagement = @import("../channels/whatsapp/engagement.zig");
+const inbound_media = @import("../channels/whatsapp/inbound_media.zig");
 
 const skills = @import("../skills/skill_sdk.zig");
 const execution_context = @import("../skills/execution_context.zig");
@@ -53,6 +54,8 @@ pub const TurnOpts = struct {
     system_prompt: ?[]const u8 = null,
     extra_context: ?[]const u8 = null,
     max_iters: u32 = 200,
+    image_path: ?[]const u8 = null,
+    image_mime: ?[]const u8 = null,
 };
 
 pub const Agent = struct {
@@ -171,7 +174,18 @@ pub const Agent = struct {
             }
         }
 
-        const user_msg = try message.userMessage(self.allocator, user_text);
+        var user_msg = try message.userMessage(self.allocator, user_text);
+        if (opts.image_path) |ip| {
+            if (ip.len > 0) {
+                const mime = opts.image_mime orelse "image/jpeg";
+                user_msg.image_data_url = inbound_media.fileToDataUrl(self.allocator, ip, mime);
+                if (user_msg.image_data_url) |_| {
+                    std.log.info("[agent] attached image for vision path={s}", .{ip});
+                } else {
+                    std.log.warn("[agent] vision attach failed path={s}", .{ip});
+                }
+            }
+        }
         try self.session.addMessage(user_msg);
         self.transcripts.append(self.session_id, "user", user_text);
 

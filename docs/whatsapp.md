@@ -50,3 +50,12 @@ Injected only when `fromMe=true` (Baala). Peer inbound in that DM does not get `
 Inbound is journaled immediately. If that chat already has a NIM turn in flight, extra bodies go into a per-chat buffer (cap 16). After send or listen, those lines become one follow-up turn (`mergeBurstPrompt`). The mutex is not held during NIM, so a burst is not stuck behind RateLimit sleep.
 
 Same-chat journal is keyed by WhatsApp JID (the thread), not by sender. That is the right isolation: both people in a DM share one history. Other JIDs and `MEMORY.md` stay out unless Baala `fromMe` in that DM.
+
+## Inbound images
+
+Baileys downloads inbound `imageMessage` to `~/.zeptoclaw/sessions/whatsapp/media/` and records the last path per chat JID under `last-image/`. Zig attaches that file as a NIM `image_url` data URL on:
+
+- the image turn itself
+- later text in the **same** DM (so "i like her top" can see the photo)
+
+Other chats never get that file. Videos/audio are not vision-attached. Max 4MB.

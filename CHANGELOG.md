@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Inbound images: download to `sessions/whatsapp/media`, last-image per JID, attach as NIM vision on that chat's later turns.
+
+
 - Burst coalesce: while NIM is in flight for a chat, later messages in that JID merge into one follow-up turn. Mutex released during NIM.
 
 
