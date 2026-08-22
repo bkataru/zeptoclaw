@@ -17,6 +17,9 @@ pub const agent = struct {
     pub const message = @import("agent/message.zig");
     pub const loop = @import("agent/loop.zig");
     pub const tools = @import("agent/tools.zig");
+    pub const core_tools = @import("agent/core_tools.zig");
+    pub const transcript = @import("agent/transcript.zig");
+    pub const cron = @import("agent/cron.zig");
 };
 
 // Channels
@@ -25,10 +28,12 @@ pub const channels = struct {
     pub const session = @import("channels/session.zig");
     pub const whatsapp = struct {
         pub const types = @import("channels/whatsapp/types.zig");
+        pub const config = @import("channels/whatsapp/config.zig");
         pub const WhatsAppChannel = @import("channels/whatsapp/whatsapp_channel.zig").WhatsAppChannel;
         pub const WhatsAppSession = @import("channels/whatsapp/session.zig").WhatsAppSession;
         pub const InboundProcessor = @import("channels/whatsapp/inbound.zig").InboundProcessor;
         pub const OutboundProcessor = @import("channels/whatsapp/outbound.zig").OutboundProcessor;
+        pub const engagement = @import("channels/whatsapp/engagement.zig");
         pub const AccessControl = @import("channels/whatsapp/access_control.zig").AccessControl;
         pub const native = struct {
             pub const tokens = @import("channels/whatsapp/native/tokens.zig");

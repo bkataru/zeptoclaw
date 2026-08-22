@@ -31,15 +31,19 @@ pub const MessageRole = enum {
 };
 
 /// FunctionCall represents a function call within a tool call
+/// Function call from model (owned strings).
+/// Memory: Owns `name` and `arguments`; call `deinit(allocator)` to free. Dupe allocates copies.
 pub const FunctionCall = struct {
     name: []const u8,
     arguments: []const u8,
 
+    /// Memory: Frees owned `name` and `arguments`.
     pub fn deinit(self: *FunctionCall, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.arguments);
     }
 
+    /// Memory: Caller owns returned FunctionCall; free with `deinit(allocator)`.
     pub fn dupe(self: FunctionCall, allocator: std.mem.Allocator) !FunctionCall {
         return .{
             .name = try allocator.dupe(u8, self.name),
@@ -49,17 +53,21 @@ pub const FunctionCall = struct {
 };
 
 /// ToolCall represents a tool/function call from the LLM
+/// Tool call containing function invocation (owned strings).
+/// Memory: Owns `id`, `type`, and nested `function`; call `deinit(allocator)` to free.
 pub const ToolCall = struct {
     id: []const u8,
     @"type": []const u8,
     function: FunctionCall,
 
+    /// Memory: Frees owned `id`, `type`, and nested `function`.
     pub fn deinit(self: *ToolCall, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.@"type");
         self.function.deinit(allocator);
     }
 
+    /// Memory: Caller owns returned ToolCall; free with `deinit(allocator)`.
     pub fn dupe(self: ToolCall, allocator: std.mem.Allocator) !ToolCall {
         return .{
             .id = try allocator.dupe(u8, self.id),
@@ -70,18 +78,22 @@ pub const ToolCall = struct {
 };
 
 /// ToolDefinition defines a tool available to the LLM
+/// Definition of a tool available to the LLM (owned strings, borrowed parameters).
+/// Memory: Owns `type`, `name`, `description`; `parameters` is borrowed JSON. Call `deinit(allocator)` to free owned strings. Dupe does shallow copy of `parameters`.
 pub const ToolDefinition = struct {
     @"type": []const u8 = "function",
     name: []const u8,
     description: []const u8,
     parameters: std.json.Value,
 
+    /// Memory: Frees owned `type`, `name`, `description`; does not free `parameters`.
     pub fn deinit(self: *ToolDefinition, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.@"type");
         allocator.free(self.description);
     }
 
+    /// Memory: Caller owns returned ToolDefinition; free with `deinit(allocator)`.
     pub fn dupe(self: ToolDefinition, allocator: std.mem.Allocator) !ToolDefinition {
         return .{
             .@"type" = try allocator.dupe(u8, self.@"type"),
@@ -93,12 +105,15 @@ pub const ToolDefinition = struct {
 };
 
 /// Message represents a single message in a conversation
+/// Message in a conversation (owned optional strings and tool calls).
+/// Memory: Owns `content`, `reasoning_content`, `tool_call_id`, and `tool_calls` slice (and nested ToolCalls); call `deinit(allocator)` to free. Dupe allocates owned copies.
 pub const Message = struct {
     role: MessageRole,
     content: ?[]const u8 = null,
     tool_call_id: ?[]const u8 = null,
     tool_calls: ?[]ToolCall = null,
 
+    /// Memory: Frees owned `content`, `reasoning_content`, `tool_call_id`, and `tool_calls` (recursively).
     pub fn deinit(self: *Message, allocator: std.mem.Allocator) void {
         if (self.content) |c| allocator.free(c);
         if (self.tool_call_id) |tcid| allocator.free(tcid);
@@ -108,6 +123,7 @@ pub const Message = struct {
         }
     }
 
+    /// Memory: Caller owns returned Message; free with `deinit(allocator)`.
     pub fn dupe(self: Message, allocator: std.mem.Allocator) !Message {
         var result = Message{
             .role = self.role,
@@ -127,14 +143,27 @@ pub const Message = struct {
     pub fn hasToolCalls(self: Message) bool {
         return self.tool_calls != null and self.tool_calls.?.len > 0;
     }
+
+    /// Memory: Caller owns returned Message; free with deinit(allocator).
+    pub fn user(allocator: std.mem.Allocator, content: []const u8) !Message {
+        return .{
+            .role = .user,
+            .content = try allocator.dupe(u8, content),
+            .tool_call_id = null,
+            .tool_calls = null,
+        };
+    }
 };
 
 /// Choice represents a completion choice from the LLM
+/// Choice from completion (owns message and optional finish_reason).
+/// Memory: Owns `message` and `finish_reason`; call `deinit(allocator)` to free.
 pub const Choice = struct {
     index: u32,
     message: Message,
     finish_reason: ?[]const u8 = null,
 
+    /// Memory: Frees owned `finish_reason` and nested `message`.
     pub fn deinit(self: *Choice, allocator: std.mem.Allocator) void {
         if (self.finish_reason) |fr| allocator.free(fr);
         self.message.deinit(allocator);
@@ -142,6 +171,8 @@ pub const Choice = struct {
 };
 
 /// Usage represents token usage statistics
+/// Token usage (no allocation).
+/// Memory: No allocation; copy by value.
 pub const Usage = struct {
     prompt_tokens: u32,
     completion_tokens: u32,
@@ -149,6 +180,8 @@ pub const Usage = struct {
 };
 
 /// ChatCompletionResponse represents the response from a chat completion API
+/// Chat completion response (owned strings and choices).
+/// Memory: Owns `id`, `model`, and `choices` slice (each Choice owns its Message); call `deinit(allocator)` to free.
 pub const ChatCompletionResponse = struct {
     id: []const u8,
     model: []const u8,
@@ -156,6 +189,7 @@ pub const ChatCompletionResponse = struct {
     created: i64,
     usage: Usage,
 
+    /// Memory: Frees owned `id`, `model`, and `choices` (recursively frees each Choice).
     pub fn deinit(self: *ChatCompletionResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.model);
@@ -165,6 +199,8 @@ pub const ChatCompletionResponse = struct {
 };
 
 /// ChatCompletionRequest represents a request to a chat completion API
+/// Chat completion request (owned model/messages/tools).
+/// Memory: Owns `model`, `messages` slice (each Message owned), `tools` slice, and `tool_choice`; call `deinit(allocator)` to free. Caller retains ownership of args until deinit.
 pub const ChatCompletionRequest = struct {
     model: []const u8,
     messages: []Message,
@@ -173,6 +209,7 @@ pub const ChatCompletionRequest = struct {
     temperature: ?f32 = null,
     max_tokens: ?u32 = null,
 
+    /// Memory: Frees owned `model`, `tool_choice`, `messages`, and `tools`.
     pub fn deinit(self: *ChatCompletionRequest, allocator: std.mem.Allocator) void {
         allocator.free(self.model);
         if (self.tool_choice) |tc| allocator.free(tc);

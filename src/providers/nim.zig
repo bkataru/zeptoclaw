@@ -6,6 +6,37 @@ const compat = @import("../compat.zig");
 
 
 
+/// NIM client for NVIDIA NIM API.
+/// Memory: NIMClient owns its internal `std.http.Client`; caller must call `deinit()` to free. `api_key`/`model`/`base_url` are borrowed and not freed by deinit.
+fn sleepMs(ms: u64) void {
+    var left = ms;
+    while (left > 0) {
+        const chunk: u64 = @min(left, 1000);
+        const sec: i64 = @intCast(chunk / 1000);
+        const nsec: i64 = @intCast((chunk % 1000) * 1_000_000);
+        _ = std.c.nanosleep(&.{ .sec = sec, .nsec = nsec }, null);
+        left -= chunk;
+    }
+}
+
+/// NVIDIA integrate.api is 40 requests/minute (~1500ms). Pad to 1600ms.
+var g_nim_pace_mu: std.Io.Mutex = .init;
+var g_nim_last_s: i64 = 0;
+const NIM_MIN_GAP_S: i64 = 2;
+
+fn paceForRpm() void {
+    g_nim_pace_mu.lock(compat.getIo()) catch return;
+    defer g_nim_pace_mu.unlock(compat.getIo());
+    const now = compat.timestamp();
+    if (g_nim_last_s != 0) {
+        const elapsed = now - g_nim_last_s;
+        if (elapsed < NIM_MIN_GAP_S) {
+            sleepMs(@intCast((NIM_MIN_GAP_S - elapsed) * 1000));
+        }
+    }
+    g_nim_last_s = compat.timestamp();
+}
+
 pub const NIMClient = struct {
     allocator: std.mem.Allocator,
     api_key: []const u8,
@@ -15,6 +46,7 @@ pub const NIMClient = struct {
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
+    /// Memory: Caller owns returned NIMClient; call `deinit()` to free http.Client resources.
     pub fn init(allocator: std.mem.Allocator, cfg: config_module.Config) NIMClient {
         return .{
             .allocator = allocator,
@@ -27,6 +59,8 @@ pub const NIMClient = struct {
     }
 
     /// Initialize with a specific model ID
+    /// Initialize with a specific model ID
+    /// Memory: Caller owns returned NIMClient; call `deinit()` to free http.Client resources.
     pub fn initWithModel(allocator: std.mem.Allocator, cfg: config_module.Config, model_id: []const u8) NIMClient {
         return .{
             .allocator = allocator,
@@ -39,6 +73,8 @@ pub const NIMClient = struct {
     }
 
     /// Initialize with custom base URL
+    /// Initialize with custom base URL
+    /// Memory: Caller owns returned NIMClient; call `deinit()` to free http.Client resources. Caller retains ownership of `api_key`/`model_id`/`base_url`.
     pub fn initWithBaseUrl(allocator: std.mem.Allocator, api_key: []const u8, model_id: []const u8, base_url: []const u8) NIMClient {
         return .{
             .allocator = allocator,
@@ -50,11 +86,13 @@ pub const NIMClient = struct {
         };
     }
 
+/// Memory: Frees http.Client resources; does not free borrowed `api_key`/`model`/`base_url`.
 pub fn deinit(self: *NIMClient) void {
     self.client.deinit();
 }
 
     /// Change the model being used
+    /// Memory: Does not allocate; borrows `model_id` until next setModel call.
     pub fn setModel(self: *NIMClient, model_id: []const u8) void {
         self.model = model_id;
     }
@@ -75,8 +113,13 @@ pub fn deinit(self: *NIMClient) void {
     }
 
     /// Send chat completion request and return response
-    /// Send chat completion request and return response
+    /// Memory: Caller owns returned ChatCompletionResponse; call `response.deinit(allocator)` to free id/model/choices. Messages slice is borrowed.
     pub fn chat(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
+        return self.chatWithTools(messages, null);
+    }
+
+    /// Memory: Caller owns returned ChatCompletionResponse. `messages` and `tools` are borrowed.
+    pub fn chatWithTools(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
         // Build request body as JSON string
         var out = std.Io.Writer.Allocating.init(self.allocator);
         defer out.deinit();
@@ -121,6 +164,66 @@ pub fn deinit(self: *NIMClient) void {
                     error.WriteFailed => types.ProviderError.Network,
                 };
             }
+            if (msg.tool_call_id) |tcid| {
+                stringifier.objectField("tool_call_id") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write(tcid) catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+            }
+            if (msg.tool_calls) |calls| {
+                stringifier.objectField("tool_calls") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                for (calls) |call| {
+                    stringifier.beginObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("id") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(call.id) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("type") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(call.@"type") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("function") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.beginObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("name") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(call.function.name) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("arguments") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(call.function.arguments) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.endObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.endObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                }
+                stringifier.endArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+            }
             stringifier.endObject() catch |err| return switch (err) {
                 error.WriteFailed => types.ProviderError.Network,
             };
@@ -128,11 +231,85 @@ pub fn deinit(self: *NIMClient) void {
         stringifier.endArray() catch |err| return switch (err) {
             error.WriteFailed => types.ProviderError.Network,
         };
+        if (tools) |tool_list| {
+            if (tool_list.len > 0) {
+                stringifier.objectField("tools") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.beginArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                for (tool_list) |t| {
+                    stringifier.beginObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("type") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write("function") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("function") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.beginObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("name") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(t.name) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("description") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(t.description) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.objectField("parameters") catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.write(t.parameters) catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.endObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                    stringifier.endObject() catch |err| return switch (err) {
+                        error.WriteFailed => types.ProviderError.Network,
+                    };
+                }
+                stringifier.endArray() catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+            }
+        }
         stringifier.endObject() catch |err| return switch (err) {
             error.WriteFailed => types.ProviderError.Network,
         };
 
         const body = out.written();
+
+        var attempt: u32 = 0;
+        const max_attempts: u32 = 6;
+        while (attempt < max_attempts) : (attempt += 1) {
+            paceForRpm();
+            return self.postOnce(body) catch |err| switch (err) {
+                error.RateLimit, error.Timeout, error.Network => {
+                    if (attempt + 1 >= max_attempts) return err;
+                    const wait: u64 = @min(@as(u64, 32), @as(u64, 2) << @intCast(@min(attempt, 4)));
+                    std.log.warn("[nim] {} attempt {d}/{d}, backing off {d}s", .{ err, attempt + 1, max_attempts, wait });
+                    sleepMs(wait * 1000);
+                    continue;
+                },
+                else => return err,
+            };
+        }
+        return types.ProviderError.RateLimit;
+    }
+
+    fn postOnce(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
         const start_ns = compat.timestamp(); // fallback
         const overall_timeout_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms;
 
@@ -155,7 +332,9 @@ pub fn deinit(self: *NIMClient) void {
         // Enforce request timeout via timer checks below
         // Send body
         // Send body with timeout enforcement
-        req.sendBodyComplete(body) catch {
+        const body_mut = self.allocator.dupe(u8, body) catch return types.ProviderError.Network;
+        defer self.allocator.free(body_mut);
+        req.sendBodyComplete(body_mut) catch {
             if (@as(u64, @intCast(compat.timestamp() - start_ns)) * std.time.ns_per_s > overall_timeout_ns) {
                 return types.ProviderError.Timeout;
             }
