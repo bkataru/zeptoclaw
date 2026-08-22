@@ -216,6 +216,117 @@ pub fn persistDmNote(allocator: std.mem.Allocator, chat_id: []const u8, user_tex
     std.log.info("[memory] wrote durable note to MEMORY.md ({d} bytes)", .{merged.len});
 }
 
+/// Memory: Caller owns returned slice if non-null.
+pub fn getLongTerm(allocator: std.mem.Allocator, ws: []const u8) ?[]u8 {
+    const path = std.fmt.allocPrint(allocator, "{s}/MEMORY.md", .{ws}) catch return null;
+    defer allocator.free(path);
+    return readFileCapped(allocator, path, MEMORY_CAP);
+}
+
+/// Memory: Caller owns returned slice if non-null. `day_offset` 0=today IST, -1=yesterday.
+pub fn getDaily(allocator: std.mem.Allocator, ws: []const u8, day_offset: i64) ?[]u8 {
+    const path = dailyPath(allocator, ws, civilNowIst(), day_offset) catch return null;
+    defer allocator.free(path);
+    return readFileCapped(allocator, path, 32 * 1024);
+}
+
+pub fn appendLongTerm(allocator: std.mem.Allocator, ws: []const u8, note: []const u8) void {
+    const path = std.fmt.allocPrint(allocator, "{s}/MEMORY.md", .{ws}) catch return;
+    defer allocator.free(path);
+    const existing = readFileCapped(allocator, path, MEMORY_CAP * 2) orelse "";
+    defer if (existing.len > 0) allocator.free(existing);
+    const clipped = snippet(std.mem.trim(u8, note, " \t\r\n"), 1200);
+    const line = std.fmt.allocPrint(allocator, "- {s}\n", .{clipped}) catch return;
+    defer allocator.free(line);
+    const merged = mergeAutoNotes(allocator, existing, line) catch return;
+    defer allocator.free(merged);
+    writeFile(path, merged);
+    std.log.info("[memory] agent append MEMORY.md ({d} bytes)", .{merged.len});
+}
+
+pub fn appendDailyNote(allocator: std.mem.Allocator, ws: []const u8, chat_id: []const u8, text: []const u8) void {
+    const path = dailyPath(allocator, ws, civilNowIst(), 0) catch return;
+    defer allocator.free(path);
+    const existing = readFileCapped(allocator, path, 96 * 1024) orelse "";
+    defer if (existing.len > 0) allocator.free(existing);
+    const clock = clockIst();
+    const clipped = snippet(text, 2000);
+    const line = std.fmt.allocPrint(allocator, "\n- {d:0>2}:{d:0>2} IST [note] ({s}): {s}\n", .{
+        clock.h, clock.m, chat_id, clipped,
+    }) catch return;
+    defer allocator.free(line);
+    var body = std.ArrayList(u8).empty;
+    defer body.deinit(allocator);
+    if (existing.len == 0) {
+        body.appendSlice(allocator, "# Barvis Journal\n") catch return;
+    } else {
+        body.appendSlice(allocator, existing) catch return;
+    }
+    body.appendSlice(allocator, line) catch return;
+    writeFile(path, body.items);
+}
+
+/// Memory: Caller owns returned search hits.
+pub fn search(allocator: std.mem.Allocator, ws: []const u8, query: []const u8, include_long: bool) ![]u8 {
+    if (query.len == 0) return allocator.dupe(u8, "error: empty query");
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var hits: usize = 0;
+    if (include_long) {
+        if (getLongTerm(allocator, ws)) |buf| {
+            defer allocator.free(buf);
+            hits += collectHits(&out, allocator, "MEMORY.md", buf, query);
+        }
+    }
+    var off: i64 = 0;
+    while (off > -3) : (off -= 1) {
+        const path = dailyPath(allocator, ws, civilNowIst(), off) catch continue;
+        defer allocator.free(path);
+        const buf = readFileCapped(allocator, path, 32 * 1024) orelse continue;
+        defer allocator.free(buf);
+        const name = std.fs.path.basename(path);
+        hits += collectHits(&out, allocator, name, buf, query);
+    }
+    if (hits == 0) return allocator.dupe(u8, "(no matches)");
+    return out.toOwnedSlice(allocator);
+}
+
+fn collectHits(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, buf: []const u8, query: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, buf, '\n');
+    while (it.next()) |line| {
+        if (!containsIgnoreCase(line, query)) continue;
+        out.appendSlice(allocator, name) catch return n;
+        out.appendSlice(allocator, ": ") catch return n;
+        out.appendSlice(allocator, snippet(line, 240)) catch return n;
+        out.append(allocator, '\n') catch return n;
+        n += 1;
+        if (n >= 40 or out.items.len > 8 * 1024) break;
+    }
+    return n;
+}
+
+pub fn replaceIn(allocator: std.mem.Allocator, ws: []const u8, rel: []const u8, old_str: []const u8, new_str: []const u8) ![]u8 {
+    if (old_str.len == 0) return allocator.dupe(u8, "error: empty old_str");
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ ws, rel });
+    defer allocator.free(path);
+    const current = readFileCapped(allocator, path, MEMORY_CAP * 2) orelse
+        return allocator.dupe(u8, "error: file missing or empty");
+    defer allocator.free(current);
+    const idx = std.mem.indexOf(u8, current, old_str) orelse
+        return allocator.dupe(u8, "error: old_str not found");
+    var body = std.ArrayList(u8).empty;
+    defer body.deinit(allocator);
+    try body.appendSlice(allocator, current[0..idx]);
+    try body.appendSlice(allocator, new_str);
+    try body.appendSlice(allocator, current[idx + old_str.len ..]);
+    if (std.mem.endsWith(u8, rel, "MEMORY.md") and body.items.len > MEMORY_CAP) {
+        trimToCap(&body, allocator);
+    }
+    writeFile(path, body.items);
+    return std.fmt.allocPrint(allocator, "updated {s} ({d} bytes)", .{ rel, body.items.len });
+}
+
 fn mergeAutoNotes(allocator: std.mem.Allocator, existing: []const u8, note: []const u8) ![]u8 {
     if (std.mem.indexOf(u8, existing, snippet(note, @min(note.len, 80)))) |_| {
         return allocator.dupe(u8, existing);
@@ -393,4 +504,25 @@ test "dailyPath pads month and day" {
     const p = try dailyPath(allocator, "/tmp/ws", .{ .year = 2026, .month = 8, .day = 22 }, 0);
     defer allocator.free(p);
     try std.testing.expectEqualStrings("/tmp/ws/memory/2026-08-22.md", p);
+}
+
+test "appendLongTerm and search and replaceIn" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-memory-tools-test";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    const mem_path = try std.fmt.allocPrint(allocator, "{s}/MEMORY.md", .{dir});
+    defer allocator.free(mem_path);
+    writeFile(mem_path, "# MEMORY.md\n\n## Who I Am\n- Barvis\n");
+    appendLongTerm(allocator, dir, "Baala prefers Zig");
+    const got = getLongTerm(allocator, dir) orelse unreachable;
+    defer allocator.free(got);
+    try std.testing.expect(std.mem.indexOf(u8, got, "Baala prefers Zig") != null);
+    const hits = try search(allocator, dir, "prefers zig", true);
+    defer allocator.free(hits);
+    try std.testing.expect(std.mem.indexOf(u8, hits, "Baala prefers Zig") != null);
+    const upd = try replaceIn(allocator, dir, "MEMORY.md", "Barvis", "Barvis (Jarvis)");
+    defer allocator.free(upd);
+    const got2 = getLongTerm(allocator, dir) orelse unreachable;
+    defer allocator.free(got2);
+    try std.testing.expect(std.mem.indexOf(u8, got2, "Barvis (Jarvis)") != null);
 }

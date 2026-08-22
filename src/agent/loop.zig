@@ -141,6 +141,7 @@ pub const Agent = struct {
     /// Memory: Caller owns returned reply text.
     pub fn runTurn(self: *Agent, user_text: []const u8, opts: TurnOpts) ![]const u8 {
         core_tools.setWorkspace(self.workspace);
+        core_tools.setChatId(self.session_id);
         core_tools.resetPresence();
         g_skill_agent = self;
         core_tools.setSkillHandler(skillHandler);

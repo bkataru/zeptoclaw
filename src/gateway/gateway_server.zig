@@ -58,7 +58,7 @@ fn sigHandler(sig: std.os.linux.SIG) callconv(.c) void {
 /// Compose the Barvis system prompt from the openclaw-compatible workspace files,
 /// exactly the files an openclaw agent reads at session start (AGENTS.md protocol):
 /// SOUL.md (identity), USER.md (who we help), AGENTS.md (operating rules),
-/// IDENTITY.md, MEMORY.md, TOOLS.md - each optional, in that order.
+/// IDENTITY.md, TOOLS.md - each optional. MEMORY.md is a tool, not auto-injected.
 ///
 /// Memory: Caller owns returned slice; free with `alloc.free()` when done.
 fn workspace_system_prompt(alloc: std.mem.Allocator) ![]const u8 {
@@ -70,7 +70,6 @@ fn workspace_system_prompt(alloc: std.mem.Allocator) ![]const u8 {
         "USER.md",
         "AGENTS.md",
         "IDENTITY.md",
-        "MEMORY.md",
         "TOOLS.md",
     };
 
@@ -317,34 +316,13 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
             }
         }
 
-        const daily_mem = daily_memory_context(g_whatsapp_alloc, chat_id_copy, is_dm);
-        defer if (daily_mem) |dm| g_whatsapp_alloc.free(dm);
-        if (daily_mem) |dm| {
-            if (dm.len > 0) {
-                msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = dm }) catch {};
-            }
-        }
-
-        // mem_md: caller-owned from read_ws_file; stored in msgs and read by chat()
-        // below, so free only after the blk (NOT in an inner block — that was the
-        // use-after-free that segfaulted the serializer).
-        const mem_md: ?[]const u8 = if (is_dm)
-            read_ws_file(g_whatsapp_alloc, ws_dir_const orelse ".", "MEMORY.md", 32 * 1024)
-        else
-            null;
-        defer if (mem_md) |mm| g_whatsapp_alloc.free(mm);
-        if (mem_md) |mm| {
-            msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = mm }) catch {};
-        }
-
         const prompt = body_copy;
         var extra = std.ArrayList(u8).empty;
         defer extra.deinit(g_whatsapp_alloc);
         if (pre) |pc| extra.appendSlice(g_whatsapp_alloc, pc) catch {};
         if (hist_ctx) |hc| extra.appendSlice(g_whatsapp_alloc, hc) catch {};
-        if (daily_mem) |dm| extra.appendSlice(g_whatsapp_alloc, dm) catch {};
-        if (mem_md) |mm| extra.appendSlice(g_whatsapp_alloc, mm) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\n") catch {};
+        extra.appendSlice(g_whatsapp_alloc, "\nUse memory_get, memory_search, memory_append, memory_edit when you need long-term or daily notes. They are not preloaded.\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.PRESENCE_INSTRUCTIONS) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nYou are in WhatsApp chat `") catch {};
         extra.appendSlice(g_whatsapp_alloc, chat_id_copy) catch {};

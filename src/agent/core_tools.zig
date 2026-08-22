@@ -3,6 +3,7 @@ const std = @import("std");
 const compat = @import("../compat.zig");
 const types = @import("../providers/types.zig");
 const tools = @import("tools.zig");
+const memory = @import("memory.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -14,6 +15,12 @@ pub fn setWorkspace(path: []const u8) void {
 
 pub fn workspace() []const u8 {
     return g_workspace;
+}
+
+threadlocal var g_chat_id: []const u8 = "agent";
+
+pub fn setChatId(id: []const u8) void {
+    g_chat_id = id;
 }
 
 fn jsonStr(parsed: std.json.Value, key: []const u8) ?[]const u8 {
@@ -312,6 +319,74 @@ const PARAM_EDIT = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"st
 const PARAM_EXEC = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}";
 const PARAM_SEARCH = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}";
 const PARAM_EMPTY = "{\"type\":\"object\",\"properties\":{}}";
+
+const PARAM_MEM_GET = "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"long, daily, or yesterday\"}},\"required\":[\"which\"]}";
+const PARAM_MEM_SEARCH = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"include_long\":{\"type\":\"boolean\"}},\"required\":[\"query\"]}";
+const PARAM_MEM_APPEND = "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"target\":{\"type\":\"string\",\"description\":\"long (MEMORY.md) or daily\"}},\"required\":[\"text\"]}";
+const PARAM_MEM_EDIT = "{\"type\":\"object\",\"properties\":{\"old_str\":{\"type\":\"string\"},\"new_str\":{\"type\":\"string\"},\"target\":{\"type\":\"string\",\"description\":\"long or daily\"}},\"required\":[\"old_str\",\"new_str\"]}";
+
+/// Memory: Caller owns returned MEMORY.md or daily journal text.
+pub fn memoryGetTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch
+        return allocator.dupe(u8, "error: invalid json");
+    defer parsed.deinit();
+    const which = jsonStr(parsed.value, "which") orelse "long";
+    if (std.mem.eql(u8, which, "long") or std.mem.eql(u8, which, "memory")) {
+        return memory.getLongTerm(allocator, g_workspace) orelse allocator.dupe(u8, "(empty MEMORY.md)");
+    }
+    const off: i64 = if (std.mem.eql(u8, which, "yesterday")) -1 else 0;
+    return memory.getDaily(allocator, g_workspace, off) orelse allocator.dupe(u8, "(no daily journal)");
+}
+
+/// Memory: Caller owns returned search hits.
+pub fn memorySearchTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch
+        return allocator.dupe(u8, "error: invalid json");
+    defer parsed.deinit();
+    const query = jsonStr(parsed.value, "query") orelse return allocator.dupe(u8, "error: missing query");
+    var include_long = true;
+    if (parsed.value == .object) {
+        if (parsed.value.object.get("include_long")) |v| {
+            if (v == .bool) include_long = v.bool;
+        }
+    }
+    return memory.search(allocator, g_workspace, query, include_long);
+}
+
+/// Memory: Caller owns returned status string.
+pub fn memoryAppendTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch
+        return allocator.dupe(u8, "error: invalid json");
+    defer parsed.deinit();
+    const text = jsonStr(parsed.value, "text") orelse return allocator.dupe(u8, "error: missing text");
+    const target = jsonStr(parsed.value, "target") orelse "long";
+    if (std.mem.eql(u8, target, "daily")) {
+        memory.appendDailyNote(allocator, g_workspace, g_chat_id, text);
+        return allocator.dupe(u8, "ok: appended daily note");
+    }
+    memory.appendLongTerm(allocator, g_workspace, text);
+    return allocator.dupe(u8, "ok: appended MEMORY.md");
+}
+
+/// Memory: Caller owns returned status string.
+pub fn memoryEditTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch
+        return allocator.dupe(u8, "error: invalid json");
+    defer parsed.deinit();
+    const old_str = jsonStr(parsed.value, "old_str") orelse return allocator.dupe(u8, "error: missing old_str");
+    const new_str = jsonStr(parsed.value, "new_str") orelse return allocator.dupe(u8, "error: missing new_str");
+    const target = jsonStr(parsed.value, "target") orelse "long";
+    if (std.mem.eql(u8, target, "daily")) {
+        const path = memory.dailyPath(allocator, g_workspace, memory.civilNowIst(), 0) catch
+            return allocator.dupe(u8, "error: daily path");
+        defer allocator.free(path);
+        const rel = try std.fmt.allocPrint(allocator, "memory/{s}", .{std.fs.path.basename(path)});
+        defer allocator.free(rel);
+        return memory.replaceIn(allocator, g_workspace, rel, old_str, new_str);
+    }
+    return memory.replaceIn(allocator, g_workspace, "MEMORY.md", old_str, new_str);
+}
+
 const PARAM_SKILL = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"command\":{\"type\":\"string\"}},\"required\":[\"name\"]}";
 
 pub const SkillHandlerFn = *const fn (std.mem.Allocator, []const u8, []const u8) anyerror![]const u8;
@@ -333,7 +408,7 @@ pub fn skillTool(allocator: Allocator, args: []const u8) ![]const u8 {
 }
 
 pub const ParamHold = struct {
-    parsed: [12]std.json.Parsed(std.json.Value) = undefined,
+    parsed: [16]std.json.Parsed(std.json.Value) = undefined,
     n: usize = 0,
 
     pub fn deinit(self: *ParamHold) void {
@@ -356,6 +431,10 @@ pub fn registerAll(reg: *tools.ToolRegistry, hold: *ParamHold) !void {
         .{ .name = "listen", .desc = "Stay silent this turn; keep recording inbound", .json = PARAM_EMPTY, .h = listenTool },
         .{ .name = "leave", .desc = "Leave this chat until woken with barvis", .json = PARAM_EMPTY, .h = leaveTool },
         .{ .name = "skill", .desc = "Run a named skill command", .json = PARAM_SKILL, .h = skillTool },
+        .{ .name = "memory_get", .desc = "Read MEMORY.md (which=long) or today's/yesterday's daily journal. Optional; not loaded unless you call it.", .json = PARAM_MEM_GET, .h = memoryGetTool },
+        .{ .name = "memory_search", .desc = "Search MEMORY.md and recent daily journals", .json = PARAM_MEM_SEARCH, .h = memorySearchTool },
+        .{ .name = "memory_append", .desc = "Append a note to MEMORY.md (target=long) or today's journal (target=daily)", .json = PARAM_MEM_APPEND, .h = memoryAppendTool },
+        .{ .name = "memory_edit", .desc = "Replace old_str with new_str in MEMORY.md or today's daily file", .json = PARAM_MEM_EDIT, .h = memoryEditTool },
     };
     for (specs) |sp| {
         hold.parsed[hold.n] = try std.json.parseFromSlice(std.json.Value, reg.allocator, sp.json, .{});
@@ -475,12 +554,14 @@ test "core_tools registerAll" {
     defer hold.deinit();
     try std.testing.expect(reg.get("read") != null);
     try std.testing.expect(reg.get("leave") != null);
+    try std.testing.expect(reg.get("memory_get") != null);
+    try std.testing.expect(reg.get("memory_append") != null);
     const defs = try collectDefinitions(&reg, allocator);
     defer {
         for (defs) |*d| d.deinit(allocator);
         allocator.free(defs);
     }
-    try std.testing.expect(defs.len >= 8);
+    try std.testing.expect(defs.len >= 12);
 }
 
 test "core_tools skill missing handler" {
@@ -489,4 +570,22 @@ test "core_tools skill missing handler" {
     const out = try skillTool(allocator, "{\"name\":\"git\"}");
     defer allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "no skill handler") != null);
+}
+
+test "core_tools memory_get and append" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-core-memory-tools";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    setWorkspace(dir);
+    defer setWorkspace(".");
+    setChatId("test-chat");
+    const a = try memoryAppendTool(allocator, "{\"text\":\"likes espresso\",\"target\":\"long\"}");
+    defer allocator.free(a);
+    try std.testing.expect(std.mem.indexOf(u8, a, "appended") != null);
+    const g = try memoryGetTool(allocator, "{\"which\":\"long\"}");
+    defer allocator.free(g);
+    try std.testing.expect(std.mem.indexOf(u8, g, "likes espresso") != null);
+    const s = try memorySearchTool(allocator, "{\"query\":\"espresso\"}");
+    defer allocator.free(s);
+    try std.testing.expect(std.mem.indexOf(u8, s, "espresso") != null);
 }
