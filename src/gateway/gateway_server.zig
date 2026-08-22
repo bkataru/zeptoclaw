@@ -136,7 +136,7 @@ fn daily_memory_context(alloc: std.mem.Allocator, chat_id: []const u8, is_dm: bo
 /// Fallback echo reply when NIM is unavailable.
 /// Memory: Caller owns returned slice; free with `alloc.free()`.
 fn fallback_reply(alloc: std.mem.Allocator, prompt: []const u8, model: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "barvis here — you said: {s} (model {s} unavailable, echo)", .{ prompt, model });
+    return std.fmt.allocPrint(alloc, "barvis here - you said: {s} (model {s} unavailable, echo)", .{ prompt, model });
 }
 
 /// Append a chat turn to workspace memory/YYYY-MM-DD.md (real IST calendar).
@@ -324,6 +324,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         extra.appendSlice(g_whatsapp_alloc, "\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nUse memory_get, memory_search, memory_append, memory_edit when you need long-term or daily notes. They are not preloaded.\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.PRESENCE_INSTRUCTIONS) catch {};
+        extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.LANGUAGE_INSTRUCTIONS) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nYou are in WhatsApp chat `") catch {};
         extra.appendSlice(g_whatsapp_alloc, chat_id_copy) catch {};
         extra.appendSlice(g_whatsapp_alloc, "`. Do not mention or use information from any other chat or group.\n") catch {};
@@ -360,6 +361,9 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         return;
     }
 
+    const signed_text = zeptoclaw.channels.whatsapp.engagement.appendSignature(g_whatsapp_alloc, reply_text) catch reply_text;
+    defer if (signed_text.ptr != reply_text.ptr) g_whatsapp_alloc.free(signed_text);
+
     // Outbound send via OutboundProcessor (chunking/retry/markdown) using channel.sendMessage.
     var send_attempt: u32 = 0;
     const send_result = while (true) : (send_attempt += 1) {
@@ -368,7 +372,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
             zeptoclaw.providers.nim.sleepAfterFailure();
             continue;
         };
-        break ob.sendText(gatewaySendMessage, chat_id_copy, reply_text) catch |err| {
+        break ob.sendText(gatewaySendMessage, chat_id_copy, signed_text) catch |err| {
             std.log.err("[whatsapp] sendText failed: {} attempt {d}; keeping outbound, backing off", .{ err, send_attempt + 1 });
             zeptoclaw.providers.nim.sleepAfterFailure();
             continue;
@@ -379,11 +383,11 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     }
     g_whatsapp_alloc.free(send_result.message_ids);
     std.log.info("[whatsapp] sent message_id=chunked/{d} to {s}", .{ send_result.chunk_count, chat_id_copy });
-    std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, reply_text });
-    journal_append(g_whatsapp_alloc, "out", chat_id_copy, reply_text);
-    if (is_dm) memory.persistDmNote(g_whatsapp_alloc, chat_id_copy, body_copy, reply_text);
-    const rlen = @min(reply_text.len, g_last_reply_buf.len);
-    @memcpy(g_last_reply_buf[0..rlen], reply_text[0..rlen]);
+    std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, signed_text });
+    journal_append(g_whatsapp_alloc, "out", chat_id_copy, signed_text);
+    if (is_dm) memory.persistDmNote(g_whatsapp_alloc, chat_id_copy, body_copy, signed_text);
+    const rlen = @min(signed_text.len, g_last_reply_buf.len);
+    @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);
     g_last_reply_len = rlen;
 }
 

@@ -26,3 +26,9 @@ Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) 
 ## Native port
 
 `src/channels/whatsapp/native/` is a whatsmeow-inspired Zig stub. It compiles; it is not wired as the gateway transport.
+
+## Signature
+
+Outbound text is signed in Zig (`engagement.appendSignature`) with a space and ⚡ (U+26A1). The model is told not to add it. Silent `listen`/`leave` turns send nothing, so they stay unsigned.
+
+Language rules live in `engagement.LANGUAGE_INSTRUCTIONS` (WhatsApp extra context) and `SOUL.md` (workspace system prompt).

@@ -66,9 +66,56 @@ pub const PRESENCE_INSTRUCTIONS =
     \\Prefer listening over talking over people. Do not narrate that you are listening.
 ;
 
+/// Always appended by the gateway. UTF-8 U+26A1.
+pub const SIGNATURE_MARK = "\xe2\x9a\xa1";
+
+pub const LANGUAGE_INSTRUCTIONS =
+    \\Language (WhatsApp): Write like Barvis: sharp, technically specific, dry wit when it fits. Plain sentences.
+    \\- ASCII hyphen (-) not em dash. ASCII quotes.
+    \\- No filler: "it's worth noting", "delve", "landscape", "tapestry", "robust", "serves as", "at its core".
+    \\- No "not X, but Y" pivots. No slogan triads. No corporate warmth.
+    \\- Keep code, paths, JIDs, and numbers exact.
+    \\- Do not add a lightning bolt. The gateway appends ⚡ after your text so the human can tell Barvis from Baala.
+;
+
+fn trimRightAsciiWs(text: []const u8) []const u8 {
+    var end = text.len;
+    while (end > 0) {
+        const c = text[end - 1];
+        if (c == ' ' or c == '\n' or c == '\r' or c == '\t') {
+            end -= 1;
+            continue;
+        }
+        break;
+    }
+    return text[0..end];
+}
+
+pub fn alreadySigned(text: []const u8) bool {
+    const t = trimRightAsciiWs(text);
+    if (t.len < SIGNATURE_MARK.len) return false;
+    return std.mem.endsWith(u8, t, SIGNATURE_MARK);
+}
+
+/// Memory: caller owns returned slice.
+pub fn appendSignature(alloc: std.mem.Allocator, text: []const u8) ![]u8 {
+    if (alreadySigned(text)) return alloc.dupe(u8, text);
+    return std.fmt.allocPrint(alloc, "{s} {s}", .{ text, SIGNATURE_MARK });
+}
+
 test "subscribe until leave" {
     subscribe("chat-a");
     try std.testing.expect(isSubscribed("chat-a"));
     unsubscribe("chat-a");
     try std.testing.expect(!isSubscribed("chat-a"));
+}
+
+test "appendSignature once" {
+    const a = std.testing.allocator;
+    const s = try appendSignature(a, "ping");
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "ping \xe2\x9a\xa1"));
+    const twice = try appendSignature(a, s);
+    defer a.free(twice);
+    try std.testing.expect(std.mem.eql(u8, twice, s));
 }
