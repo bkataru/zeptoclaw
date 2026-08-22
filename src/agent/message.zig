@@ -6,6 +6,7 @@ pub const ToolCall = types.ToolCall;
 pub const MessageRole = types.MessageRole;
 
 /// Parse a message from JSON
+/// Memory: Caller owns returned `Message`; call `msg.deinit(allocator)` to free allocated fields.
 pub fn fromJSON(allocator: std.mem.Allocator, json_str: []const u8) !Message {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
     defer parsed.deinit();
@@ -63,11 +64,13 @@ fn parseToolCall(allocator: std.mem.Allocator, value: std.json.Value) !ToolCall 
 }
 
 /// Extract tool calls from a message
+/// Memory: Returned slice borrows from `message`; caller must not free it.
 pub fn extractToolCalls(message: Message) ?[]ToolCall {
     return message.tool_calls;
 }
 
 /// Create a user message
+/// Memory: Caller owns returned `Message`; call `msg.deinit(allocator)` to free.
 pub fn userMessage(allocator: std.mem.Allocator, content: []const u8) !Message {
     return .{
         .role = .user,
@@ -78,6 +81,7 @@ pub fn userMessage(allocator: std.mem.Allocator, content: []const u8) !Message {
 }
 
 /// Create an assistant message
+/// Memory: Caller owns returned `Message`; call `msg.deinit(allocator)` to free.
 pub fn assistantMessage(allocator: std.mem.Allocator, content: []const u8) !Message {
     return .{
         .role = .assistant,
@@ -88,6 +92,7 @@ pub fn assistantMessage(allocator: std.mem.Allocator, content: []const u8) !Mess
 }
 
 /// Create a tool result message
+/// Memory: Caller owns returned `Message`; call `msg.deinit(allocator)` to free.
 pub fn toolResultMessage(allocator: std.mem.Allocator, tool_call_id: []const u8, content: []const u8) !Message {
     return .{
         .role = .tool,

@@ -12,6 +12,8 @@ pub const SelectionStrategy = enum {
 };
 
 /// Fallback router for intelligent model selection
+/// Fallback router for intelligent model selection (owns duped primary/fallback strings).
+/// Memory: Owns `primary_model` and `fallback_models` (and their contents); call `deinit()` to free. `pool` and `health_tracker` are borrowed.
 pub const FallbackRouter = struct {
     allocator: std.mem.Allocator,
     pool: *provider_pool.ModelPool,
@@ -21,6 +23,7 @@ pub const FallbackRouter = struct {
     primary_model: []const u8,
     fallback_models: [][]const u8,
 
+    /// Memory: Caller owns returned FallbackRouter; call `deinit()` to free duped `primary_model`/`fallback_models`. Dupes slices; caller retains ownership of input slices. Pool/tracker are borrowed.
     pub fn init(
         allocator: std.mem.Allocator,
         pool: *provider_pool.ModelPool,
@@ -51,6 +54,7 @@ pub const FallbackRouter = struct {
     }
 
     /// Select the best model for a request
+    /// Memory: Returns borrowed `*ModelMetadata` from pool (stable until pool mutation); caller does not own.
     pub fn selectModel(self: *FallbackRouter) !*provider_pool.ModelMetadata {
         const models = try self.pool.getTextModels();
         defer self.allocator.free(models);
@@ -246,6 +250,7 @@ pub const FallbackRouter = struct {
     }
 
     /// Deinitialize the router
+    /// Memory: Frees owned `primary_model` string and `fallback_models` strings/slice; does not free borrowed `pool`/`health_tracker`.
     pub fn deinit(self: *FallbackRouter) void {
         self.allocator.free(self.primary_model);
         for (self.fallback_models) |model| {

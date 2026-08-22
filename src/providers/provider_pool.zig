@@ -36,6 +36,8 @@ pub const ApiType = enum {
 };
 
 /// Model metadata
+/// Model metadata (owned strings).
+/// Memory: Owns `id`, `name`, `provider`, `base_url`, `description`; call `deinit(allocator)` to free. Other fields are values.
 pub const ModelMetadata = struct {
     id: []const u8,
     name: []const u8,
@@ -52,6 +54,7 @@ pub const ModelMetadata = struct {
     supports_vision: bool,
     description: []const u8,
 
+    /// Memory: Frees owned `id`, `name`, `provider`, `base_url`, `description`.
     pub fn deinit(self: *ModelMetadata, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.name);
@@ -62,12 +65,15 @@ pub const ModelMetadata = struct {
 };
 
 /// Model pool containing all available models
+/// Pool of available models (owns metadata strings and map).
+/// Memory: Owns duped strings in `models` and `model_map` keys; call `deinit()` to free. Getters returning slices allocate caller-owned slices of borrowed pointers.
 pub const ModelPool = struct {
     allocator: std.mem.Allocator,
     models: []ModelMetadata,
     model_map: std.StringHashMap(usize), // Maps model ID to index in models array
 
     /// Initialize the model pool with single model: thinkingmachines/inkling
+    /// Memory: Caller owns returned ModelPool; call `deinit()` to free owned models and map. Allocates for initial models.
     pub fn init(allocator: std.mem.Allocator) !ModelPool {
         var pool = ModelPool{
             .allocator = allocator,
@@ -151,6 +157,7 @@ pub const ModelPool = struct {
     }
 
     /// Get all models sorted by priority
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` sorted by priority; free with `allocator.free()`. Elements are borrowed from pool.
     pub fn getModelsByPriority(self: *ModelPool) ![]*ModelMetadata {
         const sorted = try self.allocator.alloc(*ModelMetadata, self.models.len);
         for (self.models, 0..) |*model, i| {
@@ -168,6 +175,7 @@ pub const ModelPool = struct {
     }
 
     /// Get models by priority tier
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` filtered by tier; free with `allocator.free()`. Elements are borrowed.
     pub fn getModelsByTier(self: *ModelPool, tier: PriorityTier) ![]*ModelMetadata {
         var count: usize = 0;
         for (self.models) |*model| {
@@ -187,6 +195,7 @@ pub const ModelPool = struct {
     }
 
     /// Get all text models (excluding image models)
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` filtered to non-vision; free with `allocator.free()`. Elements are borrowed.
     pub fn getTextModels(self: *ModelPool) ![]*ModelMetadata {
         var count: usize = 0;
         for (self.models) |*model| {
@@ -206,6 +215,7 @@ pub const ModelPool = struct {
     }
 
     /// Get all image models
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` filtered to vision; free with `allocator.free()`. Elements are borrowed.
     pub fn getImageModels(self: *ModelPool) ![]*ModelMetadata {
         var count: usize = 0;
         for (self.models) |*model| {
@@ -225,6 +235,7 @@ pub const ModelPool = struct {
     }
 
     /// Deinitialize the model pool
+    /// Memory: Frees all owned `ModelMetadata` strings, `models` array, and `model_map`.
     pub fn deinit(self: *ModelPool) void {
         for (self.models) |*model| {
             model.deinit(self.allocator);

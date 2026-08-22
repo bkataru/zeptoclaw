@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 
 /// Load WhatsApp configuration from ZeptoClaw config
+/// Memory: Caller owns returned WhatsAppConfig; must call deinit(). Strings are duped from zepto_config.
 pub fn loadFromZeptoConfig(allocator: std.mem.Allocator, zepto_config: anytype) !types.WhatsAppConfig {
     // Parse DM policy
     const dm_policy = if (std.mem.eql(u8, zepto_config.whatsapp_dm_policy, "allowlist"))
@@ -28,13 +29,13 @@ pub fn loadFromZeptoConfig(allocator: std.mem.Allocator, zepto_config: anytype) 
     // Duplicate allow_from list
     var allow_from = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     for (zepto_config.whatsapp_allow_from) |item| {
-        try allow_from.append(try allocator.dupe(u8, item));
+        try allow_from.append(allocator, try allocator.dupe(u8, item));
     }
 
     // Duplicate group_activation_commands list
     var group_activation_commands = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     for (zepto_config.whatsapp_group_activation_commands) |item| {
-        try group_activation_commands.append(try allocator.dupe(u8, item));
+        try group_activation_commands.append(allocator, try allocator.dupe(u8, item));
     }
 
     return types.WhatsAppConfig{

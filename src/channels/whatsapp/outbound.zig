@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const compat = @import("../../compat.zig");
 
 const Allocator = std.mem.Allocator;
 const WhatsAppConfig = types.WhatsAppConfig;
@@ -16,6 +17,7 @@ pub const OutboundProcessor = struct {
     max_retries: u32 = 3,
     retry_delay_ms: u32 = 1000,
 
+    /// Memory: Caller owns returned processor; holds no heap besides borrowed config. Destroy with allocator.destroy if heap-boxed.
     pub fn init(allocator: Allocator, config: WhatsAppConfig) OutboundProcessor {
         return .{
             .allocator = allocator,
@@ -23,7 +25,9 @@ pub const OutboundProcessor = struct {
         };
     }
 
+/// Memory: Caller owns returned SendResult.message_ids slice and each id string; must free each id with allocator.free and then free the slice with allocator.free.
     /// Send a text message with chunking and retry logic
+    /// Memory: Caller owns SendResult.message_ids slices (each id and the array); free both.
     pub fn sendText(
         self: *OutboundProcessor,
         send_fn: *const fn ([]const u8, []const u8) anyerror![]const u8,
@@ -35,35 +39,36 @@ pub const OutboundProcessor = struct {
         defer self.allocator.free(converted);
 
         // Chunk if necessary
-        const chunks = try self.chunkText(converted);
+        var chunks = try self.chunkText(converted);
         defer {
             for (chunks.items) |chunk| {
                 self.allocator.free(chunk);
             }
-            chunks.deinit();
+            chunks.deinit(self.allocator);
         }
 
         var message_ids = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
-        defer {
+        errdefer {
             for (message_ids.items) |id| {
                 self.allocator.free(id);
             }
-            message_ids.deinit();
+            message_ids.deinit(self.allocator);
         }
 
-        // Send each chunk
+        // Send each chunk; duped ids are owned by the returned result slice.
         for (chunks.items) |chunk| {
             const message_id = try self.sendWithRetry(send_fn, to, chunk);
-            try message_ids.append(try self.allocator.dupe(u8, message_id));
+            try message_ids.append(self.allocator, try self.allocator.dupe(u8, message_id));
         }
 
         return SendResult{
             .success = true,
-            .message_ids = message_ids.items,
+            .message_ids = try message_ids.toOwnedSlice(self.allocator),
             .chunk_count = chunks.items.len,
         };
     }
 
+/// Memory: Caller owns returned SendResult.message_ids (single id dupe); must free as above.
     /// Send a media message
     pub fn sendMedia(
         self: *OutboundProcessor,
@@ -110,6 +115,7 @@ pub const OutboundProcessor = struct {
         try send_fn(chat_jid, message_id, emoji);
     }
 
+/// Memory: Caller owns returned SendResult.message_ids; must free with allocator.free.
     /// Send a poll
     pub fn sendPoll(
         self: *OutboundProcessor,
@@ -126,12 +132,13 @@ pub const OutboundProcessor = struct {
         };
     }
 
+/// Memory: Caller owns returned ArrayList and each chunk string inside; must free each chunk and deinit list with allocator.
     /// Chunk text into smaller pieces
     fn chunkText(self: *OutboundProcessor, text: []const u8) !std.ArrayList([]const u8) {
         var chunks = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
 
         if (text.len <= self.text_chunk_limit) {
-            try chunks.append(try self.allocator.dupe(u8, text));
+            try chunks.append(self.allocator, try self.allocator.dupe(u8, text));
             return chunks;
         }
 
@@ -156,37 +163,38 @@ pub const OutboundProcessor = struct {
                 }
             }
 
-            try chunks.append(try self.allocator.dupe(u8, text[start..end]));
+            try chunks.append(self.allocator, try self.allocator.dupe(u8, text[start..end]));
             start = end;
         }
 
         return chunks;
     }
 
+/// Memory: Caller owns returned slice; must free with allocator.free.
     /// Convert markdown tables to WhatsApp-compatible format
     fn convertMarkdownTables(self: *OutboundProcessor, text: []const u8) ![]const u8 {
         // Simple table conversion: replace | with spaces
         var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        errdefer result.deinit();
+        errdefer result.deinit(self.allocator);
 
         var i: usize = 0;
         while (i < text.len) {
             if (text[i] == '|') {
-                try result.append(' ');
+                try result.append(self.allocator, ' ');
             } else if (text[i] == '\n' and i + 1 < text.len and text[i + 1] == '|') {
                 // Table row separator
-                try result.append('\n');
+                try result.append(self.allocator, '\n');
                 i += 1;
                 while (i < text.len and text[i] != '\n') {
                     if (text[i] == '-' or text[i] == '|') {
-                        try result.append(' ');
+                        try result.append(self.allocator, ' ');
                     } else {
-                        try result.append(text[i]);
+                        try result.append(self.allocator, text[i]);
                     }
                     i += 1;
                 }
             } else {
-                try result.append(text[i]);
+                try result.append(self.allocator, text[i]);
             }
             i += 1;
         }
@@ -194,6 +202,7 @@ pub const OutboundProcessor = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
+/// Memory: Caller owns returned slice (messageId) from underlying send_fn; callee does not dupe - caller of sendWithRetry receives borrowed result from send_fn (but sendText dupes it).
     /// Send with retry logic
     fn sendWithRetry(
         self: *OutboundProcessor,
@@ -214,7 +223,7 @@ pub const OutboundProcessor = struct {
 
                 // Wait before retry
                 if (retry_count < self.max_retries) {
-                    std.time.sleep(self.retry_delay_ms * std.time.ns_per_ms);
+                    std.Io.sleep(compat.getIo(), .fromMilliseconds(self.retry_delay_ms), .awake) catch {};
                 }
 
                 continue;
@@ -264,10 +273,11 @@ pub const MarkdownTableConverter = struct {
         return .{ .allocator = allocator };
     }
 
+/// Memory: Caller owns returned slice; must free with allocator.free.
     /// Convert markdown table to plain text
     pub fn convert(self: *MarkdownTableConverter, markdown: []const u8) ![]const u8 {
         var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        errdefer result.deinit();
+        errdefer result.deinit(self.allocator);
 
         var lines = std.mem.splitScalar(u8, markdown, '\n');
 
@@ -280,7 +290,7 @@ pub const MarkdownTableConverter = struct {
             // Convert table row
             const converted = try self.convertTableRow(line);
             try result.appendSlice(converted);
-            try result.append('\n');
+            try result.append(self.allocator, '\n');
         }
 
         return result.toOwnedSlice(self.allocator);
@@ -304,7 +314,7 @@ pub const MarkdownTableConverter = struct {
     /// Convert a table row
     fn convertTableRow(self: *MarkdownTableConverter, line: []const u8) ![]const u8 {
         var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        errdefer result.deinit();
+        errdefer result.deinit(self.allocator);
 
         var cells = std.mem.splitScalar(u8, line, '|');
 
@@ -312,7 +322,7 @@ pub const MarkdownTableConverter = struct {
             const trimmed = std.mem.trim(u8, cell, " \t");
             if (trimmed.len > 0) {
                 if (result.items.len > 0) {
-                    try result.append(' ');
+                    try result.append(self.allocator, ' ');
                 }
                 try result.appendSlice(trimmed);
             }

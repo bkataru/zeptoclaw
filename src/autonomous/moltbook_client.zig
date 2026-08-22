@@ -2,6 +2,7 @@ const std = @import("std");
 const compat = @import("../compat.zig");
 const types = @import("types.zig");
 
+/// Memory: `MoltbookClient` owns `monitored_posts` strings and `client`; caller must call `deinit()` to free.
 /// Moltbook API client
 pub const MoltbookClient = struct {
     allocator: std.mem.Allocator,
@@ -14,6 +15,7 @@ pub const MoltbookClient = struct {
 
     const DEFAULT_BASE_URL = "https://www.moltbook.com/api/v1";
 
+    /// Memory: Caller owns returned `MoltbookClient`; call `deinit()` to free. Callee copies `monitored_posts` strings (duped), borrows `api_key`/`agent_id`.
     pub fn init(
         allocator: std.mem.Allocator,
         api_key: []const u8,
@@ -45,6 +47,7 @@ pub const MoltbookClient = struct {
         self.client.deinit();
     }
 
+    /// Memory: Caller owns returned slice and each `MoltbookPost`; free with `for (posts) |*p| p.deinit(allocator); allocator.free(posts);`.
     /// Fetch feed posts
     pub fn fetchFeed(
         self: *MoltbookClient,
@@ -120,6 +123,7 @@ const url = try std.fmt.bufPrint(&url_buf, "{s}/search?q={s}&limit={d}", .{ self
         return parsed.value.posts;
     }
 
+    /// Memory: Caller owns returned `MoltbookPost`; call `post.deinit(allocator)` to free.
     /// Get a specific post
     pub fn getPost(self: *MoltbookClient, post_id: []const u8) !types.MoltbookPost {
         var url_buf: [256]u8 = undefined;
@@ -154,6 +158,7 @@ const url = try std.fmt.bufPrint(&url_buf, "{s}/search?q={s}&limit={d}", .{ self
         return parsed.value.post;
     }
 
+    /// Memory: Caller owns returned slice and each `MoltbookComment`; free with `for (comments) |*c| c.deinit(allocator); allocator.free(comments);`.
     /// Get comments for a post
     pub fn getComments(
         self: *MoltbookClient,
@@ -193,6 +198,7 @@ const url = try std.fmt.bufPrint(&url_buf, "{s}/search?q={s}&limit={d}", .{ self
         return parsed.value.comments;
     }
 
+    /// Memory: Caller owns returned slice (post ID); call `allocator.free()` to free.
     /// Create a post
     pub fn createPost(
         self: *MoltbookClient,
@@ -332,17 +338,20 @@ try std.fmt.allocPrint(self.allocator, "{{\"content\":\"{s}\",\"parent_id\":null
         return response.status_code == 200 or response.status_code == 201;
     }
 
+    /// Memory: Returned slice borrows from `self`; caller must not free it.
     /// Get monitored posts
     pub fn getMonitoredPosts(self: *const MoltbookClient) []const []const u8 {
         return self.monitored_posts.items;
     }
 
+    /// Memory: Callee copies `post_id` (duped); caller retains ownership of input.
     /// Add a monitored post
     pub fn addMonitoredPost(self: *MoltbookClient, post_id: []const u8) !void {
         const post_id_copy = try self.allocator.dupe(u8, post_id);
         try self.monitored_posts.append(self.allocator, post_id_copy);
     }
 
+    /// Memory: Caller owns returned `HttpResponse`; call `response.deinit(allocator)` to free.
     /// Make an HTTP request to Moltbook API
     fn makeRequest(
         self: *MoltbookClient,

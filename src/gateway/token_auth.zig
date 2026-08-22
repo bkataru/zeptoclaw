@@ -147,7 +147,8 @@ pub const TokenAuth = struct {
     }
 
     /// Generate a random 40-character hex token
-    fn generateToken(self: *TokenAuth) ![]const u8 {
+    /// Memory: Caller owns returned token slice; must free with the TokenAuth allocator.
+fn generateToken(self: *TokenAuth) ![]const u8 {
         var rng = std.rand.DefaultPrng.init(@as(u64, compat.timestamp()));
         const random = rng.random();
         var token: [40]u8 = undefined;

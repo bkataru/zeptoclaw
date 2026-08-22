@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Memory: Caller owns returned slice; call `allocator.free()` to free.
 pub fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     if (comptime @hasDecl(std.process, "getEnvVarOwned")) {
         return try std.process.getEnvVarOwned(allocator, key);
@@ -31,6 +32,7 @@ pub fn getSelfExeDir(allocator: std.mem.Allocator) ![]u8 {
     return try allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse ".");
 }
 
+/// Memory: Caller owns returned slice; call `freeArgs(allocator, args)` to free.
 pub fn getArgsAlloc(allocator: std.mem.Allocator) ![][:0]const u8 {
     if (comptime @hasDecl(std.process, "argsAlloc")) {
         return try std.process.argsAlloc(allocator);
@@ -38,6 +40,7 @@ pub fn getArgsAlloc(allocator: std.mem.Allocator) ![][:0]const u8 {
     return try allocator.alloc([:0]const u8, 0);
 }
 
+/// Memory: Callee takes ownership of `args` and frees it.
 pub fn freeArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     if (comptime @hasDecl(std.process, "argsFree")) {
         std.process.argsFree(allocator, args);

@@ -27,6 +27,7 @@ pub const ToolRegistry = struct {
         };
     }
 
+    /// Memory: Frees all owned tool entries; `self` must not be used after.
     pub fn deinit(self: *ToolRegistry) void {
         var it = self.tools.iterator();
         while (it.next()) |entry| {
@@ -35,6 +36,7 @@ pub const ToolRegistry = struct {
         self.tools.deinit();
     }
 
+    /// Memory: Callee takes ownership of `tool.name` and `tool.description` (must be allocated with registry allocator).
     pub fn register(self: *ToolRegistry, tool: Tool) !void {
         try self.tools.put(tool.name, tool);
     }
@@ -43,6 +45,7 @@ pub const ToolRegistry = struct {
         return self.tools.getPtr(name);
     }
 
+    /// Memory: Caller owns returned slice; call `allocator.free()` to free.
     pub fn execute(self: *ToolRegistry, name: []const u8, args: []const u8) ![]const u8 {
         const tool = self.get(name) orelse return error.ToolNotFound;
         return tool.handler(self.allocator, args);
@@ -50,6 +53,7 @@ pub const ToolRegistry = struct {
 };
 
 // Echo tool
+/// Memory: Caller owns returned slice; call `allocator.free()` to free.
 pub fn echoTool(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, args, .{});
     defer parsed.deinit();
@@ -62,7 +66,8 @@ pub fn echoTool(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
     return try allocator.dupe(u8, "");
 }
 
-// Current time tool  
+// Current time tool
+/// Memory: Caller owns returned slice; call `allocator.free()` to free.
 pub fn currentTimeTool(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
     _ = args;
     const now = compat.timestamp();

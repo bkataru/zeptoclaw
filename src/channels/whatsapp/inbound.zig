@@ -36,6 +36,7 @@ pub const InboundProcessor = struct {
         self.seen_messages.deinit();
     }
 
+/// Memory: Callee borrows `msg` (does not take ownership); returned ProcessResult.message is borrowed from WhatsAppSession.stable_messages (session-owned); pairing_code if set is owned by session and borrowed. Caller must NOT free.
     /// Process an inbound message
     pub fn process(self: *InboundProcessor, msg: WhatsAppMessage) !ProcessResult {
         // Check for duplicates
@@ -57,12 +58,12 @@ pub const InboundProcessor = struct {
 
     /// Check if message is a duplicate
     fn isDuplicate(self: *InboundProcessor, msg: *const WhatsAppMessage) bool {
-        const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ msg.chat_id, msg.id });
+        const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ msg.chat_id, msg.id }) catch return false;
         defer self.allocator.free(key);
 
         if (self.seen_messages.get(key)) |timestamp| {
             const now = compat.timestamp();
-            const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - timestamp) orelse return false) * 1000;
             return elapsed_ms < self.dedupe_ttl_ms;
         }
 
@@ -101,6 +102,7 @@ pub const InboundProcessor = struct {
         }
     }
 
+/// Memory: Returns borrowed slice from msg.body; do NOT free.
     /// Extract text from message
     pub fn extractText(msg: *const WhatsAppMessage) []const u8 {
         return msg.body;
@@ -134,6 +136,7 @@ pub const InboundProcessor = struct {
         return jid;
     }
 
+/// Memory: Caller owns returned slice; must free with allocator.free.
     /// Format message for agent
     pub fn formatForAgent(msg: *const WhatsAppMessage, allocator: Allocator) ![]const u8 {
         var buffer = try std.ArrayList(u8).initCapacity(allocator, 0);
@@ -199,7 +202,7 @@ pub const MessageDeduper = struct {
     pub fn isDuplicate(self: *MessageDeduper, key: []const u8) bool {
         if (self.cache.get(key)) |timestamp| {
             const now = compat.timestamp();
-            const elapsed_ms = (std.math.cast(u64, now - timestamp) catch return false) * 1000;
+            const elapsed_ms = (std.math.cast(u64, now - timestamp) orelse return false) * 1000;
             return elapsed_ms < self.ttl_ms;
         }
         return false;

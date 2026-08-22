@@ -61,6 +61,8 @@ pub const HealthStatus = enum {
 };
 
 /// Model health statistics
+/// Model health stats (owns model_id).
+/// Memory: Owns `model_id` string duped on creation; free via HealthTracker deinit/clear/reset.
 pub const ModelHealth = struct {
     model_id: []const u8,
     success_count: u64 = 0,
@@ -74,6 +76,7 @@ pub const ModelHealth = struct {
     health_score: f32 = 1.0, // 0.0 to 1.0
     average_latency_ms: f64 = 0.0,
 
+    /// Memory: Does not allocate; initializes inline health with borrowed slice until tracked (tracker dupes).
     pub fn init(model_id: []const u8) ModelHealth {
         return .{
             .model_id = model_id,
@@ -149,11 +152,14 @@ pub const ModelHealth = struct {
 };
 
 /// Health tracker for monitoring model health
+/// Tracks health per model (owns duped model_id keys in map).
+/// Memory: Owns duped `model_id` strings and `health_map` entries; call `deinit()` to free. `getAvailableModels`/`getModelsByHealth` return caller-owned slices.
 pub const HealthTracker = struct {
     allocator: std.mem.Allocator,
     health_map: std.StringHashMap(ModelHealth),
     cooldown_duration: CooldownDuration,
 
+    /// Memory: Initializes empty map; no allocation until first record. Caller owns returned tracker; call `deinit()` to free.
     pub fn init(allocator: std.mem.Allocator) HealthTracker {
         return .{
             .allocator = allocator,
@@ -163,6 +169,7 @@ pub const HealthTracker = struct {
     }
 
     /// Get or create health entry for a model
+    /// Memory: Caller retains ownership of `model_id` slice; tracker dupes it if new. Returns borrowed pointer stable until map mutation; do not free.
     pub fn getOrCreateHealth(self: *HealthTracker, model_id: []const u8) !*ModelHealth {
         const entry = try self.health_map.getOrPut(model_id);
         if (!entry.found_existing) {
@@ -173,6 +180,7 @@ pub const HealthTracker = struct {
     }
 
     /// Record a successful request
+    /// Memory: Takes ownership of duped `model_id` on first success; caller retains `model_id` slice.
     pub fn recordSuccess(self: *HealthTracker, model_id: []const u8, latency_ms: f64) !void {
         const current_time = compat.timestamp();
         const health = try self.getOrCreateHealth(model_id);
@@ -180,6 +188,7 @@ pub const HealthTracker = struct {
     }
 
     /// Record a failed request
+    /// Memory: Takes ownership of duped `model_id` on first failure; caller retains `model_id` slice.
     pub fn recordFailure(self: *HealthTracker, model_id: []const u8, error_type: ModelError) !void {
         const current_time = compat.timestamp();
         const health = try self.getOrCreateHealth(model_id);
@@ -207,6 +216,7 @@ pub const HealthTracker = struct {
     }
 
     /// Get all available models (not in cooldown and healthy)
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` pointers; free with `allocator.free()`. Elements are borrowed from caller-provided `models` slice.
     pub fn getAvailableModels(self: *HealthTracker, models: []const *provider_pool.ModelMetadata) ![]*provider_pool.ModelMetadata {
         var available = try std.ArrayList(*provider_pool.ModelMetadata).initCapacity(self.allocator, 0);
 
@@ -220,6 +230,7 @@ pub const HealthTracker = struct {
     }
 
     /// Get models sorted by health score (best first)
+    /// Memory: Caller owns returned slice of borrowed `*ModelMetadata` pointers sorted by health; free with `allocator.free()`. Elements are borrowed.
     pub fn getModelsByHealth(self: *HealthTracker, models: []const *provider_pool.ModelMetadata) ![]*provider_pool.ModelMetadata {
         const sorted = try self.allocator.alloc(*provider_pool.ModelMetadata, models.len);
         for (models, 0..) |model, i| {
@@ -243,6 +254,7 @@ pub const HealthTracker = struct {
     }
 
     /// Reset health for a model (useful for testing or manual intervention)
+    /// Memory: Frees owned `model_id` string for that entry and removes it; does not affect other entries.
     pub fn resetHealth(self: *HealthTracker, model_id: []const u8) !void {
         if (self.health_map.getEntry(model_id)) |entry| {
             self.allocator.free(entry.value_ptr.model_id);
@@ -251,6 +263,7 @@ pub const HealthTracker = struct {
     }
 
     /// Clear all health data
+    /// Memory: Frees all owned `model_id` strings but retains map capacity.
     pub fn clear(self: *HealthTracker) void {
         var iter = self.health_map.iterator();
         while (iter.next()) |entry| {
@@ -260,6 +273,7 @@ pub const HealthTracker = struct {
     }
 
     /// Deinitialize the health tracker
+    /// Memory: Frees all owned `model_id` strings and deinitializes map.
     pub fn deinit(self: *HealthTracker) void {
         var iter = self.health_map.iterator();
         while (iter.next()) |entry| {

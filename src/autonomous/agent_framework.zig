@@ -6,6 +6,7 @@ const moltbook_client = @import("moltbook_client.zig");
 const rate_limiter = @import("rate_limiter.zig");
 
 const log = std.log.scoped(.autonomous);
+/// Memory: `AutonomousAgent` borrows `state_store`/`moltbook_client` pointers; `allocator` is borrowed. No deallocation of store/client on deinit.
 /// Autonomous agent framework
 pub const AutonomousAgent = struct {
     allocator: std.mem.Allocator,
@@ -497,6 +498,7 @@ pub const AutonomousAgent = struct {
         return unreplied.len > 0;
     }
 
+    /// Memory: Caller owns returned slice; call `allocator.free()` to free (items are borrowed from input).
     /// Find unreplied comments
     fn findUnrepliedComments(self: *AutonomousAgent, comments: []types.MoltbookComment) ![]types.MoltbookComment {
         var state = &self.state_store.state;
@@ -520,6 +522,7 @@ pub const AutonomousAgent = struct {
         return try unreplied.toOwnedSlice(self.moltbook_client.allocator);
     }
 
+    /// Memory: Caller owns returned slice; call `allocator.free()` to free.
     /// Generate a reply to a comment
     fn generateReply(self: *AutonomousAgent) ![]const u8 {
         // TODO: Implement LLM-based reply generation
@@ -527,6 +530,7 @@ pub const AutonomousAgent = struct {
         return try self.allocator.dupe(u8, "Thanks for your comment!");
     }
 
+    /// Memory: Caller owns returned `PostEvaluation`; call `evaluation.deinit(allocator)` to free.
     /// Evaluate a post
     fn evaluatePost(self: *AutonomousAgent) !types.PostEvaluation {
         // TODO: Implement LLM-based post evaluation
@@ -540,6 +544,7 @@ pub const AutonomousAgent = struct {
     }
 
     /// Generate a comment for a post
+    /// Memory: Caller owns returned slice; call `allocator.free()` to free.
     fn generateComment(self: *AutonomousAgent) ![]const u8 {
         // TODO: Implement LLM-based comment generation
         // For now, return a simple comment
@@ -547,6 +552,7 @@ pub const AutonomousAgent = struct {
     }
 
     /// Generate a post
+    /// Memory: Caller owns returned slice; call `allocator.free()` to free.
     fn generatePost(self: *AutonomousAgent, idea: ?[]const u8) ![]const u8 {
         // TODO: Implement LLM-based post generation
         // For now, return a simple post

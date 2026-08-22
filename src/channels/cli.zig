@@ -34,7 +34,7 @@ pub fn runInteractiveSession(agent: anytype) !void {
         // Handle commands
         // Handle built-in commands (starts with /)
         if (trimmed[0] == '/') {
-            if (std.mem.eql(u8, trimmed, "/help") or std.mem.eql(u8, trimmed, "/exit") or std.mem.eql(u8, trimmed, "/quit") or std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/session")) {
+            if (std.mem.eql(u8, trimmed, "/help") or std.mem.eql(u8, trimmed, "/exit") or std.mem.eql(u8, trimmed, "/quit") or std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/session") or std.mem.eql(u8, trimmed, "/new") or std.mem.eql(u8, trimmed, "/reset")) {
                 const should_continue = try handleCommand(agent, trimmed, stdout_file);
                 if (!should_continue) return;
                 continue;
@@ -66,6 +66,8 @@ fn handleCommand(agent: anytype, cmd: []const u8, writer: std.Io.File) !bool {
         try writer.writeStreamingAll(compat.getIo(), "  /exit - Exit the program\n");
         try writer.writeStreamingAll(compat.getIo(), "  /clear - Clear conversation history\n");
         try writer.writeStreamingAll(compat.getIo(), "  /session - Show session stats\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /new - Start a fresh session\n");
+        try writer.writeStreamingAll(compat.getIo(), "  /reset - Alias for /new\n");
         try writer.writeStreamingAll(compat.getIo(), "\n");
         return true;
     }
@@ -75,8 +77,7 @@ fn handleCommand(agent: anytype, cmd: []const u8, writer: std.Io.File) !bool {
         return false;
     }
 
-    if (std.mem.eql(u8, cmd, "/clear")) {
-        // Clear the agent's session
+    if (std.mem.eql(u8, cmd, "/clear") or std.mem.eql(u8, cmd, "/new") or std.mem.eql(u8, cmd, "/reset")) {
         agent.session.clear();
         try writer.writeStreamingAll(compat.getIo(), "Conversation cleared.\n\n");
         return true;

@@ -3,6 +3,7 @@ const compat = @import("../compat.zig");
 const types = @import("types.zig");
 const log = std.log.scoped(.state_store);
 
+/// Memory: `BarvisState` owns all strings in its array lists; caller must call `deinit()` to free.
 /// Barvis state - persistent state for the autonomous agent
 pub const BarvisState = struct {
     // Timestamps
@@ -38,6 +39,7 @@ pub const BarvisState = struct {
     last_action: ?types.AutonomousAction = null,
     allocator: std.mem.Allocator,
 
+    /// Memory: Caller owns returned `BarvisState`; call `deinit()` to free.
     pub fn init(allocator: std.mem.Allocator) BarvisState {
         return .{
             .allocator = allocator,
@@ -77,10 +79,12 @@ pub const BarvisState = struct {
         self.gateway_incidents.deinit(self.allocator);
     }
 
+    /// Memory: Callee copies `idea` (duped); caller retains ownership of input.
     pub fn addPostIdea(self: *BarvisState, idea: []const u8) !void {
         try self.post_ideas.append(self.allocator, try self.allocator.dupe(u8, idea));
     }
 
+    /// Memory: Caller owns returned slice (transferred from `post_ideas` list); call `allocator.free()` to free. Returns `null` if empty.
     pub fn popPostIdea(self: *BarvisState) ?[]const u8 {
         if (self.post_ideas.items.len == 0) return null;
         return self.post_ideas.pop();
@@ -104,6 +108,7 @@ pub const BarvisState = struct {
         return false;
     }
 
+    /// Memory: Callee copies `post_id` (duped); caller retains ownership.
     pub fn markPostUpvoted(self: *BarvisState, post_id: []const u8) !void {
         try self.upvoted_posts.append(self.allocator, try self.allocator.dupe(u8, post_id));
     }
@@ -115,10 +120,12 @@ pub const BarvisState = struct {
         return false;
     }
 
+    /// Memory: Callee copies `comment_id` (duped); caller retains ownership.
     pub fn markCommentReplied(self: *BarvisState, comment_id: []const u8) !void {
         try self.replied_comments.append(self.allocator, try self.allocator.dupe(u8, comment_id));
     }
 
+    /// Memory: Callee copies `post_id` (duped); caller retains ownership.
     pub fn markPostSeen(self: *BarvisState, post_id: []const u8) !void {
         try self.seen_posts.append(self.allocator, try self.allocator.dupe(u8, post_id));
     }
@@ -130,6 +137,7 @@ pub const BarvisState = struct {
         return false;
     }
 
+    /// Memory: Callee copies `post_id` (duped); caller retains ownership.
     pub fn markPostCommented(self: *BarvisState, post_id: []const u8) !void {
         try self.commented_posts.append(self.allocator, try self.allocator.dupe(u8, post_id));
     }
@@ -140,10 +148,12 @@ pub const BarvisState = struct {
         return false;
     }
 
+    /// Memory: Callee copies `username` (duped); caller retains ownership.
     pub fn trackInterestingMolty(self: *BarvisState, username: []const u8) !void {
         try self.interesting_moltys.append(self.allocator, try self.allocator.dupe(u8, username));
     }
 
+    /// Memory: Callee takes ownership of `discovery` (its allocated fields).
     pub fn addDiscovery(self: *BarvisState, discovery: types.Discovery) !void {
         try self.discoveries.append(self.allocator, discovery);
     }
@@ -155,7 +165,8 @@ pub const StateStore = struct {
     state: BarvisState,
     file_path: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, workspace: ?[]const u8) !StateStore {
+    /// Memory: Caller owns returned StateStore; must call deinit(). workspace path is duped if non-null.
+pub fn init(allocator: std.mem.Allocator, workspace: ?[]const u8) !StateStore {
         const path = workspace orelse ".";
         const file_path = try std.fmt.allocPrint(allocator, "{s}/.zeptoclaw_state.json", .{path});
         return StateStore{
@@ -165,7 +176,8 @@ pub const StateStore = struct {
         };
     }
 
-    pub fn deinit(self: *StateStore) void {
+    /// Memory: Callee takes responsibility for persisted state buffers and path strings.
+pub fn deinit(self: *StateStore) void {
         self.allocator.free(self.file_path);
         self.state.deinit();
     }
@@ -280,6 +292,7 @@ pub const StateStore = struct {
         try self.save();
     }
 
+    /// Memory: Callee copies `idea` via `BarvisState.addPostIdea` (duped); caller retains ownership.
     pub fn addPostIdea(self: *StateStore, idea: []const u8) !void {
         try self.state.addPostIdea(idea);
     }
