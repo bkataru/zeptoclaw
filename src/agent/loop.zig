@@ -106,7 +106,6 @@ pub const Agent = struct {
 
     pub fn setWorkspace(self: *Agent, path: []const u8) void {
         if (self.owns_workspace) self.allocator.free(self.workspace);
-        if (self.owns_transcript_dir) self.allocator.free(self.transcripts.dir);
         self.workspace = path;
         self.owns_workspace = false;
     }
@@ -123,8 +122,14 @@ pub const Agent = struct {
         self.skill_metadata.deinit(self.allocator);
         self.exec_tools.deinit();
         git_workflow.skill.deinit(self.allocator);
-        if (self.owns_workspace) self.allocator.free(self.workspace);
-        if (self.owns_transcript_dir) self.allocator.free(self.transcripts.dir);
+        if (self.owns_workspace) {
+            self.allocator.free(self.workspace);
+            self.owns_workspace = false;
+        }
+        if (self.owns_transcript_dir) {
+            self.allocator.free(self.transcripts.dir);
+            self.owns_transcript_dir = false;
+        }
     }
 
     /// Memory: Caller owns returned slice; call allocator.free.
@@ -230,4 +235,33 @@ test "agent loop basic" {
     const opts = TurnOpts{};
     try std.testing.expectEqual(@as(u32, 8), opts.max_iters);
     try std.testing.expect(opts.system_prompt == null);
+}
+
+test "setWorkspace does not drop transcript dir ownership" {
+    const allocator = std.testing.allocator;
+    const tdir = try allocator.dupe(u8, "/tmp/zeptoclaw-transcript-own");
+    var agent = Agent{
+        .allocator = allocator,
+        .session = Session.init(allocator, 4),
+        .nim_client = undefined,
+        .workspace = "old-ws",
+        .session_id = "t",
+        .core = tools_mod.ToolRegistry.init(allocator),
+        .params = .{},
+        .skill_metadata = undefined,
+        .exec_tools = execution_context.ToolRegistry.init(allocator),
+        .transcripts = transcript.Store.init(allocator, tdir),
+        .owns_workspace = false,
+        .owns_transcript_dir = true,
+    };
+    agent.setWorkspace("/tmp/zeptoclaw-ws-borrowed");
+    try std.testing.expect(agent.owns_transcript_dir);
+    try std.testing.expectEqualStrings(tdir, agent.transcripts.dir);
+    agent.session.deinit();
+    agent.core.deinit();
+    agent.exec_tools.deinit();
+    if (agent.owns_transcript_dir) {
+        allocator.free(agent.transcripts.dir);
+        agent.owns_transcript_dir = false;
+    }
 }
