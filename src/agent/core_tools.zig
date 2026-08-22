@@ -388,3 +388,105 @@ pub fn collectDefinitions(reg: *tools.ToolRegistry, allocator: Allocator) ![]typ
     }
     return list.toOwnedSlice(allocator);
 }
+
+test "core_tools read missing path" {
+    const allocator = std.testing.allocator;
+    const out = try readTool(allocator, "{}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "missing path") != null);
+}
+
+test "core_tools invalid json" {
+    const allocator = std.testing.allocator;
+    const out = try readTool(allocator, "not-json");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "invalid json") != null);
+}
+
+test "core_tools path escape" {
+    const allocator = std.testing.allocator;
+    setWorkspace("/tmp/zeptoclaw-ws-test");
+    defer setWorkspace(".");
+    const out = try readTool(allocator, "{\"path\":\"/etc/passwd\"}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PathEscape") != null);
+}
+
+test "core_tools write read edit" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-core-tools-test";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    setWorkspace(dir);
+    defer setWorkspace(".");
+
+    const w = try writeTool(allocator, "{\"path\":\"note.txt\",\"content\":\"hello world\"}");
+    defer allocator.free(w);
+    try std.testing.expect(std.mem.startsWith(u8, w, "wrote"));
+
+    const r = try readTool(allocator, "{\"path\":\"note.txt\"}");
+    defer allocator.free(r);
+    try std.testing.expectEqualStrings("hello world", r);
+
+    const e = try editTool(allocator, "{\"path\":\"note.txt\",\"old_str\":\"world\",\"new_str\":\"barvis\"}");
+    defer allocator.free(e);
+    try std.testing.expectEqualStrings("ok", e);
+
+    const r2 = try readTool(allocator, "{\"path\":\"note.txt\"}");
+    defer allocator.free(r2);
+    try std.testing.expectEqualStrings("hello barvis", r2);
+}
+
+test "core_tools exec denied mutating" {
+    const allocator = std.testing.allocator;
+    setWorkspace(".");
+    const out = try execTool(allocator, "{\"command\":\"rm -rf /tmp/not-a-real-zepto-target\"}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "exec denied") != null);
+}
+
+test "core_tools exec pwd allowlisted" {
+    const allocator = std.testing.allocator;
+    setWorkspace(".");
+    const out = try execTool(allocator, "{\"command\":\"pwd\"}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.startsWith(u8, out, "exit"));
+}
+
+test "core_tools listen leave" {
+    const allocator = std.testing.allocator;
+    resetPresence();
+    defer resetPresence();
+    const a = try listenTool(allocator, "{}");
+    defer allocator.free(a);
+    try std.testing.expect(wantSilent());
+    try std.testing.expect(!wantLeave());
+    const b = try leaveTool(allocator, "{}");
+    defer allocator.free(b);
+    try std.testing.expect(wantLeave());
+    try std.testing.expect(wantSilent());
+}
+
+test "core_tools registerAll" {
+    const allocator = std.testing.allocator;
+    var reg = tools.ToolRegistry.init(allocator);
+    defer reg.deinit();
+    var hold: ParamHold = undefined;
+    try registerAll(&reg, &hold);
+    defer hold.deinit();
+    try std.testing.expect(reg.get("read") != null);
+    try std.testing.expect(reg.get("leave") != null);
+    const defs = try collectDefinitions(&reg, allocator);
+    defer {
+        for (defs) |*d| d.deinit(allocator);
+        allocator.free(defs);
+    }
+    try std.testing.expect(defs.len >= 8);
+}
+
+test "core_tools skill missing handler" {
+    const allocator = std.testing.allocator;
+    setSkillHandler(null);
+    const out = try skillTool(allocator, "{\"name\":\"git\"}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "no skill handler") != null);
+}

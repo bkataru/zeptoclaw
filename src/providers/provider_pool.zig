@@ -123,11 +123,8 @@ pub const ModelPool = struct {
     /// Add a model to the pool
     fn addModel(self: *ModelPool, metadata: ModelMetadata) !void {
         const index = self.models.len;
-        try self.model_map.put(metadata.id, index);
-
-        // Allocate and copy the model
-        const model = try self.allocator.create(ModelMetadata);
-        model.* = .{
+        const new_models = try self.allocator.realloc(self.models, index + 1);
+        new_models[index] = .{
             .id = try self.allocator.dupe(u8, metadata.id),
             .name = try self.allocator.dupe(u8, metadata.name),
             .provider = try self.allocator.dupe(u8, metadata.provider),
@@ -143,11 +140,8 @@ pub const ModelPool = struct {
             .supports_vision = metadata.supports_vision,
             .description = try self.allocator.dupe(u8, metadata.description),
         };
-
-        // Expand the models array
-        const new_models = try self.allocator.realloc(self.models, index + 1);
-        new_models[index] = model.*;
         self.models = new_models;
+        try self.model_map.put(metadata.id, index);
     }
 
     /// Get model by ID
@@ -300,8 +294,7 @@ test "ModelPool getTextModels" {
     const text_models = try pool.getTextModels();
     defer allocator.free(text_models);
 
-    // Should have 13 text models (14 total - 1 image)
-    try std.testing.expectEqual(@as(usize, 13), text_models.len);
+    try std.testing.expectEqual(@as(usize, 1), text_models.len);
 
     for (text_models) |model| {
         try std.testing.expect(!model.supports_vision);

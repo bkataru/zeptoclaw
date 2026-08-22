@@ -227,6 +227,7 @@ pub const Agent = struct {
 };
 
 test "agent loop basic" {
-    const allocator = std.testing.allocator;
-    _ = allocator;
+    const opts = TurnOpts{};
+    try std.testing.expectEqual(@as(u32, 8), opts.max_iters);
+    try std.testing.expect(opts.system_prompt == null);
 }

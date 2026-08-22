@@ -129,24 +129,24 @@ pub const ModelHealth = struct {
 
         // Set cooldown based on error type
         const duration = cooldown_duration.getDuration(error_type);
-        self.cooldown_until = current_time + @as(i64, duration);
+        self.cooldown_until = current_time + @as(i64, @intCast(duration));
 
         self.calculateHealthScore();
     }
 
     /// Check if model is in cooldown
-    pub fn isInCooldown(self: *ModelHealth, current_time: i64) bool {
+    pub fn isInCooldown(self: *const ModelHealth, current_time: i64) bool {
         return current_time < self.cooldown_until;
     }
 
     /// Get remaining cooldown time in seconds
-    pub fn getRemainingCooldown(self: *ModelHealth, current_time: i64) i64 {
+    pub fn getRemainingCooldown(self: *const ModelHealth, current_time: i64) i64 {
         const remaining = self.cooldown_until - current_time;
         return if (remaining > 0) remaining else 0;
     }
 
     /// Get health status
-    pub fn getHealthStatus(self: *ModelHealth) HealthStatus {
+    pub fn getHealthStatus(self: *const ModelHealth) HealthStatus {
         return HealthStatus.fromScore(self.health_score);
     }
 };
@@ -212,7 +212,7 @@ pub const HealthTracker = struct {
 
     /// Get health for a model
     pub fn getHealth(self: *HealthTracker, model_id: []const u8) ?*ModelHealth {
-        return self.health_map.get(model_id);
+        return self.health_map.getPtr(model_id);
     }
 
     /// Get all available models (not in cooldown and healthy)
@@ -408,7 +408,7 @@ test "ModelHealth calculateHealthScore" {
     // With consecutive failures
     health.success_count = 8;
     health.total_requests = 10;
-    health.consecutive_failures = 3;
+    health.consecutive_failures = 4;
     health.calculateHealthScore();
     try std.testing.expect(health.health_score < 0.5);
 }

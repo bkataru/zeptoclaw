@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../../../../compat.zig");
 
 // Port of whatsmeow/store/store.go — Device + trait definitions
 // BUILD:0 skeleton: vtable shapes + Device struct match Go source; real SQL in sqlite.zig
@@ -31,7 +32,7 @@ pub const KeyPair = struct {
     pub_bytes: [32]u8 = [_]u8{0} ** 32,
     pub fn generate() KeyPair {
         var kp: KeyPair = .{};
-        std.crypto.random.bytes(&kp.priv);
+        compat.fillRandom(&kp.priv);
         // Derive pub via X25519 basepoint (stub: use priv as pub for BUILD:0 until noise wired)
         kp.pub_bytes = kp.priv;
         return kp;
@@ -69,8 +70,8 @@ pub const Device = struct {
         var d = Device{ .allocator = allocator };
         d.noise_key = KeyPair.generate();
         d.identity_key = KeyPair.generate();
-        std.crypto.random.bytes(&d.adv_secret_key);
-        d.registration_id = std.crypto.random.int(u32);
+        compat.fillRandom(&d.adv_secret_key);
+        d.registration_id = compat.randomInt(u32);
         d.signed_pre_key = PreKey{ .key_id = 1, .priv = d.identity_key.priv, .pub_bytes = d.identity_key.pub_bytes };
         return d;
     }

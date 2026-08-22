@@ -183,7 +183,7 @@ pub const Skill = struct {
     }
 
     pub fn dupe(self: Skill, allocator: std.mem.Allocator) !Skill {
-        var triggers = std.ArrayList(Trigger){};
+        var triggers: std.ArrayList(Trigger) = .empty;
         errdefer {
             for (triggers.items) |*t| t.deinit(allocator);
             triggers.deinit(allocator);

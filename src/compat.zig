@@ -105,6 +105,17 @@ pub fn getIo() std.Io {
     return io();
 }
 
+pub fn fillRandom(buf: []u8) void {
+    getIo().random(buf);
+}
+
+pub fn randomInt(comptime T: type) T {
+    var bytes: [@sizeOf(T)]u8 = undefined;
+    fillRandom(&bytes);
+    return @bitCast(bytes);
+}
+
+
 pub fn cwd() Dir {
     const _io = io();
     return .{ .io = _io, .dir = std.Io.Dir.cwd() };

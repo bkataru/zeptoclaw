@@ -25,9 +25,14 @@ pub const SkillRegistry = struct {
     pub fn deinit(self: *SkillRegistry) void {
         var iter = self.skills.iterator();
         while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
             entry.value_ptr.deinit(self.allocator);
         }
         self.skills.deinit();
+        var eit = self.enabled_skills.iterator();
+        while (eit.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
         self.enabled_skills.deinit();
     }
 
@@ -54,7 +59,9 @@ pub const SkillRegistry = struct {
         @constCast(&skill.value).deinit(self.allocator);
         self.allocator.free(skill.key);
 
-        _ = self.enabled_skills.remove(skill_id);
+        if (self.enabled_skills.fetchRemove(skill_id)) |en| {
+            self.allocator.free(en.key);
+        }
     }
 
     /// Get a skill by ID
@@ -317,7 +324,7 @@ test "SkillRegistry unregister" {
 
 // Test helpers
 fn createTestSkill(allocator: std.mem.Allocator) !Skill {
-    const triggers = std.ArrayList(types.Trigger){};
+    const triggers: std.ArrayList(types.Trigger) = .empty;
 
     const metadata = SkillMetadata{
         .id = "test-skill",
@@ -333,12 +340,12 @@ fn createTestSkill(allocator: std.mem.Allocator) !Skill {
         .metadata = metadata,
         .triggers = triggers,
         .config_schema = types.ConfigSchema.init(allocator),
-        .path = try allocator.dupe(u8, "/test/path"),
+        .path = "/test/path",
     };
 }
 
 fn createTestSkill2(allocator: std.mem.Allocator) !Skill {
-    const triggers = std.ArrayList(types.Trigger){};
+    const triggers = std.ArrayList(types.Trigger).empty;
 
     const metadata = SkillMetadata{
         .id = "test-skill-2",
@@ -354,6 +361,6 @@ fn createTestSkill2(allocator: std.mem.Allocator) !Skill {
         .metadata = metadata,
         .triggers = triggers,
         .config_schema = types.ConfigSchema.init(allocator),
-        .path = try allocator.dupe(u8, "/test/path2"),
+        .path = "/test/path2",
     };
 }

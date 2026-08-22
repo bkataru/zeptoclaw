@@ -293,7 +293,7 @@ pub const SearchTopicsResult = struct {
             .posts_found = 0,
             .upvotes = 0,
             .discoveries = 0,
-            .search_topic = topic,
+            .search_topic = allocator.dupe(u8, topic) catch unreachable,
             .errors = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
         };
     }

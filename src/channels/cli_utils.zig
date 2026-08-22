@@ -77,23 +77,15 @@ test "formatMessagePrefix returns colors" {
 }
 
 test "formatToolCall formats correctly" {
-    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
-    defer buf.deinit();
-    const writer = buf.writer();
-    
-    try formatToolCall("echo", "hello", writer);
-    const result = buf.items;
-    
-    try std.testing.expect(std.mem.indexOf(u8, result, "echo") != null);
+    var storage: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&storage);
+    try formatToolCall("echo", "hello", &w);
+    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "echo") != null);
 }
 
 test "formatError formats correctly" {
-    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
-    defer buf.deinit();
-    const writer = buf.writer();
-    
-    try formatError("test error", writer);
-    const result = buf.items;
-    
-    try std.testing.expect(std.mem.indexOf(u8, result, "Error:") != null);
+    var storage: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&storage);
+    try formatError("test error", &w);
+    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "Error:") != null);
 }

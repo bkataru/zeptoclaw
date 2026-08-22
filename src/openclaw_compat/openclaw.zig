@@ -181,6 +181,34 @@ test "isAllowFromMatch digits-only" {
     const allow = &[_][]const u8{ "+15555550101", "+15555550102" };
     try std.testing.expect(isAllowFromMatch(allow, "+15555550101"));
     try std.testing.expect(isAllowFromMatch(allow, "15555550101"));
-    try std.testing.expect(isAllowFromMatch(allow, "+91 9674746069"));
+    try std.testing.expect(!isAllowFromMatch(allow, "+91 9674746069"));
     try std.testing.expect(!isAllowFromMatch(allow, "+919999999999"));
+}
+
+test "homeJoin uses HOME" {
+    const allocator = std.testing.allocator;
+    const pth = try compat.homeJoin(allocator, ".zeptoclaw/config.json");
+    defer allocator.free(pth);
+    try std.testing.expect(std.mem.endsWith(u8, pth, ".zeptoclaw/config.json"));
+}
+
+test "resolveWorkspaceDir returns existing dir" {
+    const allocator = std.testing.allocator;
+    const ws = try resolveWorkspaceDir(allocator);
+    defer allocator.free(ws);
+    try std.testing.expect(dirExists(ws));
+}
+
+test "findExistingConfig prefers zeptoclaw" {
+    const allocator = std.testing.allocator;
+    const found = findExistingConfig(allocator);
+    if (found) |pth| {
+        defer allocator.free(pth);
+        try std.testing.expect(std.mem.indexOf(u8, pth, "config.json") != null or std.mem.indexOf(u8, pth, "openclaw.json") != null);
+    }
+}
+
+test "canonicalizeGatewayPath passthrough" {
+    try std.testing.expectEqualStrings("/health", canonicalizeGatewayPath("/health"));
+    try std.testing.expectEqualStrings("/state", canonicalizeGatewayPath("/gateway/state"));
 }

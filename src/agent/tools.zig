@@ -82,9 +82,9 @@ test "ToolRegistry basic operations" {
     defer registry.deinit();
 
     try registry.register(.{
-        .name = "test_tool",
-        .description = "A test tool",
-        .parameters = std.json.Value{ .null = .{} },
+        .name = try allocator.dupe(u8, "test_tool"),
+        .description = try allocator.dupe(u8, "A test tool"),
+        .parameters = std.json.Value{ .null = {} },
         .handler = echoTool,
     });
 

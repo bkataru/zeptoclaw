@@ -296,13 +296,11 @@ pub const ConfigLoader = struct {
                 }
             }
         }
+        errdefer if (file_config) |*fc| fc.deinit();
 
         // Load from environment variables
         var env_config = try self.loadFromEnv();
-        errdefer {
-            if (file_config) |*fc| fc.deinit();
-            env_config.deinit();
-        }
+        errdefer env_config.deinit();
         // Merge configurations with priority: CLI > env > file > defaults
         var result = try self.mergeConfigs(file_config, env_config, cli_args);
         errdefer result.deinit();
@@ -721,4 +719,35 @@ test "ConfigLoader mergeConfigs with defaults" {
     try std.testing.expectEqual(ConfigSource.default, result.source);
     try std.testing.expectEqualStrings("thinkingmachines/inkling", result.primary_model);
     try std.testing.expectEqual(@as(u32, 18789), result.gateway_port);
+}
+
+test "validateConfig rejects invalid gateway port" {
+    var loader = ConfigLoader.init(std.testing.allocator);
+    var cfg = try loader.mergeConfigs(null, null, null);
+    defer cfg.deinit();
+    loader.allocator.free(cfg.api_key);
+    cfg.api_key = try std.testing.allocator.dupe(u8, "test-key");
+    cfg.gateway_port = 0;
+    try std.testing.expectError(error.InvalidGatewayPort, loader.validateConfig(cfg));
+}
+
+test "validateConfig rejects zero max_concurrent" {
+    var loader = ConfigLoader.init(std.testing.allocator);
+    var cfg = try loader.mergeConfigs(null, null, null);
+    defer cfg.deinit();
+    loader.allocator.free(cfg.api_key);
+    cfg.api_key = try std.testing.allocator.dupe(u8, "test-key");
+    cfg.max_concurrent = 0;
+    try std.testing.expectError(error.InvalidMaxConcurrent, loader.validateConfig(cfg));
+}
+
+test "validateConfig rejects empty primary model" {
+    var loader = ConfigLoader.init(std.testing.allocator);
+    var cfg = try loader.mergeConfigs(null, null, null);
+    defer cfg.deinit();
+    loader.allocator.free(cfg.api_key);
+    cfg.api_key = try std.testing.allocator.dupe(u8, "test-key");
+    std.testing.allocator.free(cfg.primary_model);
+    cfg.primary_model = try std.testing.allocator.dupe(u8, "");
+    try std.testing.expectError(error.MissingPrimaryModel, loader.validateConfig(cfg));
 }

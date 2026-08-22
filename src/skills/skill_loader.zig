@@ -21,7 +21,7 @@ pub const SkillLoader = struct {
     pub fn init(allocator: std.mem.Allocator) SkillLoader {
         return .{
             .allocator = allocator,
-            .skill_paths = std.ArrayList([]const u8){},
+            .skill_paths = .empty,
         };
     }
 
@@ -159,7 +159,7 @@ pub const SkillLoader = struct {
 
     /// Parse triggers from SKILL.md content
     fn parseTriggers(self: *SkillLoader, content: []const u8) !std.ArrayList(Trigger) {
-        var triggers = std.ArrayList(Trigger){};
+        var triggers: std.ArrayList(Trigger) = .empty;
 
         // Look for trigger definitions in the content
         // Format: "## Triggers" followed by trigger definitions

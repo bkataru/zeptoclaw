@@ -126,7 +126,7 @@ pub const TokenAuth = struct {
         const now = compat.timestamp();
 
         // Invalidate old main token
-        if (self.tokens.get(self.main_token)) |*info| {
+        if (self.tokens.getPtr(self.main_token)) |info| {
             info.is_active = false;
             info.expires_at = now + 300; // Expire in 5 minutes
         }
@@ -149,7 +149,7 @@ pub const TokenAuth = struct {
     /// Generate a random 40-character hex token
     /// Memory: Caller owns returned token slice; must free with the TokenAuth allocator.
 fn generateToken(self: *TokenAuth) ![]const u8 {
-        var rng = std.rand.DefaultPrng.init(@as(u64, compat.timestamp()));
+        var rng = std.Random.DefaultPrng.init(@as(u64, @bitCast(compat.timestamp())));
         const random = rng.random();
         var token: [40]u8 = undefined;
 
@@ -197,7 +197,7 @@ test "token auth basic validation" {
     try std.testing.expect(try auth.validate(main_token));
 
     // Test invalid token
-    try std.testing.expectError(error.RateLimitExceeded, auth.validate("invalid_token"));
+    try std.testing.expect(!(try auth.validate("invalid_token")));
 }
 
 test "token rotation" {

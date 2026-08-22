@@ -74,7 +74,7 @@ pub const SessionStore = struct {
         const now = compat.timestamp();
 
         var metadata = std.StringHashMap([]const u8).init(self.allocator);
-        try metadata.put("created_by", try self.allocator.dupe(u8, "gateway"));
+        try metadata.put(try self.allocator.dupe(u8, "created_by"), try self.allocator.dupe(u8, "gateway"));
 
         const session = Session{
             .id = try self.allocator.dupe(u8, id),
@@ -271,10 +271,10 @@ var w_buf: [4096]u8 = undefined;
 
 test "session store basic operations" {
     const allocator = std.testing.allocator;
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
+    const dir = "/tmp/zeptoclaw-session-store-test";
+    _ = try compat.cwd().makeOpenPath(dir, .{});
 
-    var store = try SessionStore.init(allocator, tmp_dir.path);
+    var store = try SessionStore.init(allocator, dir);
     defer store.deinit();
 
     // Create a session
@@ -298,10 +298,10 @@ test "session store basic operations" {
 
 test "session store list sessions" {
     const allocator = std.testing.allocator;
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
+    const dir = "/tmp/zeptoclaw-session-store-test2";
+    _ = try compat.cwd().makeOpenPath(dir, .{});
 
-    var store = try SessionStore.init(allocator, tmp_dir.path);
+    var store = try SessionStore.init(allocator, dir);
     defer store.deinit();
 
     try store.createSession("session-1", "user1", "cli");
@@ -312,7 +312,7 @@ test "session store list sessions" {
     defer allocator.free(active);
     try std.testing.expectEqual(@as(usize, 3), active.len);
 
-    try store.terminateSession("session-2");
+    try std.testing.expect(try store.terminateSession("session-2"));
 
     const active_after = try store.listActiveSessions();
     defer allocator.free(active_after);

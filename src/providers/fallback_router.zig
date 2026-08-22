@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../compat.zig");
 const provider_pool = @import("provider_pool.zig");
 const health_tracker = @import("health_tracker.zig");
 
@@ -27,7 +28,7 @@ pub const FallbackRouter = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         pool: *provider_pool.ModelPool,
-        health_tracker: *health_tracker.HealthTracker,
+        tracker: *health_tracker.HealthTracker,
         primary_model: []const u8,
         fallback_models: [][]const u8,
     ) !FallbackRouter {
@@ -46,7 +47,7 @@ pub const FallbackRouter = struct {
         return .{
             .allocator = allocator,
             .pool = pool,
-            .health_tracker = health_tracker,
+            .health_tracker = tracker,
             .strategy = .health_aware,
             .primary_model = try allocator.dupe(u8, primary_model),
             .fallback_models = try allocator.dupe([]const u8, fallback_models),
@@ -70,6 +71,7 @@ pub const FallbackRouter = struct {
 
     /// Select model by priority only (ignore health)
     fn selectByPriority(self: *FallbackRouter, models: []const *provider_pool.ModelMetadata) !*provider_pool.ModelMetadata {
+        _ = models;
         // Try primary model first
         if (self.pool.getModel(self.primary_model)) |model| {
             return model;
@@ -177,8 +179,8 @@ pub const FallbackRouter = struct {
             return error.NoAvailableModels;
         }
 
-        // Generate random index
-        const random_value = std.crypto.random.intRangeLessThan(usize, available.len);
+        var prng = std.Random.DefaultPrng.init(@as(u64, @bitCast(compat.timestamp())));
+        const random_value = prng.random().uintLessThan(usize, available.len);
         return available[random_value];
     }
 
