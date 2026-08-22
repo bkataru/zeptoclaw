@@ -36,3 +36,11 @@ Language rules live in `engagement.LANGUAGE_INSTRUCTIONS` (WhatsApp extra contex
 ## History after restart
 
 RAM `WhatsAppSession` history is empty after `kill`/`start`. DMs (and groups) get same-chat lines from `memory/YYYY-MM-DD.md` via `dailyContext` before `runTurn`. That is how a later `hi barvis, i like her top` can see `i like ur top` from the same JID without loading other chats.
+
+## Unacked turns
+
+Before NIM, the gateway appends the inbound to `~/.zeptoclaw/sessions/whatsapp/pending-turns.jsonl` (Baileys id, chat JID, body, fromMe). After a successful send or silent listen/leave, that id is removed. On `connection status=connected`, remaining rows are replayed (`skip_journal`) so a SIGKILL mid-retry does not drop the turn.
+
+## MEMORY.md in partner DMs
+
+Injected only when `fromMe=true` (Baala). Peer inbound in that DM does not get `MEMORY.md` auto-injected. Same-chat journal still hydrates both directions.

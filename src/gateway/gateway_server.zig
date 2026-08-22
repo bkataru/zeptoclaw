@@ -179,10 +179,46 @@ fn recent_history_context(alloc: std.mem.Allocator, session: *WhatsAppSession, c
 }
 
 /// Connection status handler (top-level fn for onConnection).
+fn replayPendingTurns() void {
+    const pending = zeptoclaw.channels.whatsapp.pending;
+    const rows = pending.load(g_whatsapp_alloc) catch return;
+    defer {
+        for (rows) |*row| row.deinit(g_whatsapp_alloc);
+        g_whatsapp_alloc.free(rows);
+    }
+    if (rows.len == 0) return;
+    std.log.info("[whatsapp] replaying {d} unacked inbound turn(s)", .{rows.len});
+    for (rows) |row| {
+        var msg = zeptoclaw.channels.whatsapp.types.WhatsAppMessage.init(g_whatsapp_alloc) catch continue;
+        defer msg.deinit();
+        g_whatsapp_alloc.free(msg.id);
+        g_whatsapp_alloc.free(msg.chat_id);
+        g_whatsapp_alloc.free(msg.body);
+        g_whatsapp_alloc.free(msg.from);
+        g_whatsapp_alloc.free(msg.sender_jid);
+        msg.id = g_whatsapp_alloc.dupe(u8, row.id) catch continue;
+        msg.chat_id = g_whatsapp_alloc.dupe(u8, row.chat_id) catch continue;
+        msg.body = g_whatsapp_alloc.dupe(u8, row.body) catch continue;
+        msg.from = g_whatsapp_alloc.dupe(u8, row.chat_id) catch continue;
+        msg.sender_jid = g_whatsapp_alloc.dupe(u8, row.chat_id) catch continue;
+        msg.from_me = row.from_me;
+        msg.chat_type = if (row.direct) .direct else .group;
+        std.log.info("[whatsapp] replay id={s} chat={s}", .{ row.id, row.chat_id });
+        handleWhatsAppTurn(msg, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
+            std.log.err("[whatsapp] replay failed: {}", .{err});
+        };
+    }
+}
+
 fn whatsappOnConnection(update: zeptoclaw.channels.whatsapp.types.ConnectionUpdate) anyerror!void {
     std.log.info("[whatsapp] connection status={s} selfJid={s} selfE164={s}", .{
         @tagName(update.status), update.self_jid orelse "?", update.self_e164 orelse "?",
     });
+    if (update.status == .connected) {
+        _ = std.Thread.spawn(.{}, replayPendingTurns, .{}) catch |err| {
+            std.log.err("[whatsapp] failed to spawn pending replay: {}", .{err});
+        };
+    }
 }
 
 /// QR handler (top-level fn for onQr).
@@ -202,7 +238,17 @@ fn gatewaySendMessage(to: []const u8, text: []const u8) anyerror![]const u8 {
 /// Ownership: msg.* is borrowed from the channel (caller retains ownership). Any
 /// copies retained here are duped against g_whatsapp_alloc and freed via defer.
 /// Memory: Caller retains `msg`; copies used after return are duped against `g_whatsapp_alloc` and freed via defer.
+const TurnOpts = struct {
+    skip_journal: bool = false,
+    skip_inbound: bool = false,
+    skip_dup_window: bool = false,
+};
+
 fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) anyerror!void {
+    return handleWhatsAppTurn(msg, .{});
+}
+
+fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, opts: TurnOpts) anyerror!void {
     const session = g_whatsapp_session orelse return;
     const inbound = g_whatsapp_inbound orelse return;
     const cfg = g_whatsapp_cfg orelse return;
@@ -214,18 +260,17 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     try g_whatsapp_mu.lock(compat.getIo());
     defer g_whatsapp_mu.unlock(compat.getIo());
 
-    // Run through InboundProcessor (dedupe + session access control + debounce).
-    const proc = inbound.process(msg) catch |err| {
-        std.log.err("[whatsapp] inbound.process failed: {}", .{err});
-        return;
+    const eff_msg = if (opts.skip_inbound) &msg else blk: {
+        const proc = inbound.process(msg) catch |err| {
+            std.log.err("[whatsapp] inbound.process failed: {}", .{err});
+            return;
+        };
+        if (!proc.allowed) {
+            std.log.info("[whatsapp] inbound denied reason={s} chat={s}", .{ proc.reason orelse "?", msg.chat_id });
+            return;
+        }
+        break :blk proc.message orelse return;
     };
-    if (!proc.allowed) {
-        std.log.info("[whatsapp] inbound denied reason={s} chat={s}", .{ proc.reason orelse "?", msg.chat_id });
-        return;
-    }
-
-    // The session-owned, stable copy of the message (lives in session.stable_messages).
-    const eff_msg = proc.message orelse return;
     if (eff_msg.body.len == 0) return;
 
     // Always listen: persist inbound even when we choose not to speak.
@@ -233,7 +278,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     defer g_whatsapp_alloc.free(chat_id_copy);
     const body_copy = try g_whatsapp_alloc.dupe(u8, eff_msg.body);
     defer g_whatsapp_alloc.free(body_copy);
-    journal_append(g_whatsapp_alloc, "in", chat_id_copy, body_copy);
+    if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, body_copy);
     session.addMessage(eff_msg.*) catch {};
 
     // Skip our own outbound echo (self-chat fromMe replies). Exact or prefix match.
@@ -264,7 +309,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         std.mem.eql(u8, g_last_turn_chat[0..g_last_turn_chat_len], eff_msg.chat_id);
     const same_body = g_last_turn_body_len == eff_msg.body.len and
         std.mem.eql(u8, g_last_turn_body[0..g_last_turn_body_len], eff_msg.body);
-    if (same_chat and same_body and now_ms - g_last_turn_ms < 20_000) {
+    if (!opts.skip_dup_window and same_chat and same_body and now_ms - g_last_turn_ms < 20_000) {
         std.log.info("[whatsapp] skip duplicate turn chat={s}", .{eff_msg.chat_id});
         return;
     }
@@ -275,6 +320,11 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     @memcpy(g_last_turn_body[0..nbody], eff_msg.body[0..nbody]);
     g_last_turn_body_len = nbody;
     g_last_turn_ms = now_ms;
+
+    const pending_src = if (eff_msg.id.len > 0) eff_msg.id else chat_id_copy;
+    const pending_id = try g_whatsapp_alloc.dupe(u8, pending_src);
+    defer g_whatsapp_alloc.free(pending_id);
+    zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pending_id, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
 
     const ws_dir_const = zeptoclaw.openclaw_compat.resolveWorkspaceDir(g_whatsapp_alloc) catch null;
     defer if (ws_dir_const) |wd| g_whatsapp_alloc.free(wd);
@@ -321,6 +371,25 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         if (journal_ctx) |jc| {
             msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = jc }) catch {};
         }
+        const long_ctx: ?[]const u8 = if (is_dm and eff_msg.from_me)
+            blk_mem: {
+                const wd = ws_dir_const orelse break :blk_mem null;
+                const buf = memory.getLongTerm(g_whatsapp_alloc, wd) orelse break :blk_mem null;
+                const header = "\n--- MEMORY.md (Baala fromMe in this DM only; do not quote to the other party unless they already know it) ---\n";
+                const joined = std.fmt.allocPrint(g_whatsapp_alloc, "{s}{s}\n", .{ header, buf }) catch {
+                    g_whatsapp_alloc.free(buf);
+                    break :blk_mem null;
+                };
+                g_whatsapp_alloc.free(buf);
+                break :blk_mem joined;
+            }
+        else
+            null;
+        defer if (long_ctx) |lc| g_whatsapp_alloc.free(lc);
+
+        if (long_ctx) |lc| {
+            msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = lc }) catch {};
+        }
 
         const prompt = body_copy;
         var extra = std.ArrayList(u8).empty;
@@ -328,6 +397,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
         if (pre) |pc| extra.appendSlice(g_whatsapp_alloc, pc) catch {};
         if (hist_ctx) |hc| extra.appendSlice(g_whatsapp_alloc, hc) catch {};
         if (journal_ctx) |jc| extra.appendSlice(g_whatsapp_alloc, jc) catch {};
+        if (long_ctx) |lc| extra.appendSlice(g_whatsapp_alloc, lc) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nUse memory_get, memory_search, memory_append, memory_edit when you need long-term or daily notes. They are not preloaded.\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.PRESENCE_INSTRUCTIONS) catch {};
@@ -365,6 +435,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     defer g_whatsapp_alloc.free(reply_text);
     if (reply_text.len == 0) {
         std.log.info("[whatsapp] silent/leave; not sending", .{});
+        zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
         return;
     }
 
@@ -396,6 +467,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     const rlen = @min(signed_text.len, g_last_reply_buf.len);
     @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);
     g_last_reply_len = rlen;
+    zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
 }
 
 pub fn main() !void {

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Pending inbound queue: `pending-turns.jsonl`. Enqueue before NIM, ack after send or listen. Replay on WhatsApp connect after SIGKILL.
+- `MEMORY.md` auto-injected only on Baala `fromMe` DMs. Peer inbound in that chat does not get it.
+- Same-chat journal hydrate (already in 0.1.0 follow-ups).
+
 ## 0.1.0 - 2026-08-22
 
 Tagged release of the live Barvis path.
