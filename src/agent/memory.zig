@@ -385,7 +385,42 @@ fn trimToCap(body: *std.ArrayList(u8), allocator: std.mem.Allocator) void {
     }
 }
 
+/// Isolated process so NIM backoff is not the WhatsApp client's.
+fn spawnMemoryUpdate(allocator: std.mem.Allocator) bool {
+    if (@import("builtin").is_test) return false;
+    const home = compat.getEnvVarOwned(allocator, "HOME") catch return false;
+    defer allocator.free(home);
+    const path = std.fmt.allocPrint(allocator, "{s}/zeptoclaw/zig-out/bin/zeptoclaw", .{home}) catch return false;
+    defer allocator.free(path);
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const result = std.process.run(allocator, io, .{
+        .argv = &.{ path, "memory", "update" },
+        .stdout_limit = .limited(16 * 1024),
+        .stderr_limit = .limited(16 * 1024),
+    }) catch |err| {
+        std.log.warn("[memory] synthesis spawn failed: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (result.stderr.len > 0) {
+        std.log.info("[memory] synthesis stderr: {s}", .{result.stderr});
+    }
+    return switch (result.term) {
+        .exited => |c| c == 0,
+        else => false,
+    };
+}
+
 pub fn compactFromDaily(allocator: std.mem.Allocator) void {
+    std.log.info("[memory] synthesizing MEMORY.md from journals (isolated NIM)", .{});
+    if (spawnMemoryUpdate(allocator)) {
+        std.log.info("[memory] synthesis child finished; MEMORY.md updated", .{});
+        return;
+    }
+    std.log.warn("[memory] synthesis child failed; falling back to extractive compact", .{});
     const ws = openclaw.resolveWorkspaceDir(allocator) catch return;
     defer allocator.free(ws);
     const civil = civilNowIst();
@@ -444,10 +479,9 @@ pub fn runLoop() void {
         std.log.info("[memory] compact loop disabled (ZEPTO_MEMORY_SECS=0)", .{});
         return;
     }
-    std.log.info("[memory] compact loop every {d}s (no model calls)", .{secs});
+    std.log.info("[memory] compact loop every {d}s (NIM synthesis in a child process)", .{secs});
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
-    compactFromDaily(allocator);
     while (true) {
         var remaining = secs;
         while (remaining > 0) {

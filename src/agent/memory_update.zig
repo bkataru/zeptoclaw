@@ -68,8 +68,10 @@ fn loadBundle(allocator: std.mem.Allocator, ws: []const u8) ![]u8 {
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator,
         \\Update MEMORY.md for Barvis (Baala's Jarvis).
-        \\This is memory *update*, not a wipe: combine the existing long-term MEMORY.md with new daily notes.
-        \\Keep durable facts. Fold in new events, decisions, voice, and lessons. Drop noise and duplicates.
+        \\This is memory *update*, not a wipe: synthesize and distill.
+        \\Combine the existing long-term MEMORY.md (old memories) with new daily notes (raw chat journals).
+        \\Extract durable facts, preferences, decisions, voice, and lessons. Merge duplicates. Drop noise, tool JSON, and one-off pings.
+        \\Write a coherent knowledge document, not a dump of raw [in]/[out] lines.
         \\Preserve heading structure. Keep section `## Running notes (auto)` if present.
         \\Do not invent facts. Do not include secrets or API keys. Output ONLY the full updated MEMORY.md markdown.
         \\
