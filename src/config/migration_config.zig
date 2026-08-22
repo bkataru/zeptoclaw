@@ -270,20 +270,30 @@ pub const ConfigLoader = struct {
             }
         } else {
             // Try default config paths — zeptoclaw primary, openclaw legacy fallback
-            const default_paths = [_][]const u8{
-                "/home/user/.zeptoclaw/config.json",
-                "./zeptoclaw.json",
-                "./config.json",
-                "/home/user/.openclaw/openclaw.json",
-                "/home/user/.openclaw/workspace/openclaw.json",
+            const home_rels = [_][]const u8{
+                ".zeptoclaw/config.json",
+                ".openclaw/openclaw.json",
+                ".openclaw/workspace/openclaw.json",
             };
-            for (default_paths) |path| {
-                const _cwd_probe = compat.cwd();
-                if (_cwd_probe.openFile(path, .{})) |file| {
-                    file.close(_cwd_probe.io);
-                    file_config = try self.loadFromFile(path);
-                    break;
-                } else |_| continue;
+            const cwd_rels = [_][]const u8{ "./zeptoclaw.json", "./config.json" };
+            const _cwd_probe = compat.cwd();
+            blk: {
+                for (home_rels) |rel| {
+                    const path = compat.homeJoin(self.allocator, rel) catch continue;
+                    defer self.allocator.free(path);
+                    if (_cwd_probe.openFile(path, .{})) |file| {
+                        file.close(_cwd_probe.io);
+                        file_config = self.loadFromFile(path) catch continue;
+                        break :blk;
+                    } else |_| continue;
+                }
+                for (cwd_rels) |path| {
+                    if (_cwd_probe.openFile(path, .{})) |file| {
+                        file.close(_cwd_probe.io);
+                        file_config = self.loadFromFile(path) catch continue;
+                        break :blk;
+                    } else |_| continue;
+                }
             }
         }
 
@@ -354,7 +364,7 @@ pub const ConfigLoader = struct {
 
         // Extract WhatsApp configuration
         const whatsapp_enabled = openclaw.channels.whatsapp != null;
-        const whatsapp_auth_dir = try self.allocator.dupe(u8, "/home/user/zeptoclaw/sessions/whatsapp");
+        const whatsapp_auth_dir = try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp");
         const whatsapp_dm_policy = if (openclaw.channels.whatsapp) |wh|
             try self.allocator.dupe(u8, wh.dmPolicy)
         else
@@ -437,7 +447,7 @@ pub const ConfigLoader = struct {
             self.allocator.free(whatsapp_enabled_str);
         }
         const whatsapp_auth_dir = compat.getEnvVarOwned(self.allocator, "WHATSAPP_AUTH_DIR") catch
-            try self.allocator.dupe(u8, "/home/user/zeptoclaw/sessions/whatsapp");
+            try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp");
         const whatsapp_dm_policy = compat.getEnvVarOwned(self.allocator, "WHATSAPP_DM_POLICY") catch
             try self.allocator.dupe(u8, "pairing");
         const whatsapp_group_policy = compat.getEnvVarOwned(self.allocator, "WHATSAPP_GROUP_POLICY") catch
@@ -537,7 +547,7 @@ pub const ConfigLoader = struct {
             .source = .default,
             .whatsapp_enabled = false,
             .whatsapp_native = false,
-            .whatsapp_auth_dir = try self.allocator.dupe(u8, "/home/user/zeptoclaw/sessions/whatsapp"),
+            .whatsapp_auth_dir = try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp"),
             .whatsapp_dm_policy = try self.allocator.dupe(u8, "pairing"),
             .whatsapp_allow_from = &.{},
             .whatsapp_group_policy = try self.allocator.dupe(u8, "allowlist"),

@@ -23,7 +23,7 @@ pub fn createValidTestConfig(allocator: std.mem.Allocator) !ZeptoClawConfig {
         .max_concurrent = 4,
         .source = .default,
         .whatsapp_enabled = false,
-        .whatsapp_auth_dir = try allocator.dupe(u8, "/home/user/zeptoclaw/sessions/whatsapp"),
+        .whatsapp_auth_dir = try allocator.dupe(u8, "/tmp/zeptoclaw/sessions/whatsapp"),
         .whatsapp_dm_policy = try allocator.dupe(u8, "pairing"),
         .whatsapp_allow_from = try allocator.alloc([]const u8, 0),
         .whatsapp_group_policy = try allocator.dupe(u8, "allowlist"),

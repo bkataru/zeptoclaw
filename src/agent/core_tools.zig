@@ -158,11 +158,20 @@ pub fn execTool(allocator: Allocator, args: []const u8) ![]const u8 {
 
 
 
+var g_approvals_path: ?[]const u8 = null;
+var g_pending_path: ?[]const u8 = null;
+
 fn approvalsPath() []const u8 {
-    return "sessions/exec-approvals.txt";
+    if (g_approvals_path) |p| return p;
+    const pth = compat.homeJoin(std.heap.page_allocator, ".zeptoclaw/sessions/exec-approvals.txt") catch return "sessions/exec-approvals.txt";
+    g_approvals_path = pth;
+    return pth;
 }
 fn pendingPath() []const u8 {
-    return "sessions/exec-pending.txt";
+    if (g_pending_path) |p| return p;
+    const pth = compat.homeJoin(std.heap.page_allocator, ".zeptoclaw/sessions/exec-pending.txt") catch return "sessions/exec-pending.txt";
+    g_pending_path = pth;
+    return pth;
 }
 
 fn fileContainsLine(path: []const u8, needle: []const u8) bool {

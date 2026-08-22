@@ -492,24 +492,26 @@ pub fn main() !void {
     defer cfg.deinit();
     g_whatsapp_cfg = cfg;
 
-    // Initialize token authentication
-    const main_token = cfg.gateway_auth_token orelse "test-gateway-token-main";
-    const workspace_token = "test-gateway-token-workspace";
+    // Initialize token authentication (fail closed: env or config token required)
+    const main_token = cfg.gateway_auth_token orelse {
+        std.debug.print("Error: GATEWAY_AUTH_TOKEN or gateway.auth.token is required\n", .{});
+        return error.MissingGatewayAuthToken;
+    };
+    const workspace_token = main_token;
 
     var auth = try TokenAuth.init(allocator, main_token, workspace_token);
     defer auth.deinit();
 
-    // Initialize session store
-    const sessions_dir = "/home/user/zeptoclaw/sessions";
+    const sessions_dir = try compat.homeJoin(allocator, ".zeptoclaw/sessions");
+    defer allocator.free(sessions_dir);
     var session_store = try SessionStore.init(allocator, sessions_dir);
     defer session_store.deinit();
 
-    // Initialize control UI
     var control_ui = ControlUI.init(allocator, cfg.gateway_control_ui_enabled, cfg.gateway_allow_insecure_auth);
     defer control_ui.deinit();
 
-    // Initialize autonomous agent components
-    const state_file_path = "/home/user/zeptoclaw/.zeptoclaw_state.json";
+    const state_file_path = try compat.homeJoin(allocator, ".zeptoclaw/state.json");
+    defer allocator.free(state_file_path);
     var autonomous_state_store = try StateStore.init(allocator, state_file_path);
     defer autonomous_state_store.deinit();
 

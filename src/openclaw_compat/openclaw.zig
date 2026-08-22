@@ -12,21 +12,12 @@ const Allocator = std.mem.Allocator;
 // Path constants
 // ---------------------------------------------------------------------------
 
-pub const primary_config_paths = [_][]const u8{
-    "/home/user/.zeptoclaw/config.json",
-    "./zeptoclaw.json",
-    "./config.json",
+pub const primary_config_home_rel = [_][]const u8{".zeptoclaw/config.json"};
+pub const cwd_config_paths = [_][]const u8{ "./zeptoclaw.json", "./config.json" };
+pub const legacy_config_home_rel = [_][]const u8{
+    ".openclaw/openclaw.json",
+    ".openclaw/workspace/openclaw.json",
 };
-
-pub const legacy_config_paths = [_][]const u8{
-    "/home/user/.openclaw/openclaw.json",
-    "/home/user/.openclaw/workspace/openclaw.json",
-};
-
-// Ordered: try primary first, then legacy (read-only fallback).
-pub fn defaultConfigCandidates() []const []const u8 {
-    return &(primary_config_paths ++ legacy_config_paths);
-}
 
 fn dirExists(path: []const u8) bool {
     const io = compat.getIo();
@@ -35,10 +26,9 @@ fn dirExists(path: []const u8) bool {
     return true;
 }
 
-// Workspace: ~/.zeptoclaw/workspace first (symlink to OpenClaw workspace on this host),
-// then ~/.openclaw/workspace. Both should be the bkataru/barvis git tree.
+// Workspace: ~/.zeptoclaw/workspace first, then ~/.openclaw/workspace (read-only leftover).
 pub fn resolveWorkspaceDir(allocator: Allocator) ![]const u8 {
-    const home = compat.getEnvVarOwned(allocator, "HOME") catch try allocator.dupe(u8, "/home/user");
+    const home = compat.getEnvVarOwned(allocator, "HOME") catch try allocator.dupe(u8, ".");
     defer allocator.free(home);
     const zepto_ws = try std.fmt.allocPrint(allocator, "{s}/.zeptoclaw/workspace", .{home});
     if (dirExists(zepto_ws)) return zepto_ws;
@@ -50,14 +40,28 @@ pub fn resolveWorkspaceDir(allocator: Allocator) ![]const u8 {
 
 // Return the first existing config file, or null if none.
 pub fn findExistingConfig(allocator: Allocator) ?[]const u8 {
-    const candidates = primary_config_paths ++ legacy_config_paths;
-    for (candidates) |p| {
+    for (primary_config_home_rel) |rel| {
+        const path = compat.homeJoin(allocator, rel) catch continue;
         const cwd = compat.cwd();
-        if (cwd.openFile(p, .{})) |f| {
+        if (cwd.openFile(path, .{})) |f| {
             f.close(cwd.io);
-            // dupe so caller can free
-            return allocator.dupe(u8, p) catch null;
+            return path;
+        } else |_| allocator.free(path);
+    }
+    for (cwd_config_paths) |path| {
+        const cwd = compat.cwd();
+        if (cwd.openFile(path, .{})) |f| {
+            f.close(cwd.io);
+            return allocator.dupe(u8, path) catch null;
         } else |_| continue;
+    }
+    for (legacy_config_home_rel) |rel| {
+        const path = compat.homeJoin(allocator, rel) catch continue;
+        const cwd = compat.cwd();
+        if (cwd.openFile(path, .{})) |f| {
+            f.close(cwd.io);
+            return path;
+        } else |_| allocator.free(path);
     }
     return null;
 }

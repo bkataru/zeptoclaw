@@ -20,7 +20,9 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
     }
     std.debug.print("\n\nStarting Baileys — scan QR with WhatsApp (Linked Devices).\nTimeout 120s, Ctrl+C to abort.\n\n", .{});
 
-    const wrapper_path = try pa.dupe(u8, "/home/user/zeptoclaw/src/channels/whatsapp/baileys_wrapper.js");
+    const home = try compat.getEnvVarOwned(allocator, "HOME");
+    defer allocator.free(home);
+    const wrapper_path = try std.fmt.allocPrint(pa, "{s}/zeptoclaw/src/channels/whatsapp/baileys_wrapper.js", .{home});
     defer pa.free(wrapper_path);
 
     var child = try std.process.spawn(compat.getIo(), .{

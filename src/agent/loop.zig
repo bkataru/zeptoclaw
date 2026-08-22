@@ -7,6 +7,7 @@ const tools_mod = @import("tools.zig");
 const core_tools = @import("core_tools.zig");
 const transcript = @import("transcript.zig");
 const openclaw = @import("../openclaw_compat/openclaw.zig");
+const compat = @import("../compat.zig");
 const engagement = @import("../channels/whatsapp/engagement.zig");
 
 const skills = @import("../skills/skill_sdk.zig");
@@ -65,6 +66,7 @@ pub const Agent = struct {
     exec_tools: execution_context.ToolRegistry,
     transcripts: transcript.Store,
     owns_workspace: bool = false,
+    owns_transcript_dir: bool = false,
 
     /// Memory: Caller owns returned Agent; must call deinit(). `nim_client` is borrowed.
     pub fn init(allocator: std.mem.Allocator, nim_client: *NIMClient, max_messages: u32) !Agent {
@@ -84,6 +86,8 @@ pub const Agent = struct {
             owns = true;
         } else |_| {}
 
+        const tdir = try compat.homeJoin(allocator, ".zeptoclaw/sessions/transcripts");
+
         return .{
             .allocator = allocator,
             .session = Session.init(allocator, max_messages),
@@ -94,13 +98,15 @@ pub const Agent = struct {
             .params = params,
             .skill_metadata = skill_metadata,
             .exec_tools = execution_context.ToolRegistry.init(allocator),
-            .transcripts = transcript.Store.init(allocator, "sessions/transcripts"),
+            .transcripts = transcript.Store.init(allocator, tdir),
             .owns_workspace = owns,
+            .owns_transcript_dir = true,
         };
     }
 
     pub fn setWorkspace(self: *Agent, path: []const u8) void {
         if (self.owns_workspace) self.allocator.free(self.workspace);
+        if (self.owns_transcript_dir) self.allocator.free(self.transcripts.dir);
         self.workspace = path;
         self.owns_workspace = false;
     }
@@ -118,6 +124,7 @@ pub const Agent = struct {
         self.exec_tools.deinit();
         git_workflow.skill.deinit(self.allocator);
         if (self.owns_workspace) self.allocator.free(self.workspace);
+        if (self.owns_transcript_dir) self.allocator.free(self.transcripts.dir);
     }
 
     /// Memory: Caller owns returned slice; call allocator.free.

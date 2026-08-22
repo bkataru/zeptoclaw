@@ -1,6 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Memory: Caller owns `{HOME}/{rel}`.
+pub fn homeJoin(allocator: std.mem.Allocator, rel: []const u8) ![]u8 {
+    const home = getEnvVarOwned(allocator, "HOME") catch try allocator.dupe(u8, ".");
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ home, rel });
+}
+
 /// Memory: Caller owns returned slice; call `allocator.free()` to free.
 pub fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     if (comptime @hasDecl(std.process, "getEnvVarOwned")) {

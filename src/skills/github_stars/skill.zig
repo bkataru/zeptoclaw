@@ -2,11 +2,16 @@
 //! Search Baala's GitHub stars for relevant tools, libraries, and references
 
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const execution_context = @import("../execution_context.zig");
 
 const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
+
+fn leakedHome(rel: []const u8) []const u8 {
+    return compat.homeJoin(std.heap.page_allocator, rel) catch rel;
+}
 
 pub const skill = struct {
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
@@ -52,10 +57,10 @@ pub const skill = struct {
 
     // Parse configuration from JSON (per-execution)
     fn parseConfig(config_json: std.json.Value) Config {
-        const index_path = if (config_json != .object) "/home/user/.openclaw/workspace/memory/github-stars-index.json" else if (config_json.object.get("index_path")) |v|
-            if (v == .string) v.string else "/home/user/.openclaw/workspace/memory/github-stars-index.json"
+        const index_path = if (config_json != .object) leakedHome(".zeptoclaw/workspace/memory/github-stars-index.json") else if (config_json.object.get("index_path")) |v|
+            if (v == .string) v.string else leakedHome(".zeptoclaw/workspace/memory/github-stars-index.json")
         else
-            "/home/user/.openclaw/workspace/memory/github-stars-index.json";
+            leakedHome(".zeptoclaw/workspace/memory/github-stars-index.json");
         const sync_interval_hours = if (config_json != .object) 24 else if (config_json.object.get("sync_interval_hours")) |v|
             if (v == .integer) try std.math.cast(u32, v.integer) else 24
         else

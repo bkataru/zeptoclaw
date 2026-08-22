@@ -2,11 +2,16 @@
 //! Auto-detect and recover from stuck ZeptoClaw gateway sessions
 
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const execution_context = @import("../execution_context.zig");
 
 const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
+
+fn leakedHome(rel: []const u8) []const u8 {
+    return compat.homeJoin(std.heap.page_allocator, rel) catch rel;
+}
 
 pub const skill = struct {
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
@@ -60,7 +65,7 @@ pub const skill = struct {
         _ = config_json;
         return Config{
             .stuck_threshold_minutes = 10,
-            .log_path = "/home/user/.zeptoclaw/logs/gateway-watchdog.log",
+            .log_path = leakedHome(".zeptoclaw/logs/gateway-watchdog.log"),
             .gateway_service = "zeptoclaw-gateway.service",
             .enable_auto_restart = true,
             .notification_url = null,

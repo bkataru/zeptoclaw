@@ -1,6 +1,6 @@
 # WhatsApp channel
 
-Live path: Zig `WhatsAppChannel` spawns Node `src/channels/whatsapp/baileys_wrapper.js` (Baileys 6.x). Auth: `sessions/whatsapp/` (gitignored in **this** repo). The private `bkataru/barvis` backup copies that dir plus transcripts into `zeptoclaw-state/` every 30 minutes via `barvis-sync`.
+Live path: Zig `WhatsAppChannel` spawns Node `src/channels/whatsapp/baileys_wrapper.js` (Baileys 6.x). Auth: `~/.zeptoclaw/sessions/whatsapp/` (not in the public repo). `barvis-sync` copies it plus transcripts into private `bkataru/barvis` `zeptoclaw-state/`.
 
 ## RPC
 

@@ -2,11 +2,16 @@
 //! Execute system commands and trigger actions via local HTTP endpoints
 
 const std = @import("std");
+const compat = @import("../../compat.zig");
 const sdk = @import("../skill_sdk.zig");
 const execution_context = @import("../execution_context.zig");
 
 const SkillResult = execution_context.SkillResult;
 const ExecutionContext = execution_context.ExecutionContext;
+
+fn leakedHome(rel: []const u8) []const u8 {
+    return compat.homeJoin(std.heap.page_allocator, rel) catch rel;
+}
 
 pub const skill = struct {
     pub fn init(allocator: std.mem.Allocator, config_value: std.json.Value) !void {
@@ -67,10 +72,10 @@ pub const skill = struct {
             if (v == .integer) try std.math.cast(u16, v.integer) else 9001
         else
             9001;
-        const webhook_secret_path = if (config_json != .object) "/home/user/.zeptoclaw/.webhook-secret" else if (config_json.object.get("webhook_secret_path")) |v|
-            if (v == .string) v.string else "/home/user/.zeptoclaw/.webhook-secret"
+        const webhook_secret_path = if (config_json != .object) leakedHome(".zeptoclaw/.webhook-secret") else if (config_json.object.get("webhook_secret_path")) |v|
+            if (v == .string) v.string else leakedHome(".zeptoclaw/.webhook-secret")
         else
-            "/home/user/.zeptoclaw/.webhook-secret";
+            leakedHome(".zeptoclaw/.webhook-secret");
         const enable_webhook = if (config_json != .object) true else if (config_json.object.get("enable_webhook")) |v|
             if (v == .bool) v.bool else true
         else
