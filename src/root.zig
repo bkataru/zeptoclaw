@@ -23,6 +23,7 @@ pub const agent = struct {
     pub const core_tools = @import("agent/core_tools.zig");
     pub const transcript = @import("agent/transcript.zig");
     pub const cron = @import("agent/cron.zig");
+    pub const memory = @import("agent/memory.zig");
 };
 
 // Channels
@@ -132,6 +133,7 @@ comptime {
         _ = agent.core_tools;
         _ = agent.loop;
         _ = agent.cron;
+        _ = agent.memory;
         _ = agent.tools;
         _ = agent.transcript;
         _ = channels.cli_utils;

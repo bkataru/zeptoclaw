@@ -23,6 +23,7 @@ const InboundProcessor = zeptoclaw.channels.whatsapp.InboundProcessor;
 const OutboundProcessor = zeptoclaw.channels.whatsapp.OutboundProcessor;
 const AccessControl = zeptoclaw.channels.whatsapp.AccessControl;
 const NIMClient = zeptoclaw.providers.nim.NIMClient;
+const memory = zeptoclaw.agent.memory;
 const whatsapp_types = zeptoclaw.channels.whatsapp.types;
 
 // Global server reference for signal handler
@@ -127,49 +128,10 @@ fn read_ws_file(alloc: std.mem.Allocator, ws_dir: []const u8, name: []const u8, 
     return buf;
 }
 
-/// Daily-notes memory per openclaw AGENTS.md protocol: today + yesterday journals.
-/// MEMORY.md is loaded by workspace_system_prompt only for main-session DMs.
-/// Memory: Caller owns returned slice if non-null; free with `alloc.free()`.
-fn daily_memory_context(alloc: std.mem.Allocator, chat_id: []const u8) ?[]const u8 {
-    const ws_dir = zeptoclaw.openclaw_compat.resolveWorkspaceDir(alloc) catch return null;
-    defer alloc.free(ws_dir);
-    const now_utc = compat.timestamp();
-    const ist_secs = now_utc + 5 * 3600 + 30 * 60;
-
-    var out = std.ArrayList(u8).initCapacity(alloc, 4 * 1024) catch return null;
-    errdefer out.deinit(alloc);
-    out.appendSlice(alloc, "\n--- Today's journal notes ---\n") catch return null;
-    // Try today + yesterday filenames under memory/
-    var i: i64 = 0;
-    while (i < 2) : (i += 1) {
-        const day_secs = ist_secs - i * 86400;
-        const days: i64 = @divFloor(day_secs, 86400);
-        const secs_of_day: i64 = @mod(day_secs, 86400);
-        const h = @divFloor(secs_of_day, 3600);
-        const m = @divFloor(@mod(secs_of_day, 3600), 60);
-        _ = h;
-        _ = m;
-        // YYYY-MM-DD from unix day
-        const path = std.fmt.allocPrint(alloc, "{s}/memory/{d}-{d}-{d}.md", .{ ws_dir, 1970 + @divFloor(days, 366), 1 + @divFloor(@mod(days, 366), 31), 1 + @mod(days, 31) }) catch continue;
-        defer alloc.free(path);
-        const cwd = compat.cwd();
-        const f = cwd.openFile(path, .{}) catch continue;
-        defer f.close(cwd.io);
-        const st = f.stat(cwd.io) catch continue;
-        const sz: usize = @intCast(@min(st.size, 8 * 1024));
-        const buf = alloc.alloc(u8, sz) catch continue;
-        defer alloc.free(buf);
-        var rdr = f.reader(cwd.io, &[_]u8{});
-        rdr.interface.readSliceAll(buf) catch continue;
-        var it = std.mem.splitScalar(u8, buf, '\n');
-        while (it.next()) |line| {
-            if (std.mem.indexOf(u8, line, chat_id) != null) {
-                out.appendSlice(alloc, line) catch return null;
-                out.appendSlice(alloc, "\n") catch return null;
-            }
-        }
-    }
-    return out.toOwnedSlice(alloc) catch return null;
+/// Daily notes for this chat (DMs get the full today+yesterday files).
+/// Memory: Caller owns returned slice if non-null; free with alloc.free().
+fn daily_memory_context(alloc: std.mem.Allocator, chat_id: []const u8, is_dm: bool) ?[]const u8 {
+    return memory.dailyContext(alloc, chat_id, is_dm);
 }
 
 /// Fallback echo reply when NIM is unavailable.
@@ -178,56 +140,9 @@ fn fallback_reply(alloc: std.mem.Allocator, prompt: []const u8, model: []const u
     return std.fmt.allocPrint(alloc, "barvis here — you said: {s} (model {s} unavailable, echo)", .{ prompt, model });
 }
 
-/// Append a chat turn to workspace memory/YYYY-MM-DD.md (openclaw daily-note protocol).
-/// Format mirrors openclaw journals: '# Barvis Journal' + IST timeline entries.
-/// Memory: No return ownership; `text` and `chat_id` are borrowed (not freed).
+/// Append a chat turn to workspace memory/YYYY-MM-DD.md (real IST calendar).
 fn journal_append(alloc: std.mem.Allocator, kind: []const u8, chat_id: []const u8, text: []const u8) void {
-    const ws_dir = zeptoclaw.openclaw_compat.resolveWorkspaceDir(alloc) catch return;
-    defer alloc.free(ws_dir);
-    const now_utc = compat.timestamp();
-    const ist_secs = now_utc + 5 * 3600 + 30 * 60;
-    const days: i64 = @divFloor(ist_secs, 86400);
-    const secs_of_day: i64 = @mod(ist_secs, 86400);
-    const h = @divFloor(secs_of_day, 3600);
-    const m = @divFloor(@mod(secs_of_day, 3600), 60);
-    const s = @mod(secs_of_day, 60);
-    _ = h;
-    _ = m;
-    _ = s;
-    const path = std.fmt.allocPrint(alloc, "{s}/memory/{d}-{d}-{d}.md", .{ ws_dir, 1970 + @divFloor(days, 366), 1 + @divFloor(@mod(days, 366), 31), 1 + @mod(days, 31) }) catch return;
-    defer alloc.free(path);
-    const cwd = compat.cwd();
-    if (std.fs.path.dirname(path)) |dir| {
-        std.Io.Dir.createDirPath(cwd.dir, cwd.io, dir) catch {};
-    }
-    // Read existing journal (if any), append our entry, rewrite whole file.
-    // Io.File has no seekTo; read-modify-write avoids that entirely.
-    var body = std.ArrayList(u8).initCapacity(alloc, text.len + 128) catch return;
-    defer body.deinit(alloc);
-    if (cwd.openFile(path, .{})) |existing| {
-        defer existing.close(cwd.io);
-        const st = existing.stat(cwd.io) catch return;
-        if (st.size > 0) {
-            const sz: usize = @intCast(@min(st.size, 64 * 1024));
-            const buf = alloc.alloc(u8, sz) catch return;
-            defer alloc.free(buf);
-            var rdr = existing.reader(cwd.io, &[_]u8{});
-            _ = rdr.interface.readSliceAll(buf) catch return;
-            body.appendSlice(alloc, buf) catch return;
-        }
-    } else |_| {}
-    body.appendSlice(alloc, "\n[") catch return;
-    body.appendSlice(alloc, kind) catch return;
-    body.appendSlice(alloc, "] ") catch return;
-    body.appendSlice(alloc, chat_id) catch return;
-    body.appendSlice(alloc, " ") catch return;
-    body.appendSlice(alloc, text) catch return;
-    body.appendSlice(alloc, "\n") catch return;
-
-    const out = cwd.createFile(path, .{ .truncate = true }) catch return;
-    defer out.close(cwd.io);
-    var writer = out.writer(cwd.io, &[_]u8{});
-    writer.interface.writeAll(body.items) catch return;
+    memory.journalAppend(alloc, kind, chat_id, text);
 }
 
 /// Build a compact transcript of the last N session messages as extra context
@@ -402,7 +317,7 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
             }
         }
 
-        const daily_mem = daily_memory_context(g_whatsapp_alloc, chat_id_copy);
+        const daily_mem = daily_memory_context(g_whatsapp_alloc, chat_id_copy, is_dm);
         defer if (daily_mem) |dm| g_whatsapp_alloc.free(dm);
         if (daily_mem) |dm| {
             if (dm.len > 0) {
@@ -487,6 +402,8 @@ fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) any
     g_whatsapp_alloc.free(send_result.message_ids);
     std.log.info("[whatsapp] sent message_id=chunked/{d} to {s}", .{ send_result.chunk_count, chat_id_copy });
     std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, reply_text });
+    journal_append(g_whatsapp_alloc, "out", chat_id_copy, reply_text);
+    if (is_dm) memory.persistDmNote(g_whatsapp_alloc, chat_id_copy, body_copy, reply_text);
     const rlen = @min(reply_text.len, g_last_reply_buf.len);
     @memcpy(g_last_reply_buf[0..rlen], reply_text[0..rlen]);
     g_last_reply_len = rlen;
@@ -728,6 +645,11 @@ pub fn main() !void {
         break :blk null;
     };
     _ = cron_thread;
+    const mem_thread = std.Thread.spawn(.{}, memory.runLoop, .{}) catch |err| blk: {
+        std.log.warn("[memory] failed to spawn compact loop: {}", .{err});
+        break :blk null;
+    };
+    _ = mem_thread;
 
     // Start the server
     try server.start();
