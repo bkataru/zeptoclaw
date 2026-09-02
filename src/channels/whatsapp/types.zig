@@ -222,12 +222,16 @@ pub const WhatsAppConfig = struct {
     debounce_ms: u32,
     send_read_receipts: bool,
     group_require_mention: bool,
+    native: bool = false,
+
     group_activation_commands: std.ArrayList([]const u8),
     pub fn init(allocator: std.mem.Allocator) !WhatsAppConfig {
         return .{
             .allocator = allocator,
             .enabled = false,
             .auth_dir = "",
+            .native = false,
+
             .dm_policy = .pairing,
             .allow_from = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             .group_policy = .allowlist,

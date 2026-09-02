@@ -1,6 +1,7 @@
 const std = @import("std");
 const compat = @import("zeptoclaw").compat;
 const Config = @import("zeptoclaw").config.Config;
+const WhatsAppChannel = @import("zeptoclaw").channels.whatsapp.WhatsAppChannel;
 
 pub fn runPairing(allocator: std.mem.Allocator) !void {
     var cfg = Config.load(allocator) catch |err| {
@@ -13,6 +14,21 @@ pub fn runPairing(allocator: std.mem.Allocator) !void {
     defer allocator.free(auth_dir);
     // Use page_allocator for large transient allocs to avoid GPA OOM
     const pa = std.heap.page_allocator;
+
+    if (cfg.whatsapp_native) {
+        std.debug.print("\nWhatsApp Pairing (native)\n  Auth dir: {s}\n  Store: {s}/native.sqlite\n  Allow from: ", .{ auth_dir, auth_dir });
+        for (cfg.whatsapp_allow_from, 0..) |jid, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{jid});
+        }
+        std.debug.print("\n\nScan QR with WhatsApp (Linked Devices). Ctrl+C to abort.\n\n", .{});
+        const jid = try WhatsAppChannel.runNativePairForeground(allocator, auth_dir);
+        defer allocator.free(jid);
+        std.debug.print("paired as {s}\n", .{jid});
+        std.debug.print("Credentials saved to {s}/native.sqlite\nRestart gateway: systemctl --user restart zeptoclaw-gateway.service\n", .{auth_dir});
+        return;
+    }
+
     std.debug.print("\nWhatsApp Pairing\n  Auth dir: {s}\n  Allow from: ", .{auth_dir});
     for (cfg.whatsapp_allow_from, 0..) |jid, i| {
         if (i > 0) std.debug.print(", ", .{});

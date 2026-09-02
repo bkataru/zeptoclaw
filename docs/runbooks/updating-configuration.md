@@ -7,7 +7,7 @@ Important fields:
 ```json
 {
   "env": { "NVIDIA_API_KEY": "from-env-preferred" },
-  "agents": { "defaults": { "model": { "primary": "thinkingmachines/inkling" } } },
+  "agents": { "defaults": { "model": { "primary": "nvidia/nemotron-3-ultra-550b-a55b", "fallbacks": ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"] } } },
   "gateway": { "port": 18789, "auth": { "mode": "token", "token": "..." } },
   "channels": {
     "whatsapp": {

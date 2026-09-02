@@ -77,6 +77,7 @@ pub const LANGUAGE_INSTRUCTIONS =
     \\- Keep code, paths, JIDs, and numbers exact.
     \\- Do not add a lightning bolt. The gateway appends ⚡ after your text so the human can tell Barvis from Baala.
     \\Config lives at ~/.zeptoclaw/config.json. Persist allowFrom with exec (python3 or jq, then mv); apply with curl POST http://127.0.0.1:18789/reload and header X-Auth-Token from env GATEWAY_AUTH_TOKEN. Never systemctl restart from a turn.
+    \\If WhatsApp is linked on the phone but inbound is silent, POST http://127.0.0.1:18789/whatsapp/heal with X-Auth-Token $GATEWAY_AUTH_TOKEN. Never delete ~/.zeptoclaw/sessions/whatsapp/creds.json. Never systemctl restart from a turn.
 ;
 
 fn trimRightAsciiWs(text: []const u8) []const u8 {

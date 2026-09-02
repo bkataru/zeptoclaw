@@ -34,6 +34,301 @@ const MAX_SEEN = 2000;
 let connectedAtMs = 0;
 let ledgerPath = null;
 const fingerprints = new Map(); // key -> lastSeenMs
+let decryptFails = 0;
+let lastDecryptJid = '';
+let lastDecryptLogMs = 0;
+let lastHealMs = 0;
+let healsInWindow = 0;
+let windowStartMs = 0;
+let emittedSinceHeal = false;
+let sessionHealthy = false;
+let nodeRestartSent = false;
+let consecutiveCloseStorm = 0;
+let closeStormStartMs = 0;
+const recentMessages = new Map();
+let lastWsMs = 0;
+let stderrBlocked = false;
+function origConsoleError(...args) {
+    // A full Zig stderr pipe blocks Node's event loop and WhatsApp looks
+    // connected while messages.upsert never reaches JSON-RPC stdout.
+    if (stderrBlocked) return;
+    const s = args.map((a) => (typeof a === 'string' ? a : (a && a.stack) || (a && a.message) || String(a))).join(' ');
+    try {
+        const ok = process.stderr.write(s + '\n');
+        if (!ok) {
+            stderrBlocked = true;
+            process.stderr.once('drain', () => { stderrBlocked = false; });
+        }
+    } catch (_) {}
+}
+let lastSelfProbeMs = 0;
+
+function selfChatJids() {
+    const out = [];
+    const seen = new Set();
+    const add = (jid) => {
+        const s = String(jid || '');
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        out.push(s);
+    };
+    const lid = (socket && socket.user && socket.user.lid) || '';
+    if (String(lid).includes('@lid')) {
+        add(String(lid).split('@')[0].split(':')[0] + '@lid');
+    }
+    const pn = String(selfE164 || '').replace(/[^0-9:]/g, '').split(':')[0];
+    if (pn) add(pn + '@s.whatsapp.net');
+    // Notes/"Message yourself" LID seen in operator self-chat (distinct from me.lid).
+    add('200008104202464@lid');
+    return out;
+}
+
+async function probeSelfChat() {
+    if (Date.now() - lastSelfProbeMs < 180000) return;
+    lastSelfProbeMs = Date.now();
+    const jids = selfChatJids();
+    origConsoleError('[zepto] self-probe start ' + jids.join(','));
+    for (const jid of jids) {
+        try {
+            if (socket && typeof socket.assertSessions === 'function') {
+                await socket.assertSessions([jid], true);
+            }
+        } catch (err) {
+            origConsoleError('[zepto] self-probe session fail ' + jid + ' ' + (err && err.message ? err.message : err));
+        }
+    }
+    // Do not send a wake-word body: that starts an agent turn. Session assert is enough
+    // to rebuild the self-chat ratchet so the next fromMe ping can decrypt.
+}
+
+function parseJidParts(jid) {
+    const s = String(jid || '');
+    const at = s.indexOf('@');
+    if (at < 0) return null;
+    const left = s.slice(0, at);
+    const server = s.slice(at + 1);
+    const colon = left.indexOf(':');
+    const user = colon >= 0 ? left.slice(0, colon) : left;
+    const device = colon >= 0 ? parseInt(left.slice(colon + 1), 10) || 0 : 0;
+    if (!user || !server) return null;
+    return { user, server, device };
+}
+
+function encodeJidParts(user, server, device) {
+    return (device ? user + ':' + device : user) + '@' + server;
+}
+
+function sessionDevicesFromDir(dir) {
+    const map = Object.create(null);
+    if (!dir) return map;
+    let names;
+    try {
+        names = fs.readdirSync(dir);
+    } catch (_) {
+        return map;
+    }
+    for (const name of names) {
+        const m = /^session-([^.]+)\.(\d+)\.json$/.exec(name);
+        if (!m) continue;
+        const user = m[1];
+        const device = parseInt(m[2], 10);
+        if (!map[user]) map[user] = [];
+        if (!map[user].includes(device)) map[user].push(device);
+    }
+    return map;
+}
+
+function altDecryptJids(jid, opts) {
+    const parsed = parseJidParts(jid);
+    if (!parsed) return [];
+    const mePn = String((opts && opts.mePn) || '');
+    const meLid = String((opts && opts.meLid) || '');
+    const devicesByUser = (opts && opts.devicesByUser) || {};
+    const seen = new Set([parsed.user + '|' + parsed.server + '|' + (parsed.device || 0)]);
+    const alts = [];
+    const add = (user, server, device) => {
+        if (!user || !server) return;
+        const d = device || 0;
+        const key = user + '|' + server + '|' + d;
+        if (seen.has(key)) return;
+        seen.add(key);
+        alts.push(encodeJidParts(user, server, d));
+    };
+    const addUserDevices = (user, server) => {
+        add(user, server, 0);
+        const extra = devicesByUser[user] || [];
+        for (const d of extra) add(user, server, d);
+    };
+    addUserDevices(parsed.user, parsed.server);
+    const isUs = (mePn && parsed.user === mePn) || (meLid && parsed.user === meLid);
+    if (isUs) {
+        if (meLid) addUserDevices(meLid, 'lid');
+        if (mePn) addUserDevices(mePn, 's.whatsapp.net');
+    }
+    return alts;
+}
+
+function wrapSelfChatDecrypt(sock) {
+    const repo = sock && sock.signalRepository;
+    if (!repo || typeof repo.decryptMessage !== 'function' || repo.__zeptoWrapped) return;
+    const orig = repo.decryptMessage.bind(repo);
+    repo.__zeptoWrapped = true;
+    repo.decryptMessage = async (opts) => {
+        try {
+            return await orig(opts);
+        } catch (err) {
+            const me = (sock && sock.user) || (sock && sock.authState && sock.authState.creds && sock.authState.creds.me) || {};
+            const meLid = String(me.lid || '').split('@')[0].split(':')[0];
+            const mePn = String(me.id || selfJid || '').split('@')[0].split(':')[0];
+            const type = String((opts && opts.type) || '');
+            const origParts = parseJidParts(opts && opts.jid);
+            const alts = altDecryptJids(opts && opts.jid, {
+                mePn,
+                meLid,
+                devicesByUser: sessionDevicesFromDir(authDir)
+            });
+            for (const alt of alts) {
+                // pkmsg builds a session under the address we pass. Never attach
+                // a pre-key payload to a different identity (PN vs LID) — that
+                // consumes our one-time prekeys and poisons the PN session.
+                if (type === 'pkmsg' && origParts) {
+                    const p = parseJidParts(alt);
+                    if (!p || p.user !== origParts.user || p.server !== origParts.server) continue;
+                }
+                try {
+                    origConsoleError('[zepto] decrypt retry alt=' + alt + ' from=' + ((opts && opts.jid) || '') + ' type=' + type);
+                    const out = await orig(Object.assign({}, opts, { jid: alt }));
+                    origConsoleError('[zepto] decrypt retry ok alt=' + alt);
+                    return out;
+                } catch (_) {}
+            }
+            origConsoleError('[zepto] decrypt alts exhausted jid=' + ((opts && opts.jid) || '') + ' type=' + type + ' n=' + alts.length);
+            throw err;
+        }
+    };
+}
+
+function isWipableSignalFile(name) {
+    return name.startsWith('session-') || name.startsWith('sender-key-');
+}
+
+function wipeSignalSessions(dir, reason) {
+    const out = { session: 0, senderKey: 0 };
+    const reasonStr = String(reason || '');
+    if (!dir) {
+        origConsoleError('[zepto] heal wiped session=0 sender-key=0 creds_kept=true reason=' + reasonStr);
+        return out;
+    }
+    let names;
+    try {
+        names = fs.readdirSync(dir);
+    } catch (err) {
+        if (err && err.code === 'ENOENT') {
+            origConsoleError('[zepto] heal wiped session=0 sender-key=0 creds_kept=true reason=' + reasonStr);
+            return out;
+        }
+        throw err;
+    }
+    for (const name of names) {
+        if (!isWipableSignalFile(name)) continue;
+        try {
+            const p = path.join(dir, name);
+            if (!fs.statSync(p).isFile()) continue;
+            fs.unlinkSync(p);
+            if (name.startsWith('session-')) out.session += 1;
+            else out.senderKey += 1;
+        } catch (_) {}
+    }
+    origConsoleError('[zepto] heal wiped session=' + out.session + ' sender-key=' + out.senderKey + ' creds_kept=true reason=' + reasonStr);
+    return out;
+}
+
+function rememberRecentMessage(id, message) {
+    if (!id || !message) return;
+    recentMessages.set(id, message);
+    if (recentMessages.size > 200) {
+        const first = recentMessages.keys().next().value;
+        recentMessages.delete(first);
+    }
+}
+
+function noteDecryptFail(jidHint) {
+    decryptFails += 1;
+    if (jidHint) {
+        const m = String(jidHint).match(/(\d{6,})/);
+        if (m) lastDecryptJid = m[1];
+    }
+    const now = Date.now();
+    if (now - lastDecryptLogMs >= 10000) {
+        lastDecryptLogMs = now;
+        origConsoleError('[zepto] decrypt fail n=' + decryptFails + ' jid=' + (lastDecryptJid || ''));
+    }
+}
+
+function shouldCountDecryptFail(upsertType) {
+    return upsertType === 'notify';
+}
+
+function shouldMarkSessionHealthy(opts) {
+    return !!(opts && opts.fromMe && !opts.isGroup && opts.hasBody);
+}
+
+function shouldAutoHeal(opts) {
+    const decryptN = (opts && opts.decryptFails) || 0;
+    const connected = (opts && opts.connectedAtMs) || 0;
+    const nowMs = (opts && opts.nowMs) || 0;
+    const healthy = !!(opts && opts.sessionHealthy);
+    const minFails = (opts && opts.minFails) || 8;
+    const minConnectedMs = (opts && opts.minConnectedMs) || 60000;
+    if (healthy) return false;
+    if (decryptN < minFails) return false;
+    if (!connected) return false;
+    if (nowMs - connected < minConnectedMs) return false;
+    return true;
+}
+
+function shouldRequestNodeRestart(opts) {
+    if (opts && opts.nodeRestartSent) return false;
+    if (opts && opts.sessionHealthy) return false;
+    if (opts && opts.reason === 'close-storm') return false;
+    return ((opts && opts.healsInWindow) || 0) >= 2;
+}
+
+function maybeHealDecrypt(reason) {
+    const now = Date.now();
+    if (!shouldAutoHeal({ decryptFails, connectedAtMs, nowMs: now, sessionHealthy })) {
+        if (decryptFails >= 8 && sessionHealthy) {
+            origConsoleError('[zepto] heal skip reason=' + reason + ' healthy=true fails=' + decryptFails);
+        }
+        return;
+    }
+    origConsoleError('[zepto] heal fire reason=' + reason + ' fails=' + decryptFails + ' healthy=' + sessionHealthy);
+    healAndReinit(reason).catch((err) => {
+        origConsoleError('[zepto] heal failed:', err && err.message ? err.message : err);
+    });
+}
+
+async function healAndReinit(reason) {
+    if (Date.now() - lastHealMs < 120000) return false;
+    lastHealMs = Date.now();
+    wipeSignalSessions(authDir, reason);
+    if (Date.now() - windowStartMs > 15 * 60 * 1000) {
+        windowStartMs = Date.now();
+        healsInWindow = 0;
+    }
+    healsInWindow += 1;
+    emittedSinceHeal = false;
+    sessionHealthy = false;
+    decryptFails = 0;
+    // 408/428 close-storm is a transport timeout, not a bad Signal ratchet.
+    // Wiping then init() here skipped scheduleReconnect and reset backoff to 2s,
+    // which looped ~28 minutes of 408s. Wipe only; caller reconnects.
+    if (reason !== 'close-storm') {
+        reconnectBackoffMs = 2000;
+        await init(lastInitOptions);
+    }
+    return true;
+}
 
 function ledgerFile(dir) {
     return path.join(dir, 'inbound-ledger.json');
@@ -190,9 +485,15 @@ async function init(options = {}) {
         printQRInTerminal: false,
         browser,
         logger,
+        // false = do not request FULL dump. Must still set shouldSyncHistoryMessage
+        // or Socket/index.js overrides it to () => false and live fromMe/self-chat
+        // never arrives after a session wipe (history handshake never completes).
         syncFullHistory: false,
-        markOnlineOnConnect: false,
+        shouldSyncHistoryMessage: () => true,
+        markOnlineOnConnect: true,
+        getMessage: async (key) => recentMessages.get(key?.id) || undefined,
     });
+    wrapSelfChatDecrypt(socket);
 
     // Save credentials on update
     socket.ev.on('creds.update', saveCreds);
@@ -200,7 +501,10 @@ async function init(options = {}) {
     // Handle connection updates
     socket.ev.on('connection.update', (update) => {
         if (gen !== sockGen) return;
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect, qr, receivedPendingNotifications } = update;
+        if (receivedPendingNotifications) {
+            origConsoleError('[zepto] pending-notifs connection=' + String(connection || ''));
+        }
 
         if (qr) {
             // Notify QR handlers
@@ -218,12 +522,66 @@ async function init(options = {}) {
             isConnected = true;
             reconnectBackoffMs = 2000;
             reconnectInFlight = false;
+            consecutiveCloseStorm = 0;
+            closeStormStartMs = 0;
+            // Keep decryptFails through handshake. Boot ciphertext used to be
+            // zeroed here, then maybeHealDecrypt never ran again after the 60s gate.
             clearReconnectTimer();
             selfJid = socket.user?.id;
             selfE164 = selfJid ? jidToE164(selfJid) : null;
 
             // Notify connection handlers
             connectionHandlers.forEach(handler => handler({ type: 'connected', selfJid, selfE164 }));
+            console.log(JSON.stringify({ jsonrpc: '2.0', method: 'stats', params: { type: 'connected', decryptFails, lastHealMs, healsInWindow } }));
+            socket.sendPresenceUpdate('available').catch((err) => origConsoleError('[zepto] presence err ' + (err && err.message ? err.message : err)));
+            origConsoleError('[zepto] presence available');
+            const openGen = gen;
+            setTimeout(() => {
+                if (openGen !== sockGen) return;
+                try { if (socket && socket.ev && typeof socket.ev.flush === 'function') socket.ev.flush(); } catch (_) {}
+                origConsoleError('[zepto] flush-buffer emitted=' + emittedSinceHeal);
+            }, 8000);
+            // upsertMessage is createBufferedFunction: it calls ev.buffer() and
+            // never flushes (Baileys defers that to the history state machine).
+            // After the one-shot 8s flush, the next live stanza re-buffers and
+            // the socket looks connected while messages.upsert never fires.
+            let lastTickMs = 0;
+            const flushIv = setInterval(() => {
+                if (openGen !== sockGen || !isConnected) {
+                    clearInterval(flushIv);
+                    return;
+                }
+                try {
+                    if (socket && socket.ev && typeof socket.ev.flush === 'function') {
+                        const drained = socket.ev.flush();
+                        if (drained) origConsoleError('[zepto] ev.flush drained');
+                    }
+                    const now = Date.now();
+                    if (now - lastTickMs >= 15000) {
+                        lastTickMs = now;
+                        const age = lastWsMs ? (now - lastWsMs) : -1;
+                        origConsoleError('[zepto] tick connected=true lastWsAge=' + age + ' decryptFails=' + decryptFails + ' emitted=' + emittedSinceHeal + ' healthy=' + sessionHealthy + ' heals=' + healsInWindow);
+                    }
+                } catch (_) {}
+            }, 2000);
+            probeSelfChat().catch((err) => origConsoleError('[zepto] self-probe err', err && err.message ? err.message : err));
+            setTimeout(() => {
+                if (openGen !== sockGen) return;
+                probeSelfChat().catch((err) => origConsoleError('[zepto] self-probe err', err && err.message ? err.message : err));
+            }, 5000);
+            setTimeout(() => {
+                if (openGen !== sockGen) return;
+                origConsoleError('[zepto] 60s-check healthy=' + sessionHealthy + ' fails=' + decryptFails + ' heals=' + healsInWindow + ' emitted=' + emittedSinceHeal);
+                if (shouldAutoHeal({ decryptFails, connectedAtMs, nowMs: Date.now(), sessionHealthy })) {
+                    healAndReinit('decrypt-burst').catch((err) => {
+                        origConsoleError('[zepto] heal failed:', err && err.message ? err.message : err);
+                    });
+                }
+                if (shouldRequestNodeRestart({ sessionHealthy, healsInWindow, nodeRestartSent, reason: 'decrypt-after-heal' })) {
+                    nodeRestartSent = true;
+                    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'needNodeRestart', params: { reason: 'decrypt-after-heal' } }));
+                }
+            }, 60000);
         }
 
         if (connection === 'close') {
@@ -244,15 +602,105 @@ async function init(options = {}) {
                 console.error('[zepto] logged out; scan QR (no auto-reconnect)');
                 return;
             }
+            if (status === DisconnectReason.badSession) {
+                healAndReinit('badSession').then((healed) => {
+                    if (!healed) scheduleReconnect(500);
+                }).catch((err) => {
+                    origConsoleError('[zepto] heal failed:', err && err.message ? err.message : err);
+                    scheduleReconnect(500);
+                });
+                return;
+            }
+            if (status === 408 || status === 428) {
+                if (consecutiveCloseStorm === 0) closeStormStartMs = Date.now();
+                consecutiveCloseStorm += 1;
+                if (consecutiveCloseStorm >= 8 && Date.now() - closeStormStartMs >= 180000) {
+                    consecutiveCloseStorm = 0;
+                    closeStormStartMs = 0;
+                    healAndReinit('close-storm').then(() => {
+                        origConsoleError('[zepto] close-storm after-heal reconnect healthy=' + sessionHealthy);
+                        scheduleReconnect(status);
+                    }).catch((err) => {
+                        origConsoleError('[zepto] heal failed:', err && err.message ? err.message : err);
+                        scheduleReconnect(status);
+                    });
+                    return;
+                }
+            }
             scheduleReconnect(status == null ? 'close' : status);
         }
     });
 
+    try {
+        const ws = socket.ws;
+        if (ws && typeof ws.on === 'function') {
+            const fillSelfChatRecipient = (node) => {
+                if (gen !== sockGen) return;
+                const attrs = (node && node.attrs) || {};
+                if (attrs.recipient) return;
+                const from = String(attrs.from || '');
+                if (!from.endsWith('@s.whatsapp.net')) return;
+                const me = (socket && socket.user) || (socket.authState && socket.authState.creds && socket.authState.creds.me) || {};
+                const meUser = String(me.id || selfJid || '').split('@')[0].split(':')[0];
+                const fromUser = from.split('@')[0].split(':')[0];
+                if (!meUser || fromUser !== meUser) return;
+                const lidUser = String(me.lid || '').split('@')[0].split(':')[0];
+                if (lidUser) attrs.recipient = lidUser + '@lid';
+            };
+            if (typeof ws.prependListener === 'function') ws.prependListener('CB:message', fillSelfChatRecipient);
+            else ws.on('CB:message', fillSelfChatRecipient);
+            ws.on('CB:message', (node) => {
+                if (gen !== sockGen) return;
+                lastWsMs = Date.now();
+                try { if (socket && socket.ev && typeof socket.ev.flush === 'function') socket.ev.flush(); } catch (_) {}
+                const attrs = (node && node.attrs) || {};
+                let encType = '';
+                if (Array.isArray(node.content)) {
+                    const enc = node.content.find((c) => c && c.tag === 'enc');
+                    if (enc && enc.attrs) encType = String(enc.attrs.type || '');
+                }
+                const blob = [attrs.from, attrs.participant, attrs.recipient, attrs.participant_pn, attrs.sender_pn].join(' ');
+                if (/216638251077681|917019895010/.test(blob) || String(attrs.recipient || '').length) {
+                    origConsoleError('[zepto] raw-msg from=' + (attrs.from || '') + ' participant=' + (attrs.participant || '') + ' recipient=' + (attrs.recipient || '') + ' type=' + (attrs.type || '') + ' enc=' + encType + ' id=' + (attrs.id || ''));
+                }
+            });
+        }
+    } catch (_) {}
+
     // Handle incoming messages
     socket.ev.on('messages.upsert', async ({ messages, type }) => {
         if (gen !== sockGen) return;
-        // notify = live; append can also be live on LID/group. Dedup is ledger/isReplay.
-        if (type !== 'notify' && type !== 'append') return;
+        const m0 = messages && messages[0];
+        const fm0 = !!(m0 && m0.key && m0.key.fromMe);
+        const j0 = (m0 && m0.key && m0.key.remoteJid) || '';
+        const group0 = String(j0).endsWith('@g.us');
+        // Diagnostic: self-chat upserts were vanishing with zero logs
+        // (15:08 pkmsgs decrypted, session .56 written, nothing emitted).
+        // Log every matching message, not just messages[0].jid — history
+        // batches are headed by a group JID.
+        const selfRe = /216638251077681|200008104202464|19082673946862|917019895010/;
+        for (const m of (messages || [])) {
+            const blob = [
+                (m.key && m.key.remoteJid) || '',
+                (m.key && m.key.remoteJidAlt) || '',
+                (m.key && m.key.senderPn) || '',
+                (m.key && m.key.participant) || ''
+            ].join(' ');
+            if (!selfRe.test(blob)) continue;
+            origConsoleError('[zepto] upsert-msg type=' + type
+                + ' id=' + (m.key && m.key.id)
+                + ' jid=' + (m.key && m.key.remoteJid)
+                + ' alt=' + ((m.key && m.key.remoteJidAlt) || '')
+                + ' senderPn=' + ((m.key && m.key.senderPn) || '')
+                + ' fromMe=' + !!(m.key && m.key.fromMe)
+                + ' ts=' + (m.messageTimestamp || 0)
+                + ' keys=' + JSON.stringify(Object.keys(m.message || {})));
+        }
+        if (type === 'notify' || (fm0 && !group0) || !emittedSinceHeal) {
+            origConsoleError('[zepto] upsert type=' + type + ' n=' + ((messages && messages.length) || 0) + ' jid=' + j0 + ' fromMe=' + fm0 + ' hasMsg=' + !!(m0 && m0.message));
+        }
+        // notify/append/prepend: live + history. Dedup is ledger/isReplay.
+        if (type !== 'notify' && type !== 'append' && type !== 'prepend') return;
 
         for (const msg of messages) {
             if (!msg.key) continue;
@@ -271,22 +719,51 @@ async function init(options = {}) {
                 const peerDigits = String(peerE164 || '').replace(/[^0-9]/g, '');
                 const selfDigits = String(selfE164 || '').replace(/[^0-9]/g, '');
                 const isOwnPhoneJid = Boolean(selfDigits && peerDigits === selfDigits && remoteJid.endsWith('@s.whatsapp.net'));
-                if (isOwnPhoneJid) continue;
-                if (!isGroupChat) {
+                // PN self-chat ("Message yourself" addressed as our own @s.whatsapp.net).
+                // Used to `continue` here, which silently dropped operator pings after LID→PN remap.
+                if (isOwnPhoneJid) {
+                    origConsoleError('[zepto] fromMe self-pn', remoteJid);
+                } else if (!isGroupChat) {
                     const pn = jidToE164(msg.key.remoteJidAlt || msg.key.senderPn || '');
                     const pnDigits = String(pn || peerDigits).replace(/[^0-9]/g, '');
                     const allowed = remoteJid.endsWith('@lid') || (pnDigits && allowedFrom.has(pnDigits));
-                    if (!allowed) continue;
+                    if (!allowed) {
+                        origConsoleError('[zepto] skip fromMe', remoteJid);
+                        continue;
+                    }
                 }
             }
+
+            if (!msg.message) {
+                if (shouldCountDecryptFail(type)) {
+                    noteDecryptFail(remoteJid);
+                    if (msg.key.fromMe && !isGroupChat) origConsoleError('[zepto] ciphertext fromMe live ' + remoteJid + ' ' + mid);
+                    maybeHealDecrypt('ciphertext');
+                } else if (msg.key.fromMe && !isGroupChat) {
+                    origConsoleError('[zepto] ciphertext fromMe history type=' + type + ' ' + remoteJid + ' ' + mid);
+                }
+                continue;
+            }
+            rememberRecentMessage(mid, msg.message);
 
             let messageData = extractMessageData(msg);
             if (messageData.mediaType === 'image') {
                 messageData = await saveInboundMedia(msg, messageData);
             }
-            if ((!messageData.body || !String(messageData.body).trim()) && !messageData.mediaType) continue;
+            if ((!messageData.body || !String(messageData.body).trim()) && !messageData.mediaType) {
+                if (msg.key.fromMe && !isGroupChat) origConsoleError('[zepto] skip empty', remoteJid, mid);
+                continue;
+            }
             if (msg.key.fromMe && isGroupChat && !/barvis/i.test(String(messageData.body || ''))) continue;
-            if (isReplay(remoteJid, !!msg.key.fromMe, messageData.body, mid)) continue;
+            if (isReplay(remoteJid, !!msg.key.fromMe, messageData.body, mid)) {
+                if (shouldMarkSessionHealthy({ fromMe: !!msg.key.fromMe, isGroup: isGroupChat, hasBody: !!(messageData.body && String(messageData.body).trim()) })) {
+                    sessionHealthy = true;
+                    emittedSinceHeal = true;
+                    origConsoleError('[zepto] session healthy via replay chat=' + remoteJid + ' type=' + type);
+                }
+                if (msg.key.fromMe && !isGroupChat) origConsoleError('[zepto] skip replay', remoteJid, mid);
+                continue;
+            }
 
             let emitted = false;
             messageHandlers.forEach(handler => {
@@ -297,10 +774,40 @@ async function init(options = {}) {
                     console.error('Message handler error:', err);
                 }
             });
+            // History append/prepend is not proof the live socket works.
+            // Other chats emitting used to set this and skip maybeHealDecrypt
+            // while self-chat stayed ciphertext.
+            const hasBody = !!(messageData.body && String(messageData.body).trim());
+            if (emitted && shouldMarkSessionHealthy({ fromMe: !!msg.key.fromMe, isGroup: isGroupChat, hasBody })) {
+                sessionHealthy = true;
+                emittedSinceHeal = true;
+                nodeRestartSent = false;
+                origConsoleError('[zepto] session healthy chat=' + remoteJid + ' type=' + type + ' id=' + mid);
+            } else if (emitted && type === 'notify') {
+                emittedSinceHeal = true;
+                nodeRestartSent = false;
+            }
             if (emitted || messageHandlers.length === 0) {
                 markHandled(remoteJid, !!msg.key.fromMe, messageData.body, mid, false);
             }
         }
+    });
+
+    socket.ev.on('messaging-history.set', async ({ messages, isLatest, syncType }) => {
+        if (gen !== sockGen) return;
+        const all = messages || [];
+        origConsoleError('[zepto] history n=' + all.length + ' latest=' + isLatest + ' syncType=' + String(syncType));
+        const cutoff = Math.floor(Date.now() / 1000) - 6 * 3600;
+        const recent = all.filter((m) => {
+            const ts = Number(m && m.messageTimestamp || 0);
+            if (ts < cutoff) return false;
+            const jid = (m.key && m.key.remoteJid) || '';
+            if (!jid || jid.endsWith('@g.us') || jid.endsWith('@status') || jid.endsWith('@broadcast')) return false;
+            return !!(m.key && m.key.fromMe);
+        });
+        origConsoleError('[zepto] history ingest n=' + recent.length);
+        if (!recent.length) return;
+        socket.ev.emit('messages.upsert', { messages: recent, type: 'append' });
     });
 
     return { success: true };
@@ -793,6 +1300,13 @@ async function handleRpcRequest(request) {
             case 'setAllowFrom':
                 await sendResponse(setAllowFrom(params?.allow_from));
                 break;
+            case 'heal':
+                await sendResponse(await (async () => {
+                    const w = wipeSignalSessions(authDir || lastInitOptions.auth_dir, 'rpc');
+                    await init(lastInitOptions);
+                    return { success: true, wiped: w };
+                })());
+                break;
             case 'waitForConnection':
                 await sendResponse(await waitForConnection(params?.timeout));
                 break;
@@ -839,8 +1353,8 @@ async function handleRpcRequest(request) {
                         timestamp: Number(msg.timestamp || 0),
                     };
                     const line = JSON.stringify({ jsonrpc: '2.0', method: 'message', params });
-                    console.error('[zepto] emit', params.chatId, params.fromMe, (params.body || '').slice(0, 80));
                     console.log(line);
+                    origConsoleError('[zepto] emit ' + params.chatId + ' ' + params.fromMe + ' ' + (params.body || '').slice(0, 80));
                 });
                 await sendResponse({ success: true });
                 break;
@@ -873,6 +1387,20 @@ async function handleRpcRequest(request) {
  * Main entry point - read JSON-RPC requests from stdin
  */
 if (require.main === module) {
+    console.error = (...args) => {
+        const s = args.map((a) => (typeof a === 'string' ? a : (a && a.message) || String(a))).join(' ');
+        if (s.includes('Bad MAC') || s.includes('Failed to decrypt')) {
+            // History/offline MAC noise is not a live sick socket. Do not
+            // increment decryptFails. Rate-limit so stderr cannot stall Node.
+            const now = Date.now();
+            if (now - lastDecryptLogMs >= 10000) {
+                lastDecryptLogMs = now;
+                origConsoleError('[zepto] mac-noise ' + s.replace(/\s+/g, ' ').slice(0, 80));
+            }
+            return;
+        }
+        origConsoleError(...args);
+    };
     let buffer = '';
 
     process.stdin.setEncoding('utf8');
@@ -939,5 +1467,13 @@ module.exports = {
     onConnection,
     onQr,
     normalizeJid,
-    jidToE164
+    jidToE164,
+    wipeSignalSessions,
+    isWipableSignalFile,
+    healAndReinit,
+    altDecryptJids,
+    shouldCountDecryptFail,
+    shouldMarkSessionHealthy,
+    shouldAutoHeal,
+    shouldRequestNodeRestart
 };

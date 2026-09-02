@@ -25,6 +25,8 @@ pub const HttpServer = struct {
     start_time: i64,
     request_counter: u64,
     reload_fn: ?*const fn () anyerror!void = null,
+    heal_fn: ?*const fn () anyerror!void = null,
+    health_extra_fn: ?*const fn (allocator: std.mem.Allocator) anyerror![]u8 = null,
 
     const WebSocketClient = struct {
         address: std.Io.net.IpAddress,
@@ -70,6 +72,8 @@ pub const HttpServer = struct {
             .request_counter = 0,
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .reload_fn = null,
+            .heal_fn = null,
+            .health_extra_fn = null,
         };
     }
 
@@ -217,7 +221,7 @@ fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
 
         // Route based on path
         if (std.mem.eql(u8, request.path, "/health")) {
-            try handleHealth(stream);
+            try self.handleHealth(stream);
         } else if (std.mem.eql(u8, request.path, "/status")) {
             try self.handleStatus(stream);
         } else if (std.mem.eql(u8, request.path, "/sessions")) {
@@ -275,6 +279,8 @@ fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
             try self.handleExecApprove(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/reload") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleReload(stream);
+        } else if (std.mem.eql(u8, request.path, "/whatsapp/heal") and std.mem.eql(u8, request.method, "POST")) {
+            try self.handleWhatsAppHeal(stream);
         } else if (std.mem.eql(u8, request.path, "/heartbeat") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleHeartbeat(stream);
         } else if (std.mem.eql(u8, request.path, "/state") and std.mem.eql(u8, request.method, "GET")) {
@@ -292,8 +298,19 @@ fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
     }
 
     /// Handle /health endpoint
-    fn handleHealth(stream: std.Io.net.Stream) !void {
-        const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"healthy\"}\r\n";
+    fn handleHealth(self: *HttpServer, stream: std.Io.net.Stream) !void {
+        var owned: ?[]u8 = null;
+        defer if (owned) |b| self.allocator.free(b);
+        const body: []const u8 = blk: {
+            if (self.health_extra_fn) |extra| {
+                const extra_body = extra(self.allocator) catch break :blk "{\"status\":\"healthy\"}";
+                owned = extra_body;
+                break :blk extra_body;
+            }
+            break :blk "{\"status\":\"healthy\"}";
+        };
+        var hdr: [1024]u8 = undefined;
+        const response = try std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
         try compat.streamWriteAll(stream, response);
     }
     /// Handle /status endpoint
@@ -676,6 +693,23 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
         }
         try response.appendSlice(self.allocator, "\"}\r\n");
         try compat.streamWriteAll(stream, response.items);
+    }
+
+    fn handleWhatsAppHeal(self: *HttpServer, stream: std.Io.net.Stream) !void {
+        const heal = self.heal_fn orelse {
+            try self.sendErrorResponse(stream, 503, "Service Unavailable", "heal unset");
+            return;
+        };
+        heal() catch |err| {
+            var msg_buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "{s}", .{@errorName(err)}) catch "heal failed";
+            try self.sendErrorResponse(stream, 500, "Internal Server Error", msg);
+            return;
+        };
+        const body = "{\"ok\":true}";
+        var hdr: [160]u8 = undefined;
+        const response = try std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
+        try compat.streamWriteAll(stream, response);
     }
 
     fn handleReload(self: *HttpServer, stream: std.Io.net.Stream) !void {

@@ -55,12 +55,12 @@
 ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+**. It's designed as a lean, purpose-built alternative to frameworks like NullClaw and KrillClaw, optimized specifically for the Barvis ecosystem.
 
 **Key features:**
-- NVIDIA NIM native with `thinkingmachines/inkling`
+- NVIDIA NIM native: `nvidia/nemotron-3-ultra-550b-a55b` primary, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` as fallback and vision (`see_image` tool)
 - Zero bloat, built from scratch
 - UTCP (Universal Tool Calling Protocol) support
 - Modular: providers, agents, channels, tools
 - WhatsApp channel integration (Baileys live path; Zig whatsmeow port is compile-only)
-- Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `listen` / `leave` / `skill` / `memory_*`
+- Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `see_image` / `listen` / `leave` / `skill` / `memory_*`
 - 21 skills ported from OpenClaw
 - Cloudflare Worker for resilient routing
 - WhatsApp and the CLI share `Agent.runTurn`
@@ -87,8 +87,8 @@ Set required environment variables:
 # Required: NVIDIA API key
 export NVIDIA_API_KEY=nvapi-xxx
 
-# Optional: Model (defaults to thinkingmachines/inkling)
-export NVIDIA_MODEL=thinkingmachines/inkling
+# Optional: Primary model (defaults to nvidia/nemotron-3-ultra-550b-a55b); nano-omni is used as fallback and vision
+export NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 
 # Optional: HTTP gateway token (config gateway.auth.token also works)
 export GATEWAY_AUTH_TOKEN=your_token

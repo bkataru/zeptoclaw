@@ -1286,3 +1286,13 @@ pub fn doubleIndexOf(s: []const u8) ?struct{d: u8, i: u8} {
     for (double_byte_tokens, 0..) |group, d| for (group, 0..) |tok, i| if (std.mem.eql(u8, tok, s)) return .{.d=@intCast(d), .i=@intCast(i)};
     return null;
 }
+
+pub fn getSingleToken(tag: usize) ![]const u8 {
+    if (tag >= 1 and tag < single_byte_tokens.len) return single_byte_tokens[tag];
+    return error.InvalidToken;
+}
+
+pub fn getDoubleToken(dict: usize, index: usize) ![]const u8 {
+    if (dict >= double_byte_tokens.len or index >= double_byte_tokens[dict].len) return error.InvalidToken;
+    return double_byte_tokens[dict][index];
+}

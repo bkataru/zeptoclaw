@@ -1,5 +1,7 @@
 const std = @import("std");
 const migration_config = @import("config/migration_config.zig");
+const compat = @import("compat.zig");
+
 
 /// Legacy Config struct for backward compatibility
 /// This wraps the new ZeptoClawConfig to maintain existing API
@@ -27,6 +29,8 @@ pub const Config = struct {
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
     whatsapp_dm_policy: []const u8,
+    whatsapp_native: bool = false,
+
     whatsapp_allow_from: [][]const u8,
     whatsapp_group_policy: []const u8,
     whatsapp_media_max_mb: u32,
@@ -62,6 +66,8 @@ pub const Config = struct {
 .whatsapp_enabled = zepto_config.whatsapp_enabled,
             .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
             .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_native = resolveWhatsAppNative(allocator, zepto_config.whatsapp_native),
+
             .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
             .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
             .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
@@ -103,6 +109,8 @@ pub const Config = struct {
 .whatsapp_enabled = zepto_config.whatsapp_enabled,
             .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
             .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_native = resolveWhatsAppNative(allocator, zepto_config.whatsapp_native),
+
             .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
             .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
             .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
@@ -140,6 +148,8 @@ pub const Config = struct {
 .whatsapp_enabled = zepto_config.whatsapp_enabled,
             .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
             .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_native = resolveWhatsAppNative(allocator, zepto_config.whatsapp_native),
+
             .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
             .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
             .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
@@ -209,6 +219,64 @@ pub const Config = struct {
     }
 };
 
+fn envWhatsAppNative(allocator: std.mem.Allocator) ?bool {
+    const v = compat.getEnvVarOwned(allocator, "ZEPTO_WA_NATIVE") catch return null;
+    defer allocator.free(v);
+    if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true") or std.mem.eql(u8, v, "TRUE") or std.mem.eql(u8, v, "yes")) return true;
+    if (std.mem.eql(u8, v, "0") or std.mem.eql(u8, v, "false") or std.mem.eql(u8, v, "FALSE") or std.mem.eql(u8, v, "no")) return false;
+    return null;
+}
+
+fn nativeFlagFromJsonFile(allocator: std.mem.Allocator, path: []const u8) ?bool {
+    const cwd = compat.cwd();
+    const file = cwd.openFile(path, .{}) catch return null;
+    defer file.close(cwd.io);
+    const stat = file.stat(cwd.io) catch return null;
+    const n: usize = @intCast(stat.size);
+    if (n == 0 or n > 4 * 1024 * 1024) return null;
+    const buf = allocator.alloc(u8, n) catch return null;
+    defer allocator.free(buf);
+    var reader = file.reader(cwd.io, &[_]u8{});
+    reader.interface.readSliceAll(buf) catch return null;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, buf, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const channels = parsed.value.object.get("channels") orelse return null;
+    if (channels != .object) return null;
+    const wa = channels.object.get("whatsapp") orelse return null;
+    if (wa != .object) return null;
+    const native = wa.object.get("native") orelse return null;
+    return switch (native) {
+        .bool => |b| b,
+        else => null,
+    };
+}
+
+fn nativeFlagFromConfigFiles(allocator: std.mem.Allocator) ?bool {
+    const home_rels = [_][]const u8{
+        ".zeptoclaw/config.json",
+        ".openclaw/openclaw.json",
+        ".openclaw/workspace/openclaw.json",
+    };
+    for (home_rels) |rel| {
+        const path = compat.homeJoin(allocator, rel) catch continue;
+        defer allocator.free(path);
+        if (nativeFlagFromJsonFile(allocator, path)) |b| return b;
+    }
+    const cwd_rels = [_][]const u8{ "./zeptoclaw.json", "./config.json" };
+    for (cwd_rels) |path| {
+        if (nativeFlagFromJsonFile(allocator, path)) |b| return b;
+    }
+    return null;
+}
+
+fn resolveWhatsAppNative(allocator: std.mem.Allocator, from_loader: bool) bool {
+    if (envWhatsAppNative(allocator)) |b| return b;
+    if (nativeFlagFromConfigFiles(allocator)) |b| return b;
+    return from_loader;
+}
+
+
 /// Re-export the new configuration types for advanced usage
 pub const ConfigSource = migration_config.ConfigSource;
 pub const ConfigLoader = migration_config.ConfigLoader;
@@ -242,7 +310,7 @@ test "Config load with defaults" {
     defer result.deinit();
 
     try std.testing.expectEqual(migration_config.ConfigSource.default, result.source);
-    try std.testing.expectEqualStrings("thinkingmachines/inkling", result.primary_model);
+    try std.testing.expectEqualStrings("nvidia/nemotron-3-ultra-550b-a55b", result.primary_model);
     try std.testing.expectEqual(@as(u32, 18789), result.gateway_port);
 }
 
@@ -281,6 +349,6 @@ test "Config getPrimaryModel" {
         .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
         .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
     };
-    try std.testing.expectEqualStrings("thinkingmachines/inkling", config.getPrimaryModel());
-    try std.testing.expectEqualStrings("thinkingmachines/inkling", config.getPrimaryModel());
+    try std.testing.expectEqualStrings("nvidia/nemotron-3-ultra-550b-a55b", config.getPrimaryModel());
+    try std.testing.expectEqualStrings("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", config.getFallbackModels()[0]);
 }

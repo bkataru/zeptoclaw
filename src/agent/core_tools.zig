@@ -4,6 +4,9 @@ const compat = @import("../compat.zig");
 const types = @import("../providers/types.zig");
 const tools = @import("tools.zig");
 const memory = @import("memory.zig");
+const message = @import("message.zig");
+const nim = @import("../providers/nim.zig");
+const inbound_media = @import("../channels/whatsapp/inbound_media.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -27,6 +30,25 @@ pub fn workspace() []const u8 {
 }
 
 threadlocal var g_chat_id: []const u8 = "agent";
+
+threadlocal var g_vision_image_path: ?[]const u8 = null;
+threadlocal var g_vision_image_mime: []const u8 = "image/jpeg";
+threadlocal var g_vision_api_key: []const u8 = "";
+threadlocal var g_vision_model: []const u8 = "";
+threadlocal var g_vision_base_url: []const u8 = "";
+
+/// Sets the image attached to the current turn (if any). Call once per turn; pass null to clear.
+pub fn setVisionImage(path: ?[]const u8, mime: ?[]const u8) void {
+    g_vision_image_path = path;
+    g_vision_image_mime = mime orelse "image/jpeg";
+}
+
+/// Sets the vision-capable model the `see_image` tool dispatches to.
+pub fn setVisionClient(api_key: []const u8, model: []const u8, base_url: []const u8) void {
+    g_vision_api_key = api_key;
+    g_vision_model = model;
+    g_vision_base_url = base_url;
+}
 
 pub fn setChatId(id: []const u8) void {
     g_chat_id = id;
@@ -290,6 +312,41 @@ pub fn webSearchTool(allocator: Allocator, args: []const u8) ![]const u8 {
     return allocator.dupe(u8, result.stdout[0..n]);
 }
 
+/// Memory: Caller owns returned description. Dispatches the attached turn image to the configured vision model.
+pub fn seeImageTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const path = g_vision_image_path orelse return allocator.dupe(u8, "error: no image attached to this turn");
+    if (path.len == 0) return allocator.dupe(u8, "error: no image attached to this turn");
+    if (g_vision_api_key.len == 0 or g_vision_model.len == 0 or g_vision_base_url.len == 0)
+        return allocator.dupe(u8, "error: vision model not configured");
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch null;
+    defer if (parsed) |p| p.deinit();
+    var question: []const u8 = "Describe what's in this image in detail.";
+    if (parsed) |p| {
+        if (jsonStr(p.value, "question")) |q| {
+            if (q.len > 0) question = q;
+        }
+    }
+
+    var msg = try message.userMessage(allocator, question);
+    defer msg.deinit(allocator);
+    msg.image_data_url = inbound_media.fileToDataUrl(allocator, path, g_vision_image_mime) orelse
+        return allocator.dupe(u8, "error: failed to read attached image");
+
+    var messages = [_]types.Message{msg};
+    var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
+    defer client.deinit();
+
+    var response = client.chat(&messages) catch |err|
+        return std.fmt.allocPrint(allocator, "error: vision request failed: {s}", .{@errorName(err)});
+    defer response.deinit(allocator);
+
+    if (response.choices.len == 0) return allocator.dupe(u8, "error: vision model returned no response");
+    const text = response.choices[0].message.content orelse "";
+    if (text.len == 0) return allocator.dupe(u8, "error: vision model returned empty response");
+    return allocator.dupe(u8, text);
+}
+
 
 threadlocal var g_silent: bool = false;
 threadlocal var g_leave: bool = false;
@@ -329,6 +386,7 @@ const PARAM_EDIT = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"st
 
 const PARAM_EXEC = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}";
 const PARAM_SEARCH = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}";
+const PARAM_SEE_IMAGE = "{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"What to look for or ask about the image; defaults to a general description.\"}}}";
 const PARAM_EMPTY = "{\"type\":\"object\",\"properties\":{}}";
 
 const PARAM_MEM_GET = "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"long, daily, or yesterday\"}},\"required\":[\"which\"]}";
@@ -439,6 +497,7 @@ pub fn registerAll(reg: *tools.ToolRegistry, hold: *ParamHold) !void {
         .{ .name = "edit", .desc = "Replace old_str with new_str in a workspace file", .json = PARAM_EDIT, .h = editTool },
         .{ .name = "exec", .desc = "Run /bin/sh -c in the workspace cwd. Mutating commands need ZEPTO_EXEC_APPROVE or exec-approvals.txt. WhatsApp: operator fromMe DMs only. Absolute paths allowed. After editing ~/.zeptoclaw/config.json, POST /reload with X-Auth-Token $GATEWAY_AUTH_TOKEN (do not restart the gateway).", .json = PARAM_EXEC, .h = execTool },
         .{ .name = "web_search", .desc = "Search the web via DuckDuckGo HTML", .json = PARAM_SEARCH, .h = webSearchTool },
+        .{ .name = "see_image", .desc = "Inspect the image attached to this turn (if any) using the vision-capable model; pass an optional question", .json = PARAM_SEE_IMAGE, .h = seeImageTool },
         .{ .name = "listen", .desc = "Stay silent this turn; keep recording inbound", .json = PARAM_EMPTY, .h = listenTool },
         .{ .name = "leave", .desc = "Leave this chat until woken with barvis", .json = PARAM_EMPTY, .h = leaveTool },
         .{ .name = "skill", .desc = "Run a named skill command", .json = PARAM_SKILL, .h = skillTool },
@@ -575,6 +634,24 @@ test "core_tools listen leave" {
     try std.testing.expect(wantSilent());
 }
 
+test "core_tools see_image no image attached" {
+    const allocator = std.testing.allocator;
+    setVisionImage(null, null);
+    const out = try seeImageTool(allocator, "{}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "no image attached") != null);
+}
+
+test "core_tools see_image vision not configured" {
+    const allocator = std.testing.allocator;
+    setVisionImage("/tmp/zeptoclaw-vision-test.jpg", "image/jpeg");
+    defer setVisionImage(null, null);
+    setVisionClient("", "", "");
+    const out = try seeImageTool(allocator, "{}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "vision model not configured") != null);
+}
+
 test "core_tools registerAll" {
     const allocator = std.testing.allocator;
     var reg = tools.ToolRegistry.init(allocator);
@@ -585,6 +662,7 @@ test "core_tools registerAll" {
     try std.testing.expect(reg.get("read") != null);
     try std.testing.expect(reg.get("leave") != null);
     try std.testing.expect(reg.get("memory_get") != null);
+    try std.testing.expect(reg.get("see_image") != null);
     try std.testing.expect(reg.get("memory_append") != null);
     const defs = try collectDefinitions(&reg, allocator);
     defer {

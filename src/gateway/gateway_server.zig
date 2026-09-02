@@ -43,6 +43,7 @@ var g_last_turn_chat_len: usize = 0;
 var g_last_turn_body: [512]u8 = undefined;
 var g_last_turn_body_len: usize = 0;
 var g_last_turn_ms: i64 = 0;
+var g_last_inbound_unix: i64 = 0;
 // Last reply we sent (for echo-loop guard): bot replies containing the trigger word
 // must not re-trigger themselves.
 var g_last_reply_buf: [2048]u8 = undefined;
@@ -268,6 +269,9 @@ fn replayPendingTurns() void {
         handleWhatsAppTurn(msg, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
             std.log.err("[whatsapp] replay failed: {}", .{err});
         };
+        // Ack even if the agent is still retrying. Otherwise a 408 loop keeps
+        // this row forever and every reconnect starts another NIM turn.
+        pending.ack(g_whatsapp_alloc, row.id);
     }
 }
 
@@ -282,9 +286,10 @@ fn whatsappOnConnection(update: zeptoclaw.channels.whatsapp.types.ConnectionUpda
     }
 }
 
-/// QR handler (top-level fn for onQr).
+/// QR handler (top-level fn for onQr). Native mode already prints the rendered QR
+/// and raw URL; do not dump the pairing payload again here.
 fn whatsappOnQr(event: zeptoclaw.channels.whatsapp.types.QrEvent) anyerror!void {
-    std.log.info("[whatsapp] QR: {s}", .{event.qr});
+    std.log.info("[whatsapp] QR received ({d} chars) — scan with Linked Devices", .{event.qr.len});
 }
 
 /// Static send_fn for OutboundProcessor: bridges to the global WhatsApp channel.
@@ -306,6 +311,7 @@ const TurnOpts = struct {
 };
 
 fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) anyerror!void {
+    g_last_inbound_unix = compat.timestamp();
     return handleWhatsAppTurn(msg, .{});
 }
 
@@ -515,6 +521,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         };
         defer agent.deinit();
         if (ws_dir_const) |wd| agent.setWorkspace(wd);
+        if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
         const reply = while (true) {
@@ -532,7 +539,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
                 }
             }
             defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
-            if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is attached for vision. Use it if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
+            if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is available. Call the see_image tool if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
             break agent.runTurn(prompt, .{
                 .system_prompt = sys_prompt,
                 .extra_context = extra.items,
@@ -699,6 +706,24 @@ fn reloadWhatsAppFromDisk() !void {
     try g_whatsapp_channel.?.setAllowFrom(fresh.whatsapp_allow_from);
 }
 
+fn healWhatsAppSignal() !void {
+    if (g_whatsapp_channel == null) return error.WhatsAppDisabled;
+    try g_whatsapp_channel.?.heal();
+}
+
+fn whatsappHealthJson(allocator: std.mem.Allocator) ![]u8 {
+    var connected = false;
+    var jid_buf: [128]u8 = undefined;
+    var jid: []const u8 = "";
+    if (g_whatsapp_channel) |c| {
+        const snap = c.healthSnapshot(&jid_buf);
+        connected = snap.connected;
+        jid = jid_buf[0..snap.jid_len];
+    }
+    const connected_s: []const u8 = if (connected) "true" else "false";
+    return std.fmt.allocPrint(allocator, "{{\"status\":\"healthy\",\"whatsapp\":{{\"connected\":{s},\"self_jid\":\"{s}\",\"last_inbound_unix\":{d}}}}}", .{ connected_s, jid, g_last_inbound_unix });
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -794,7 +819,7 @@ pub fn main() !void {
         }
     }
     if (cfg.whatsapp_enabled) {
-        std.log.info("[whatsapp] enabled auth_dir={s} allow_from={any} dmPolicy={s}", .{ cfg.whatsapp_auth_dir, cfg.whatsapp_allow_from, cfg.whatsapp_dm_policy });
+        std.log.info("[whatsapp] enabled auth_dir={s} allow_from={any} dmPolicy={s} native={}", .{ cfg.whatsapp_auth_dir, cfg.whatsapp_allow_from, cfg.whatsapp_dm_policy, cfg.whatsapp_native });
         // Build WhatsAppConfig from cfg
         const wa_config = zeptoclaw.channels.whatsapp.config.loadFromZeptoConfig(allocator, cfg) catch |err| blk: {
             std.log.err("[whatsapp] failed to load WhatsAppConfig: {} — whatsapp disabled", .{err});
@@ -803,6 +828,7 @@ pub fn main() !void {
         wa_setup: {
             if (wa_config) |wcfg| {
             var wcfg_mut = wcfg;
+            wcfg_mut.native = cfg.whatsapp_native;
             // Session + Inbound
             const sess = allocator.create(WhatsAppSession) catch null;
             if (sess) |s| {
@@ -869,6 +895,8 @@ pub fn main() !void {
         autonomous_agent,
     );
     server.reload_fn = &reloadWhatsAppFromDisk;
+    server.heal_fn = &healWhatsAppSignal;
+    server.health_extra_fn = &whatsappHealthJson;
 
     global_server = &server;
     const act = std.os.linux.Sigaction{

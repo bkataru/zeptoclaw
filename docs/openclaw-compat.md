@@ -29,7 +29,7 @@ id = "70a3dbb693e246d48a0fbdc7b32c7317"
 
 Both bindings point at the **same KV id** - old gateways writing `BARVIS_STATE` remain visible to new gateways reading `ZEPTOCLAW_STATE` (and vice versa). State key is `state` (BarvisState: `replied_comments`, `seen_posts`, `last_heartbeat`, `heartbeat_history`, etc.). Cron trigger `*/30 * * * *` preserved.
 
-> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `thinkingmachines/inkling` @ `https://integrate.api.nvidia.com/v1/chat/completions`. Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Alias `barvis-router` 182dc8e2 remains until route cutover.
+> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` @ `https://integrate.api.nvidia.com/v1/chat/completions` (superseded `thinkingmachines/inkling`, EOL 2026-08-25). Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Alias `barvis-router` 182dc8e2 remains until route cutover.
 
 ## 3. Config Paths & Priority
 
@@ -63,7 +63,7 @@ Both candidates share the **OpenClaw JSON schema** (`OpenClawConfig`):
   "env": { "NVIDIA_API_KEY": "nvapi-..." },
   "agents": {
     "defaults": {
-      "model": { "primary": "thinkingmachines/inkling", "fallbacks": [] },
+      "model": { "primary": "nvidia/nemotron-3-ultra-550b-a55b", "fallbacks": ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"] },
       "imageModel": { "primary": "...", "fallbacks": [] },
       "workspace": "/home/user/.openclaw/workspace",
       "maxConcurrent": 4
@@ -86,7 +86,7 @@ Both candidates share the **OpenClaw JSON schema** (`OpenClawConfig`):
 }
 ```
 
-Loaded into `ZeptoClawConfig` (canonical runtime config). Unknown fields ignored.
+Loaded into `ZeptoClawConfig` (canonical runtime config). Unknown fields ignored. `model.primary` is the agent's single chat model; `model.fallbacks[0]` (when present) is dispatched by the `see_image` tool for vision (the primary model need not support vision). Only `allowFrom`/`dmPolicy`/`groupPolicy` are hot-reloadable via `POST /reload`; model changes require a gateway restart.
 
 ## 4. Workspace Resolution
 
@@ -174,7 +174,7 @@ GET  /metrics  (Prometheus)
 
 ### 7.5 Worker surface (`cloudflare-worker/worker.ts`)
 
-`/health`, `/state` (KV BarvisState), `/moltbook/*`, `/autonomous/*`, `/gateway/*`, `/heartbeat` (persists `last_heartbeat` + history). Single-model routing `thinkingmachines/inkling` + KV health tracking.
+`/health`, `/state` (KV BarvisState), `/moltbook/*`, `/autonomous/*`, `/gateway/*`, `/heartbeat` (persists `last_heartbeat` + history). Single-model routing `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` + KV health tracking.
 
 ## 8. Allow-List / E.164 Normalization
 

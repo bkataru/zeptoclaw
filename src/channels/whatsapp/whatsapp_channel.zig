@@ -1,6 +1,9 @@
 const std = @import("std");
 const compat = @import("../../compat.zig");
 const types = @import("types.zig");
+const native_mod = @import("native/client.zig");
+const qrcode = @import("native/qrcode.zig");
+const media_mod = @import("native/media.zig");
 
 const Allocator = std.mem.Allocator;
 const WhatsAppMessage = types.WhatsAppMessage;
@@ -34,7 +37,8 @@ pub const WhatsAppChannel = struct {
     reader_thread: ?std.Thread,
     mutex: std.Io.Mutex,
     use_native: bool = false,
-    native_client: ?@import("native/client.zig").Client = null,
+    native_client: ?*native_mod.Client = null,
+    native_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     // JSON-RPC pending response (single-flight; gateway is single-threaded caller,
     // reader thread delivers responses)
@@ -46,6 +50,8 @@ pub const WhatsAppChannel = struct {
     /// Threaded Io used for process spawn and child pipes. `self.channelIo()` is
     /// `global_single_threaded`, whose processSpawn vtable always returns OutOfMemory.
     spawn_threaded: ?*std.Io.Threaded = null,
+    restart_in_flight: bool = false,
+    last_restart_ms: i64 = 0,
 
     fn channelIo(self: *WhatsAppChannel) std.Io {
         if (self.spawn_threaded) |t| return t.io();
@@ -69,6 +75,9 @@ pub const WhatsAppChannel = struct {
             .qr_handler = null,
             .reader_thread = null,
             .mutex = .init,
+            .use_native = config.native,
+            .native_client = null,
+            .native_stop = std.atomic.Value(bool).init(false),
         };
     }
 
@@ -93,6 +102,12 @@ pub const WhatsAppChannel = struct {
         const already_connected = self.connected;
         self.mutex.unlock(self.channelIo());
         if (already_connected) return;
+
+        if (self.config.native) {
+            self.use_native = true;
+            try self.connectNative();
+            return;
+        }
 
         if (self.spawn_threaded == null) {
             const t = try self.allocator.create(std.Io.Threaded);
@@ -156,6 +171,7 @@ pub const WhatsAppChannel = struct {
     }
 
     pub fn setAllowFrom(self: *WhatsAppChannel, entries: []const []const u8) !void {
+        if (self.use_native) return;
         var allow_from_arr = std.json.Array.init(self.allocator);
         defer allow_from_arr.deinit();
         for (entries) |jid| {
@@ -169,27 +185,87 @@ pub const WhatsAppChannel = struct {
         });
     }
 
+    pub fn heal(self: *WhatsAppChannel) !void {
+        if (self.use_native) return;
+        try self.sendFireAndForget(.{
+            .method = "heal",
+            .params = .{ .object = try std.json.ObjectMap.init(self.allocator, &.{}, &.{}) },
+        });
+    }
+
+    pub fn healthSnapshot(self: *WhatsAppChannel, jid_buf: []u8) struct { connected: bool, jid_len: usize } {
+        self.mutex.lock(self.channelIo()) catch {
+            return .{ .connected = false, .jid_len = 0 };
+        };
+        defer self.mutex.unlock(self.channelIo());
+        const src = self.self_jid orelse "";
+        const n = @min(src.len, jid_buf.len);
+        if (n > 0) @memcpy(jid_buf[0..n], src[0..n]);
+        return .{ .connected = self.connected, .jid_len = n };
+    }
+
+    pub fn restartChild(self: *WhatsAppChannel) !void {
+        if (self.restart_in_flight) return;
+        const now = compat.timestamp();
+        if (now - self.last_restart_ms < 600) return;
+        self.restart_in_flight = true;
+        defer self.restart_in_flight = false;
+        self.last_restart_ms = now;
+        std.log.warn("[whatsapp] restartChild begin", .{});
+        try self.disconnect();
+        try self.connect();
+        std.log.warn("[whatsapp] restartChild done connected={}", .{self.connected});
+    }
+
+    fn restartChildThread(self: *WhatsAppChannel) void {
+        self.restartChild() catch |err| {
+            std.log.err("[whatsapp] restartChild failed: {}", .{err});
+        };
+    }
+
     /// Disconnect from WhatsApp
     pub fn disconnect(self: *WhatsAppChannel) !void {
         try self.mutex.lock(self.channelIo());
-        const was_connected = self.connected;
-        if (was_connected) self.connected = false;
+        self.connected = false;
         self.mutex.unlock(self.channelIo());
-        if (!was_connected) return;
 
-        _ = try self.sendRequest(.{ .method = "disconnect", .params = .{ .object = try std.json.ObjectMap.init(self.allocator, &.{}, &.{}) } });
+        if (self.use_native) {
+            self.native_stop.store(true, .seq_cst);
+            if (self.native_client) |cli| cli.disconnect();
+            if (self.reader_thread) |thread| {
+                thread.join();
+                self.reader_thread = null;
+            }
+            if (self.native_client) |cli| {
+                cli.deinit();
+                self.allocator.destroy(cli);
+                self.native_client = null;
+            }
+            return;
+        }
 
-        // Wait a bit for graceful shutdown
-        _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 100 * 1000000 }, null);
+        if (self.node_stdin != null) {
+            self.sendFireAndForget(.{ .method = "disconnect", .params = .{ .object = try std.json.ObjectMap.init(self.allocator, &.{}, &.{}) } }) catch {};
+            _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 100 * 1000000 }, null);
+        }
 
         if (self.node_process) |*proc| {
             proc.kill(self.channelIo());
-            _ = proc.wait(self.channelIo()) catch {};
+            // POSIX childKill already wait4-reaps and nulls id. A second wait()
+            // asserts id != null and SIGABRTs the gateway (systemd: Failed with result 'signal').
+            if (proc.id != null) {
+                _ = proc.wait(self.channelIo()) catch {};
+            }
             self.node_process = null;
         }
+        self.node_stdin = null;
+        self.node_stdout = null;
+        self.node_stderr = null;
 
         if (self.reader_thread) |thread| {
-            thread.join();
+            // Join deadlocks when restartChild runs from a thread spawned by
+            // processLine on this reader. Detach; readerLoop exits on stdout EOF.
+            thread.detach();
             self.reader_thread = null;
         }
     }
@@ -211,9 +287,13 @@ pub const WhatsAppChannel = struct {
             _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 100 * 1000000 }, null);
         }
     }
-/// Memory: Caller owns returned messageId slice; must free with allocator.free (allocator.dupe).
+    /// Memory: Caller owns returned messageId slice; must free with allocator.free (allocator.dupe).
     /// Send a text message
     pub fn sendMessage(self: *WhatsAppChannel, to: []const u8, text: []const u8) ![]const u8 {
+        if (self.use_native) {
+            const cli = self.native_client orelse return error.NotConnected;
+            return cli.sendText(to, text);
+        }
         var params_obj = try std.json.ObjectMap.init(self.allocator, &.{}, &.{});
         try params_obj.put(self.allocator, "to", .{ .string = to });
         try params_obj.put(self.allocator, "text", .{ .string = text });
@@ -234,7 +314,7 @@ pub const WhatsAppChannel = struct {
         return error.SendMessageFailed;
     }
 
-/// Memory: Caller owns returned messageId slice; must free with allocator.free.
+    /// Memory: Caller owns returned messageId slice; must free with allocator.free.
     /// Send a media message
     pub fn sendMedia(self: *WhatsAppChannel, to: []const u8, media_path: []const u8, caption: ?[]const u8) ![]const u8 {
         const response = try self.sendRequest(.{
@@ -269,7 +349,7 @@ pub const WhatsAppChannel = struct {
         });
     }
 
-/// Memory: Caller owns returned messageId slice; must free with allocator.free.
+    /// Memory: Caller owns returned messageId slice; must free with allocator.free.
     /// Send a poll
     pub fn sendPoll(self: *WhatsAppChannel, to: []const u8, poll: types.Poll) ![]const u8 {
         const response = try self.sendRequest(.{
@@ -317,7 +397,7 @@ pub const WhatsAppChannel = struct {
         });
     }
 
-/// Memory: Caller owns returned jid dupe inside struct; must free with allocator.free.
+    /// Memory: Caller owns returned jid dupe inside struct; must free with allocator.free.
     /// Get contact info
     pub fn getContactInfo(self: *WhatsAppChannel, jid: []const u8) !struct {
         exists: bool,
@@ -340,7 +420,7 @@ pub const WhatsAppChannel = struct {
         return error.ContactNotFound;
     }
 
-/// Memory: Caller owns returned subject dupe; must free with allocator.free. Participants slice is static empty in this stub.
+    /// Memory: Caller owns returned subject dupe; must free with allocator.free. Participants slice is static empty in this stub.
     /// Get group metadata
     pub fn getGroupMetadata(self: *WhatsAppChannel, jid: []const u8) !struct {
         subject: []const u8,
@@ -382,9 +462,253 @@ pub const WhatsAppChannel = struct {
         self.qr_handler = handler;
     }
 
+    /// Heap-allocate a Client, open `{auth_dir}/native.sqlite`, spawn nativeLoop.
+    /// Memory: channel owns the Client until disconnect/deinit.
+    fn connectNative(self: *WhatsAppChannel) !void {
+        if (self.native_client != null) return;
+        self.native_stop.store(false, .seq_cst);
+        ensureAuthDir(self.config.auth_dir);
+        const store_path = try std.fmt.allocPrint(self.allocator, "{s}/native.sqlite", .{self.config.auth_dir});
+        defer self.allocator.free(store_path);
+
+        const cli = try self.allocator.create(native_mod.Client);
+        cli.* = native_mod.Client.init(self.allocator);
+        errdefer {
+            cli.deinit();
+            self.allocator.destroy(cli);
+            self.native_client = null;
+        }
+        try cli.openStore(store_path);
+        cli.loadFromStore() catch |err| {
+            if (err != error.NotPaired) return err;
+        };
+        self.native_client = cli;
+        self.reader_thread = try std.Thread.spawn(.{}, nativeLoop, .{self});
+        std.log.info("[whatsapp] native loop started store={s}", .{store_path});
+    }
+
+    fn nativeLoop(self: *WhatsAppChannel) void {
+        var backoff_ms: u64 = 2000;
+        while (!self.native_stop.load(.seq_cst)) {
+            const cli = self.native_client orelse return;
+            cli.connect("") catch |err| {
+                std.log.warn("[whatsapp] native connect failed: {}", .{err});
+                if (self.sleepInterruptible(backoff_ms)) return;
+                backoff_ms = nextBackoff(backoff_ms);
+                continue;
+            };
+            backoff_ms = 2000;
+            var immediate = false;
+            inner: while (!self.native_stop.load(.seq_cst)) {
+                const ev = cli.poll() catch |err| {
+                    std.log.warn("[whatsapp] native poll: {}", .{err});
+                    self.emitDisconnected();
+                    // After pair-success the server closes the socket; that is
+                    // the restart-required path, same as disconnected code 515.
+                    if (pollErrorIsRestart(err) and immediate) {
+                        backoff_ms = 2000;
+                    }
+                    break :inner;
+                };
+                switch (ev) {
+                    .qr => |codes| self.handleNativeQr(codes),
+                    .paired => |p| {
+                        std.log.info("[whatsapp] paired jid={s} lid={s}", .{ p.jid, p.lid });
+                        immediate = true;
+                    },
+                    .connected => |c| self.handleNativeConnected(c.jid),
+                    .message => |msg| self.handleNativeMessage(msg),
+                    .disconnected => |d| {
+                        self.emitDisconnected();
+                        if (d.logged_out) {
+                            std.log.warn("[whatsapp] logged out; unpair and re-pair (native)", .{});
+                            return;
+                        }
+                        if (d.code == 515) immediate = true;
+                        break :inner;
+                    },
+                    .idle => {},
+                }
+            }
+            cli.disconnect();
+            if (self.native_stop.load(.seq_cst)) return;
+            if (immediate) {
+                backoff_ms = 2000;
+                continue;
+            }
+            if (self.sleepInterruptible(backoff_ms)) return;
+            backoff_ms = nextBackoff(backoff_ms);
+        }
+    }
+
+    fn sleepInterruptible(self: *WhatsAppChannel, ms: u64) bool {
+        var left = ms;
+        while (left > 0) {
+            if (self.native_stop.load(.seq_cst)) return true;
+            const chunk: u64 = @min(left, 100);
+            _ = std.c.nanosleep(&.{ .sec = 0, .nsec = @intCast(chunk * 1_000_000) }, null);
+            left -= chunk;
+        }
+        return self.native_stop.load(.seq_cst);
+    }
+
+    fn handleNativeQr(self: *WhatsAppChannel, codes: []const []const u8) void {
+        if (codes.len == 0) return;
+        const first = codes[0];
+        std.log.info("[whatsapp] scan QR (native)", .{});
+        printQrUtf8AndLog(self.allocator, first);
+        const duped = self.allocator.dupe(u8, first) catch return;
+        defer self.allocator.free(duped);
+        if (self.qr_handler) |handler| {
+            handler(.{ .qr = duped }) catch |err| {
+                std.log.warn("[whatsapp] qr handler failed: {}", .{err});
+            };
+        }
+    }
+
+    fn handleNativeConnected(self: *WhatsAppChannel, jid: []const u8) void {
+        const e164 = digitsBeforeColon(jid);
+        const jid_store = self.allocator.dupe(u8, jid) catch return;
+        const e164_store = self.allocator.dupe(u8, e164) catch {
+            self.allocator.free(jid_store);
+            return;
+        };
+        self.mutex.lock(self.channelIo()) catch {
+            self.allocator.free(jid_store);
+            self.allocator.free(e164_store);
+            return;
+        };
+        if (self.self_jid) |old| self.allocator.free(old);
+        if (self.self_e164) |old| self.allocator.free(old);
+        self.self_jid = jid_store;
+        self.self_e164 = e164_store;
+        self.connected = true;
+        self.mutex.unlock(self.channelIo());
+
+        const upd_jid = self.allocator.dupe(u8, jid) catch null;
+        const upd_e164 = self.allocator.dupe(u8, e164) catch null;
+        const update = ConnectionUpdate{
+            .status = .connected,
+            .self_jid = upd_jid,
+            .self_e164 = upd_e164,
+            .@"error" = null,
+        };
+        if (self.connection_handler) |handler| {
+            handler(update) catch |err| {
+                std.log.err("[whatsapp] connection handler failed: {}", .{err});
+            };
+        }
+        if (upd_jid) |s| self.allocator.free(s);
+        if (upd_e164) |s| self.allocator.free(s);
+    }
+
+    fn emitDisconnected(self: *WhatsAppChannel) void {
+        self.mutex.lock(self.channelIo()) catch {};
+        self.connected = false;
+        self.mutex.unlock(self.channelIo());
+        const update = ConnectionUpdate{
+            .status = .disconnected,
+            .self_jid = null,
+            .self_e164 = null,
+            .@"error" = null,
+        };
+        if (self.connection_handler) |handler| {
+            handler(update) catch |err| {
+                std.log.err("[whatsapp] connection handler failed: {}", .{err});
+            };
+        }
+    }
+
+    fn handleNativeMessage(self: *WhatsAppChannel, inbound: native_mod.InboundMessage) void {
+        var owned_in = inbound;
+        defer owned_in.deinit();
+        const media_att = owned_in.media;
+        owned_in.media = null;
+        self.mutex.lock(self.channelIo()) catch {};
+        const own_jid = self.self_jid;
+        const own_e164 = self.self_e164;
+        self.mutex.unlock(self.channelIo());
+        const wa = inboundToWhatsAppMessage(self.allocator, owned_in, own_jid, own_e164) catch |err| {
+            std.log.err("[whatsapp] native message map failed: {}", .{err});
+            return;
+        };
+        if (self.message_handler) |handler| {
+            const th = std.Thread.spawn(.{}, dispatchNativeMessage, .{ self, handler, wa, media_att }) catch |err| {
+                std.log.err("[whatsapp] failed to spawn message handler: {}", .{err});
+                var doomed = wa;
+                doomed.deinit();
+                if (media_att) |*a| a.deinit(self.allocator);
+                return;
+            };
+            th.detach();
+        } else {
+            var unused = wa;
+            unused.deinit();
+        }
+    }
+
+    /// Foreground native pairing used by `zeptoclaw whatsapp pair`.
+    /// Prints each QR batch's first code (utf8 render + raw URL) until pair-success,
+    /// then reconnects once and waits for login.
+    /// Memory: caller owns returned jid; must free with allocator.free.
+    pub fn runNativePairForeground(allocator: Allocator, auth_dir: []const u8) ![]u8 {
+        ensureAuthDir(auth_dir);
+        var cli = native_mod.Client.init(allocator);
+        defer cli.deinit();
+        const store_path = try std.fmt.allocPrint(allocator, "{s}/native.sqlite", .{auth_dir});
+        defer allocator.free(store_path);
+        try cli.openStore(store_path);
+        cli.loadFromStore() catch |err| {
+            if (err != error.NotPaired) return err;
+        };
+
+        var seen_paired = cli.selfJid() != null;
+        while (true) {
+            cli.connect("") catch |err| {
+                std.debug.print("native connect failed: {}\n", .{err});
+                _ = std.c.nanosleep(&.{ .sec = 2, .nsec = 0 }, null);
+                continue;
+            };
+            var reconnect_now = false;
+            poll: while (true) {
+                // Socket errors after pair-success are the server's "restart now"
+                // (same as disconnected 515); `reconnect_now`/`seen_paired` handle it below.
+                const ev = cli.poll() catch break :poll;
+                switch (ev) {
+                    .qr => |codes| {
+                        if (codes.len > 0) printQrUtf8(allocator, codes[0]);
+                    },
+                    .paired => |p| {
+                        std.debug.print("pair-success jid={s} lid={s}\n", .{ p.jid, p.lid });
+                        seen_paired = true;
+                        reconnect_now = true;
+                    },
+                    .connected => |c| {
+                        const jid = try allocator.dupe(u8, c.jid);
+                        cli.disconnect();
+                        return jid;
+                    },
+                    .disconnected => |d| {
+                        if (d.logged_out) return error.LoggedOut;
+                        if (d.code == 515) reconnect_now = true;
+                        break :poll;
+                    },
+                    .message => |msg| {
+                        var m = msg;
+                        m.deinit();
+                    },
+                    .idle => {},
+                }
+            }
+            cli.disconnect();
+            if (reconnect_now or seen_paired) continue;
+            _ = std.c.nanosleep(&.{ .sec = 2, .nsec = 0 }, null);
+        }
+    }
+
     /// Send JSON-RPC request
     /// Send JSON-RPC request and wait for response (single-flight, 15s timeout).
-/// Memory: Caller owns Response.result strings via allocator; for fire-and-forget
+    /// Memory: Caller owns Response.result strings via allocator; for fire-and-forget
     /// callers we still wait for the ack; they ignore the result.
     fn sendFireAndForget(self: *WhatsAppChannel, request: Request) !void {
         if (self.node_stdin == null) return error.NotConnected;
@@ -551,7 +875,34 @@ pub const WhatsAppChannel = struct {
 
         if (value.object.get("method")) |method_val| {
             const method = jsonStr(method_val) orelse return;
-            if (std.mem.eql(u8, method, "message")) {
+            if (std.mem.eql(u8, method, "needNodeRestart")) {
+                const reason = blk: {
+                    if (value.object.get("params")) |params| {
+                        if (params == .object) {
+                            if (params.object.get("reason")) |r| {
+                                if (jsonStr(r)) |s| break :blk s;
+                            }
+                        }
+                    }
+                    break :blk "";
+                };
+                std.log.warn("[whatsapp] needNodeRestart reason={s}", .{reason});
+                const th = std.Thread.spawn(.{}, restartChildThread, .{self}) catch |err| {
+                    std.log.err("[whatsapp] failed to spawn restartChild: {}", .{err});
+                    return;
+                };
+                th.detach();
+            } else if (std.mem.eql(u8, method, "stats")) {
+                var fails: i64 = 0;
+                if (value.object.get("params")) |params| {
+                    if (params == .object) {
+                        if (params.object.get("decryptFails")) |v| {
+                            fails = jsonI64(v);
+                        }
+                    }
+                }
+                std.log.info("[whatsapp] stats decryptFails={d}", .{fails});
+            } else if (std.mem.eql(u8, method, "message")) {
                 if (value.object.get("params")) |params| {
                     if (params != .object) {
                         std.log.err("[whatsapp] message params not object", .{});
@@ -616,8 +967,7 @@ pub const WhatsAppChannel = struct {
         }
     }
 
-/// Memory: Caller owns returned WhatsAppMessage; must call deinit() to free all duped strings. All fields are allocator.dupe'd.
-
+    /// Memory: Caller owns returned WhatsAppMessage; must call deinit() to free all duped strings. All fields are allocator.dupe'd.
     fn parseMessageType(s: []const u8) types.MessageType {
         if (std.mem.eql(u8, s, "image") or std.mem.startsWith(u8, s, "image")) return .image;
         if (std.mem.eql(u8, s, "video") or std.mem.startsWith(u8, s, "video")) return .video;
@@ -732,6 +1082,151 @@ pub const WhatsAppChannel = struct {
         };
     }
 
+    /// Reusable HTTP transport for media downloads/uploads. `getFn`/`postFn`
+    /// return transport-owned memory valid until the next call on the same
+    /// transport (media.zig Transport contract).
+    const MediaHttp = struct {
+        alloc: Allocator,
+        client: std.http.Client,
+        last: ?[]u8 = null,
+
+        fn init(alloc: Allocator) MediaHttp {
+            return .{ .alloc = alloc, .client = std.http.Client{ .allocator = alloc, .io = compat.getIo() } };
+        }
+
+        fn deinit(self: *MediaHttp) void {
+            if (self.last) |l| self.alloc.free(l);
+            self.last = null;
+            self.client.deinit();
+        }
+
+        fn readAll(m: *MediaHttp, req: *std.http.Client.Request) anyerror![]const u8 {
+            var redirect_buffer: [1024]u8 = undefined;
+            var response = req.receiveHead(&redirect_buffer) catch return error.MediaConnect;
+            if (response.head.status.class() != .success) return error.MediaHttpStatus;
+            var transfer_buffer: [16384]u8 = undefined;
+            const reader = response.reader(&transfer_buffer);
+            // Media files buffer in memory (Baileys streams; 64 MiB covers
+            // realistic voice notes/images/docs for an agent loop).
+            const bytes = reader.allocRemaining(m.alloc, .limited(64 * 1024 * 1024)) catch return error.MediaIo;
+            m.last = bytes;
+            return m.last.?;
+        }
+
+        fn getFn(ptr: *anyopaque, url: []const u8) anyerror![]const u8 {
+            const m: *MediaHttp = @ptrCast(@alignCast(ptr));
+            if (m.last) |l| m.alloc.free(l);
+            m.last = null;
+            const uri = std.Uri.parse(url) catch return error.BadMediaUrl;
+            var req = m.client.request(.GET, uri, .{}) catch return error.MediaConnect;
+            defer req.deinit();
+            req.sendBodiless() catch return error.MediaConnect;
+            return readAll(m, &req);
+        }
+
+        fn postFn(ptr: *anyopaque, url: []const u8, body: []const u8) anyerror![]const u8 {
+            const m: *MediaHttp = @ptrCast(@alignCast(ptr));
+            if (m.last) |l| m.alloc.free(l);
+            m.last = null;
+            const uri = std.Uri.parse(url) catch return error.BadMediaUrl;
+            const body_copy = m.alloc.dupe(u8, body) catch return error.OutOfMemory;
+            defer m.alloc.free(body_copy);
+            var req = m.client.request(.POST, uri, .{}) catch return error.MediaConnect;
+            defer req.deinit();
+            req.sendBodyComplete(body_copy) catch return error.MediaConnect;
+            return readAll(m, &req);
+        }
+    };
+
+    fn mediaTypeName(kind: media_mod.Kind) []const u8 {
+        return switch (kind) {
+            .image => "image",
+            .sticker => "sticker",
+            .video => "video",
+            .audio, .ptt => "audio",
+            .document => "document",
+        };
+    }
+
+    fn mediaExt(kind: media_mod.Kind, mime: ?[]const u8) []const u8 {
+        if (mime) |m| {
+            if (std.mem.indexOf(u8, m, "png") != null) return "png";
+            if (std.mem.indexOf(u8, m, "webp") != null) return "webp";
+            if (std.mem.indexOf(u8, m, "mp4") != null) return "mp4";
+            if (std.mem.indexOf(u8, m, "ogg") != null) return "ogg";
+            if (std.mem.indexOf(u8, m, "opus") != null) return "opus";
+            if (std.mem.indexOf(u8, m, "m4a") != null) return "m4a";
+            if (std.mem.indexOf(u8, m, "amr") != null) return "amr";
+            if (std.mem.indexOf(u8, m, "pdf") != null) return "pdf";
+        }
+        return switch (kind) {
+            .image => "jpg",
+            .sticker => "webp",
+            .video => "mp4",
+            .audio, .ptt => "ogg",
+            .document => "bin",
+        };
+    }
+
+    /// Download + decrypt an inbound media attachment into `{auth_dir}/media/{id}.{ext}`,
+    /// mirroring the Baileys wrapper's file layout (baileys_wrapper.js saveMedia).
+    fn saveNativeMedia(self: *WhatsAppChannel, msg: *WhatsAppMessage, att: *native_mod.InboundMessage.MediaAttachment) !void {
+        var mh = MediaHttp.init(self.allocator);
+        defer mh.deinit();
+        const t = media_mod.Transport{ .ptr = &mh, .getFn = MediaHttp.getFn, .postFn = MediaHttp.postFn };
+        const plain = try media_mod.download(self.allocator, att.kind, &att.media_key, att.url, t);
+        defer self.allocator.free(plain);
+        ensureAuthDir(self.config.auth_dir);
+        const clean_id = try self.allocator.dupe(u8, msg.id);
+        defer self.allocator.free(clean_id);
+        for (clean_id) |*ch| {
+            if (!std.ascii.isAlphanumeric(ch.*) and ch.* != '_' and ch.* != '-') ch.* = '_';
+        }
+        const media_dir = try std.fmt.allocPrint(self.allocator, "{s}/media", .{self.config.auth_dir});
+        defer self.allocator.free(media_dir);
+        const cwd = compat.cwd();
+        std.Io.Dir.createDirPath(cwd.dir, cwd.io, media_dir) catch {};
+        const fname = try std.fmt.allocPrint(self.allocator, "{s}/media/{s}.{s}", .{
+            self.config.auth_dir, clean_id, mediaExt(att.kind, att.mimetype),
+        });
+        defer self.allocator.free(fname);
+        var f = cwd.createFile(fname, .{ .truncate = true }) catch |err| {
+            std.log.warn("[whatsapp] native media create {s} failed: {}", .{ fname, err });
+            return err;
+        };
+        defer f.close(cwd.io);
+        var w = f.writer(cwd.io, &[_]u8{});
+        try w.interface.writeAll(plain);
+        msg.media_path = try self.allocator.dupe(u8, fname);
+    }
+
+    /// Per-message handler thread for native inbound: downloads media off the
+    /// reader loop, then hands the mapped message to the channel handler.
+    /// Memory: takes ownership of `msg` and `media_att`.
+    fn dispatchNativeMessage(
+        self: *WhatsAppChannel,
+        handler: *const fn (message: WhatsAppMessage) anyerror!void,
+        msg: WhatsAppMessage,
+        media_att: ?native_mod.InboundMessage.MediaAttachment,
+    ) void {
+        var owned = msg;
+        defer owned.deinit();
+        var att = media_att;
+        defer if (att) |*a| a.deinit(self.allocator);
+        if (att) |*a| {
+            const mt = mediaTypeName(a.kind);
+            if (owned.media_type) |old| self.allocator.free(old);
+            owned.media_type = self.allocator.dupe(u8, mt) catch null;
+            owned.message_type = parseMessageType(mt);
+            self.saveNativeMedia(&owned, a) catch |err| {
+                std.log.warn("[whatsapp] native media download failed ({s}): {}", .{ mt, err });
+            };
+        }
+        handler(owned) catch |err| {
+            std.log.err("[whatsapp] message handler failed: {}", .{err});
+        };
+    }
+
     /// Parse connection update from JSON
     /// Memory: Caller owns returned self_jid/self_e164/error strings; must free each non-null field.
     pub fn parseConnectionUpdate(allocator: Allocator, value: std.json.Value) !ConnectionUpdate {
@@ -767,6 +1262,123 @@ pub const WhatsAppChannel = struct {
     }
 };
 
+fn ensureAuthDir(path: []const u8) void {
+    if (path.len == 0) return;
+    const cwd = compat.cwd();
+    std.Io.Dir.createDirPath(cwd.dir, cwd.io, path) catch {};
+}
+
+fn nextBackoff(ms: u64) u64 {
+    const doubled = ms *| 2;
+    return if (doubled > 60_000) 60_000 else doubled;
+}
+
+fn pollErrorIsRestart(err: anyerror) bool {
+    return err == error.WebSocketClosed or err == error.EndOfStream;
+}
+
+fn jidUserPart(s: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, s, '@')) |at| return s[0..at];
+    return s;
+}
+
+fn digitsBeforeColon(s: []const u8) []const u8 {
+    const user_part = jidUserPart(s);
+    if (std.mem.indexOfScalar(u8, user_part, ':')) |c| return user_part[0..c];
+    return user_part;
+}
+
+fn replaceOwned(allocator: Allocator, dest: *[]const u8, src: []const u8) !void {
+    const n = try allocator.dupe(u8, src);
+    allocator.free(dest.*);
+    dest.* = n;
+}
+
+fn printQrUtf8(allocator: Allocator, code: []const u8) void {
+    const rendered = qrcode.renderUtf8(allocator, code) catch {
+        std.debug.print("{s}\n", .{code});
+        return;
+    };
+    defer allocator.free(rendered);
+    std.debug.print("{s}", .{rendered});
+    if (rendered.len == 0 or rendered[rendered.len - 1] != '\n') std.debug.print("\n", .{});
+    std.debug.print("{s}\n", .{code});
+}
+
+fn printQrUtf8AndLog(allocator: Allocator, code: []const u8) void {
+    const rendered = qrcode.renderUtf8(allocator, code) catch {
+        std.debug.print("{s}\n", .{code});
+        std.log.info("{s}", .{code});
+        return;
+    };
+    defer allocator.free(rendered);
+    std.debug.print("{s}", .{rendered});
+    if (rendered.len == 0 or rendered[rendered.len - 1] != '\n') std.debug.print("\n", .{});
+    var it = std.mem.splitScalar(u8, rendered, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        std.log.info("{s}", .{line});
+    }
+}
+
+/// Map a native InboundMessage onto the same WhatsAppMessage fields the Node
+/// `[zepto] emit` path produces. `inbound` is borrowed; own_jid/own_e164 are borrowed.
+/// Memory: caller owns returned WhatsAppMessage; must call deinit().
+pub fn inboundToWhatsAppMessage(
+    allocator: Allocator,
+    inbound: native_mod.InboundMessage,
+    own_jid: ?[]const u8,
+    own_e164: ?[]const u8,
+) !WhatsAppMessage {
+    var msg = try WhatsAppMessage.init(allocator);
+    errdefer msg.deinit();
+
+    try replaceOwned(allocator, &msg.id, inbound.id);
+    try replaceOwned(allocator, &msg.chat_id, inbound.chat);
+    msg.chat_type = if (inbound.is_group) .group else .direct;
+    msg.from_me = inbound.from_me;
+    msg.timestamp = inbound.timestamp;
+    msg.message_type = .text;
+    try replaceOwned(allocator, &msg.body, inbound.text);
+
+    if (inbound.is_group) {
+        try replaceOwned(allocator, &msg.from, inbound.chat);
+    } else {
+        try replaceOwned(allocator, &msg.from, jidUserPart(inbound.chat));
+    }
+    if (own_e164) |e| try replaceOwned(allocator, &msg.to, e);
+
+    const sender_jid = blk: {
+        if (inbound.from_me) break :blk own_jid orelse inbound.sender;
+        if (inbound.is_group) break :blk inbound.sender;
+        break :blk inbound.sender_pn orelse inbound.sender;
+    };
+    try replaceOwned(allocator, &msg.sender_jid, sender_jid);
+
+    const e164_src: []const u8 = blk: {
+        if (inbound.from_me) {
+            if (own_e164) |e| if (e.len > 0) break :blk e;
+            if (inbound.sender_pn) |pn| break :blk digitsBeforeColon(pn);
+            break :blk digitsBeforeColon(own_jid orelse inbound.sender);
+        }
+        if (inbound.sender_pn) |pn| break :blk digitsBeforeColon(pn);
+        break :blk digitsBeforeColon(inbound.sender);
+    };
+    if (e164_src.len > 0) {
+        if (msg.sender_e164) |old| allocator.free(old);
+        msg.sender_e164 = try allocator.dupe(u8, e164_src);
+    }
+
+    const name: ?[]const u8 = if (inbound.from_me) "Baala" else inbound.push_name;
+    if (name) |n| {
+        if (n.len > 0) {
+            if (msg.sender_name) |old| allocator.free(old);
+            msg.sender_name = try allocator.dupe(u8, n);
+        }
+    }
+    return msg;
+}
+
 /// JSON-RPC request
 const Request = struct {
     jsonrpc: []const u8 = "2.0",
@@ -798,6 +1410,119 @@ test "WhatsAppChannel init/deinit" {
     try std.testing.expectEqual(false, channel.connected);
 }
 
+test "disconnect on never-connected channel" {
+    const allocator = std.testing.allocator;
+    var config = try WhatsAppConfig.init(allocator);
+    defer config.deinit();
+
+    var channel = WhatsAppChannel.init(allocator, config);
+    defer channel.deinit();
+
+    try channel.disconnect();
+    try std.testing.expectEqual(false, channel.connected);
+    try std.testing.expect(channel.node_process == null);
+}
+
+test "disconnect on never-connected native channel" {
+    const allocator = std.testing.allocator;
+    var config = try WhatsAppConfig.init(allocator);
+    defer config.deinit();
+    config.native = true;
+
+    var channel = WhatsAppChannel.init(allocator, config);
+    defer channel.deinit();
+
+    try std.testing.expect(channel.use_native);
+    try channel.disconnect();
+    try std.testing.expectEqual(false, channel.connected);
+    try std.testing.expect(channel.native_client == null);
+    try std.testing.expect(channel.node_process == null);
+}
+
+fn testInbound(
+    allocator: std.mem.Allocator,
+    id: []const u8,
+    chat: []const u8,
+    sender: []const u8,
+    sender_pn: ?[]const u8,
+    push_name: ?[]const u8,
+    text: []const u8,
+    from_me: bool,
+    timestamp: i64,
+    is_group: bool,
+) !native_mod.InboundMessage {
+    return .{
+        .allocator = allocator,
+        .id = try allocator.dupe(u8, id),
+        .chat = try allocator.dupe(u8, chat),
+        .sender = try allocator.dupe(u8, sender),
+        .sender_pn = if (sender_pn) |x| try allocator.dupe(u8, x) else null,
+        .push_name = if (push_name) |x| try allocator.dupe(u8, x) else null,
+        .text = try allocator.dupe(u8, text),
+        .from_me = from_me,
+        .timestamp = timestamp,
+        .is_group = is_group,
+    };
+}
+
+test "inboundToWhatsAppMessage fromMe self-chat LID and peer PN DM" {
+    const allocator = std.testing.allocator;
+    const own_jid = "917019895010:55@s.whatsapp.net";
+    const own_e164 = "917019895010";
+
+    var self_chat = try testInbound(
+        allocator,
+        "m1",
+        "216638251077681@lid",
+        "917019895010:55@s.whatsapp.net",
+        "917019895010:55@s.whatsapp.net",
+        null,
+        "barvis ping",
+        true,
+        1_700_000_000,
+        false,
+    );
+    defer self_chat.deinit();
+    var self_msg = try inboundToWhatsAppMessage(allocator, self_chat, own_jid, own_e164);
+    defer self_msg.deinit();
+    try std.testing.expectEqualStrings("216638251077681@lid", self_msg.chat_id);
+    try std.testing.expectEqualStrings("917019895010", self_msg.sender_e164.?);
+    try std.testing.expectEqual(true, self_msg.from_me);
+    try std.testing.expectEqual(types.ChatType.direct, self_msg.chat_type);
+    try std.testing.expectEqualStrings("216638251077681", self_msg.from);
+    try std.testing.expectEqualStrings(own_jid, self_msg.sender_jid);
+    try std.testing.expectEqualStrings("Baala", self_msg.sender_name.?);
+    try std.testing.expectEqualStrings("barvis ping", self_msg.body);
+    try std.testing.expectEqualStrings("m1", self_msg.id);
+    try std.testing.expectEqual(types.MessageType.text, self_msg.message_type);
+    try std.testing.expectEqualStrings(own_e164, self_msg.to);
+
+    var peer = try testInbound(
+        allocator,
+        "m2",
+        "15551212@s.whatsapp.net",
+        "15551212@s.whatsapp.net",
+        "15551212@s.whatsapp.net",
+        "Alice",
+        "hello",
+        false,
+        1_700_000_001,
+        false,
+    );
+    defer peer.deinit();
+    var peer_msg = try inboundToWhatsAppMessage(allocator, peer, own_jid, own_e164);
+    defer peer_msg.deinit();
+    try std.testing.expectEqualStrings("15551212@s.whatsapp.net", peer_msg.chat_id);
+    try std.testing.expectEqualStrings("15551212", peer_msg.from);
+    try std.testing.expectEqualStrings("15551212@s.whatsapp.net", peer_msg.sender_jid);
+    try std.testing.expectEqualStrings("15551212", peer_msg.sender_e164.?);
+    try std.testing.expectEqual(false, peer_msg.from_me);
+    try std.testing.expectEqual(types.ChatType.direct, peer_msg.chat_type);
+    try std.testing.expectEqualStrings("Alice", peer_msg.sender_name.?);
+    try std.testing.expectEqualStrings("hello", peer_msg.body);
+    try std.testing.expectEqualStrings(own_e164, peer_msg.to);
+    try std.testing.expectEqual(types.MessageType.text, peer_msg.message_type);
+}
 
 fn fuzzParseInbound(_: void, smith: *std.testing.Smith) !void {
     var buf: [1024]u8 = undefined;

@@ -121,8 +121,8 @@ pub const WsOpcode = enum(u4) { continuation = 0, text = 1, binary = 2, close = 
 pub fn wsEncodeFrame(allocator: std.mem.Allocator, payload: []const u8, opcode: WsOpcode, mask: bool, io: std.Io) ![]u8 {
     // Client must mask.
     if (payload.len > 125 and payload.len <= 65535) {
-        // use 126 extended
-        const hdr: usize = if (mask) 4 + 2 + 4 else 2 + 2;
+        // 2 header bytes + 2 extended length (+4 mask key)
+        const hdr: usize = if (mask) 2 + 2 + 4 else 2 + 2;
         const out = try allocator.alloc(u8, hdr + payload.len);
         out[0] = 0x80 | @as(u8, @intFromEnum(opcode));
         out[1] = @as(u8, if (mask) 0x80 | 126 else 126);
@@ -327,8 +327,28 @@ test "ws encode/decode header roundtrip 300 bytes" {
     const payload = [_]u8{0x61} ** 300;
     const f = try wsEncodeFrame(alloc, &payload, .binary, true, io);
     defer alloc.free(f);
+    try std.testing.expectEqual(@as(usize, 2 + 2 + 4 + 300), f.len);
     const h = try wsDecodeHeader(f);
     try std.testing.expectEqual(@as(usize, 300), h.payload_len);
+    try std.testing.expectEqual(@as(usize, 8), h.header_len);
+    // unmask and compare: no trailing garbage past the payload
+    var got: [300]u8 = undefined;
+    for (f[8..], 0..) |b, i| got[i] = b ^ h.mask_key.?[i % 4];
+    try std.testing.expectEqualSlices(u8, &payload, &got);
+}
+
+test "ws encode 70000 bytes uses 64-bit length" {
+    const alloc = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const payload = try alloc.alloc(u8, 70000);
+    defer alloc.free(payload);
+    @memset(payload, 0x62);
+    const f = try wsEncodeFrame(alloc, payload, .binary, true, io);
+    defer alloc.free(f);
+    try std.testing.expectEqual(@as(usize, 2 + 8 + 4 + 70000), f.len);
+    const h = try wsDecodeHeader(f);
+    try std.testing.expectEqual(@as(usize, 70000), h.payload_len);
+    try std.testing.expectEqual(@as(usize, 14), h.header_len);
 }
 
 test "ws accept key vector RFC6455" {

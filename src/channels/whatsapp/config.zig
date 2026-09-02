@@ -50,6 +50,8 @@ pub fn loadFromZeptoConfig(allocator: std.mem.Allocator, zepto_config: anytype) 
         .send_read_receipts = zepto_config.whatsapp_send_read_receipts,
         .group_require_mention = zepto_config.whatsapp_group_require_mention,
         .group_activation_commands = group_activation_commands,
+        .native = if (@hasField(@TypeOf(zepto_config), "whatsapp_native")) zepto_config.whatsapp_native else false,
+
     };
 }
 

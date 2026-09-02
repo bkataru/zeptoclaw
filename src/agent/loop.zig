@@ -10,7 +10,6 @@ const transcript = @import("transcript.zig");
 const openclaw = @import("../openclaw_compat/openclaw.zig");
 const compat = @import("../compat.zig");
 const engagement = @import("../channels/whatsapp/engagement.zig");
-const inbound_media = @import("../channels/whatsapp/inbound_media.zig");
 
 const skills = @import("../skills/skill_sdk.zig");
 const execution_context = @import("../skills/execution_context.zig");
@@ -58,12 +57,15 @@ pub const TurnOpts = struct {
     image_mime: ?[]const u8 = null,
 };
 
+const DEFAULT_VISION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
 pub const Agent = struct {
     allocator: std.mem.Allocator,
     session: Session,
     nim_client: *NIMClient,
     workspace: []const u8,
     session_id: []const u8,
+    vision_model: []const u8 = DEFAULT_VISION_MODEL,
     core: tools_mod.ToolRegistry,
     params: core_tools.ParamHold,
     skill_metadata: skills.SkillMetadata,
@@ -118,6 +120,11 @@ pub const Agent = struct {
         self.session_id = id;
     }
 
+    /// Sets the vision-capable model the `see_image` tool dispatches to for this agent's turns.
+    pub fn setVisionModel(self: *Agent, model: []const u8) void {
+        if (model.len > 0) self.vision_model = model;
+    }
+
     /// Memory: Callee takes responsibility for session, registries, skill metadata.
     pub fn deinit(self: *Agent) void {
         self.session.deinit();
@@ -146,6 +153,7 @@ pub const Agent = struct {
         core_tools.setWorkspace(self.workspace);
         core_tools.setChatId(self.session_id);
         core_tools.resetPresence();
+        core_tools.setVisionClient(self.nim_client.api_key, self.vision_model, self.nim_client.base_url);
         g_skill_agent = self;
         core_tools.setSkillHandler(skillHandler);
         defer {
@@ -174,18 +182,10 @@ pub const Agent = struct {
             }
         }
 
-        var user_msg = try message.userMessage(self.allocator, user_text);
-        if (opts.image_path) |ip| {
-            if (ip.len > 0) {
-                const mime = opts.image_mime orelse "image/jpeg";
-                user_msg.image_data_url = inbound_media.fileToDataUrl(self.allocator, ip, mime);
-                if (user_msg.image_data_url) |_| {
-                    std.log.info("[agent] attached image for vision path={s}", .{ip});
-                } else {
-                    std.log.warn("[agent] vision attach failed path={s}", .{ip});
-                }
-            }
-        }
+        const user_msg = try message.userMessage(self.allocator, user_text);
+        const vision_path: ?[]const u8 = if (opts.image_path) |ip| (if (ip.len > 0) ip else null) else null;
+        core_tools.setVisionImage(vision_path, opts.image_mime);
+        if (vision_path) |vp| std.log.info("[agent] vision image available path={s}", .{vp});
         try self.session.addMessage(user_msg);
         self.transcripts.append(self.session_id, "user", user_text);
 

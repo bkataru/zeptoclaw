@@ -32,7 +32,7 @@ pub const latest_schema =
     \\  FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
     \\);
     \\CREATE TABLE IF NOT EXISTS whatsmeow_pre_keys (
-    \\  jid TEXT, key_id INTEGER CHECK (key_id>=0 AND key_id<16777216), key BLOB NOT NULL CHECK(length(key)=32), uploaded INTEGER NOT NULL,
+    \\  jid TEXT, key_id INTEGER CHECK (key_id>=0 AND key_id<16777216), key BLOB NOT NULL CHECK(length(key)=32), pub BLOB NOT NULL CHECK(length(pub)=32), uploaded INTEGER NOT NULL,
     \\  PRIMARY KEY (jid, key_id), FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
     \\);
     \\CREATE TABLE IF NOT EXISTS whatsmeow_sessions (

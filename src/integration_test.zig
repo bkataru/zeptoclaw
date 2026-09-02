@@ -64,7 +64,7 @@ test "integration: NIMClient chat completion" {
     };
     // Get model from env or default
     const model_opt = compat.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
-    const model = if (model_opt) |m| m else try allocator.dupe(u8, "thinkingmachines/inkling");
+    const model = if (model_opt) |m| m else try allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
 
     var cfg = try makeTestConfig(allocator, api_key, model);
     defer cfg.deinit();
@@ -108,7 +108,7 @@ test "integration: NIMClient auth error handling" {
 
     // Use an invalid API key
     const invalid_key = try allocator.dupe(u8, "invalid-key");
-    const model = try allocator.dupe(u8, "thinkingmachines/inkling");
+    const model = try allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
 
     var cfg = try makeTestConfig(allocator, invalid_key, model);
     defer cfg.deinit();
@@ -147,7 +147,7 @@ test "integration: NIMClient message with tool calls" {
         return err;
     };
     const model_opt = compat.getEnvVarOwned(allocator, "NVIDIA_MODEL") catch null;
-    const model = if (model_opt) |m| m else try allocator.dupe(u8, "thinkingmachines/inkling");
+    const model = if (model_opt) |m| m else try allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
 
     var cfg = try makeTestConfig(allocator, api_key, model);
     defer cfg.deinit();
@@ -196,7 +196,7 @@ test "integration: agent startup" {
         return err;
     };
 
-    const model = try allocator.dupe(u8, "thinkingmachines/inkling");
+    const model = try allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
 
 
     var cfg = try makeTestConfig(allocator, api_key, model);

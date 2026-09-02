@@ -27,9 +27,13 @@ There is no mute-fromMe-for-N-seconds-after-connect. First deploy with an empty 
 
 Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist and a **barvis** mention (or equivalent policy). `leave` unsubscribes a chat until the next **barvis**.
 
-## Native port
+## Native (no Node) mode
 
-`src/channels/whatsapp/native/` is a whatsmeow-inspired Zig stub. It compiles; it is not wired as the gateway transport.
+Set `channels.whatsapp.native` to `true` in `~/.zeptoclaw/config.json` (or `ZEPTO_WA_NATIVE=1`). The gateway then runs the Zig client instead of spawning the Node/Baileys child.
+
+Pair with `zeptoclaw whatsapp pair` — native mode prints a terminal QR (half-block glyphs) plus the raw pairing URL. Identity is stored at `{auth_dir}/native.sqlite` (default `~/.zeptoclaw/sessions/whatsapp/native.sqlite`). Do not delete that file (or Baileys `creds.json`) to unpair.
+
+Current limits: text DMs. Groups and media are pending.
 
 ## Signature
 

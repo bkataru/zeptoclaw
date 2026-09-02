@@ -128,6 +128,7 @@ pub const OpenClawConfig = struct {
             dmPolicy: []const u8 = "allowlist",
             allowFrom: []const []const u8 = &.{},
             groupPolicy: []const u8 = "allowlist",
+            native: bool = false,
         };
     };
 
@@ -362,6 +363,7 @@ pub const ConfigLoader = struct {
 
         // Extract WhatsApp configuration
         const whatsapp_enabled = openclaw.channels.whatsapp != null;
+        const whatsapp_native = if (openclaw.channels.whatsapp) |wh| wh.native else false;
         const whatsapp_auth_dir = try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp");
         const whatsapp_dm_policy = if (openclaw.channels.whatsapp) |wh|
             try self.allocator.dupe(u8, wh.dmPolicy)
@@ -392,7 +394,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = openclaw.agents.defaults.maxConcurrent,
             .source = .file,
             .whatsapp_enabled = whatsapp_enabled,
-            .whatsapp_native = false,
+            .whatsapp_native = whatsapp_native,
             .whatsapp_auth_dir = whatsapp_auth_dir,
             .whatsapp_dm_policy = whatsapp_dm_policy,
             .whatsapp_allow_from = whatsapp_allow_from,
@@ -415,7 +417,7 @@ pub const ConfigLoader = struct {
         };
 
         const model = compat.getEnvVarOwned(self.allocator, "NVIDIA_MODEL") catch
-            try self.allocator.dupe(u8, "thinkingmachines/inkling");
+            try self.allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
 
         const image_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_IMAGE_MODEL") catch
             try self.allocator.dupe(u8, "stable-diffusion-3.5-large");
@@ -486,11 +488,14 @@ pub const ConfigLoader = struct {
         var whatsapp_group_activation_commands = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         try whatsapp_group_activation_commands.append(self.allocator, try self.allocator.dupe(u8, "/start"));
 
+        var default_fallback_env = try self.allocator.alloc([]const u8, 1);
+        default_fallback_env[0] = try self.allocator.dupe(u8, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
+
         return .{
             .allocator = self.allocator,
             .api_key = api_key,
             .primary_model = model,
-            .fallback_models = &.{},
+            .fallback_models = default_fallback_env,
             .image_model = image_model,
             .max_iterations = 10,
             .temperature = 0.7,
@@ -525,11 +530,13 @@ pub const ConfigLoader = struct {
         cli_args: ?CliArgs,
     ) !ZeptoClawConfig {
         // Start with defaults
+        var default_fallback_models = try self.allocator.alloc([]const u8, 1);
+        default_fallback_models[0] = try self.allocator.dupe(u8, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
         var result = ZeptoClawConfig{
             .allocator = self.allocator,
             .api_key = try self.allocator.dupe(u8, ""),
-            .primary_model = try self.allocator.dupe(u8, "thinkingmachines/inkling"),
-            .fallback_models = &.{},
+            .primary_model = try self.allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b"),
+            .fallback_models = default_fallback_models,
             .image_model = try self.allocator.dupe(u8, "stable-diffusion-3.5-large"),
             .max_iterations = 10,
             .temperature = 0.7,
@@ -559,6 +566,8 @@ pub const ConfigLoader = struct {
             const mutable_fc = fc;
             self.allocator.free(result.api_key);
             self.allocator.free(result.primary_model);
+            for (result.fallback_models) |m| self.allocator.free(m);
+            self.allocator.free(result.fallback_models);
             self.allocator.free(result.image_model);
             self.allocator.free(result.gateway_mode);
             self.allocator.free(result.gateway_bind);
@@ -602,6 +611,8 @@ pub const ConfigLoader = struct {
         if (env_config) |ec| {
             self.allocator.free(result.api_key);
             self.allocator.free(result.primary_model);
+            for (result.fallback_models) |m| self.allocator.free(m);
+            self.allocator.free(result.fallback_models);
             self.allocator.free(result.image_model);
             self.allocator.free(result.gateway_mode);
             self.allocator.free(result.gateway_bind);
@@ -717,7 +728,8 @@ test "ConfigLoader mergeConfigs with defaults" {
     defer result.deinit();
 
     try std.testing.expectEqual(ConfigSource.default, result.source);
-    try std.testing.expectEqualStrings("thinkingmachines/inkling", result.primary_model);
+    try std.testing.expectEqualStrings("nvidia/nemotron-3-ultra-550b-a55b", result.primary_model);
+    try std.testing.expectEqualStrings("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", result.fallback_models[0]);
     try std.testing.expectEqual(@as(u32, 18789), result.gateway_port);
 }
 

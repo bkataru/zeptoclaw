@@ -60,9 +60,20 @@ pub const channels = struct {
             pub const store_schema = @import("channels/whatsapp/native/store/schema.zig");
             pub const appstate = @import("channels/whatsapp/native/appstate.zig");
             pub const proto = @import("channels/whatsapp/native/proto.zig");
+            pub const handshake = @import("channels/whatsapp/native/handshake.zig");
+            pub const curve_sigs = @import("channels/whatsapp/native/curve_sigs.zig");
             pub const framesocket = @import("channels/whatsapp/native/framesocket.zig");
             pub const ws_upgrade = @import("channels/whatsapp/native/ws_upgrade.zig");
             pub const client_native = @import("channels/whatsapp/native/client_native.zig");
+            pub const sqlite = @import("channels/whatsapp/native/store/sqlite.zig");
+            pub const jid = @import("channels/whatsapp/native/jid.zig");
+            pub const signal = @import("channels/whatsapp/native/signal.zig");
+            pub const stanza = @import("channels/whatsapp/native/stanza.zig");
+            pub const encrypt = @import("channels/whatsapp/native/encrypt.zig");
+            pub const qrcode = @import("channels/whatsapp/native/qrcode.zig");
+            pub const media = @import("channels/whatsapp/native/media.zig");
+            pub const signal_groups = @import("channels/whatsapp/native/signal_groups.zig");
+            pub const groups = @import("channels/whatsapp/native/groups.zig");
         };
     };
 };
@@ -167,5 +178,26 @@ comptime {
         _ = channels.whatsapp.native.ws_client;
         _ = channels.whatsapp.native.store_impl;
         _ = channels.whatsapp.native.store_schema;
+        _ = channels.whatsapp.native.tokens;
+        _ = channels.whatsapp.native.binary;
+        _ = channels.whatsapp.native.proto;
+        _ = channels.whatsapp.native.handshake;
+        _ = channels.whatsapp.native.curve_sigs;
+        _ = channels.whatsapp.native.pair;
+        _ = channels.whatsapp.native.framesocket;
+        _ = channels.whatsapp.native.ws_upgrade;
+        _ = channels.whatsapp.native.socket;
+        _ = channels.whatsapp.native.client;
+        _ = channels.whatsapp.native.store;
+        _ = channels.whatsapp.native.sqlite;
+        _ = channels.whatsapp.native.appstate;
+        _ = channels.whatsapp.native.jid;
+        _ = channels.whatsapp.native.signal;
+        _ = channels.whatsapp.native.stanza;
+        _ = channels.whatsapp.native.encrypt;
+        _ = channels.whatsapp.native.qrcode;
+        _ = channels.whatsapp.native.media;
+        _ = channels.whatsapp.native.signal_groups;
+        _ = channels.whatsapp.native.groups;
     }
 }

@@ -19,6 +19,17 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("zeitgeist", zeitgeist_mod);
     mod.link_libc = true;
+    // vendor/sqlite amalgamation (no system sqlite3.h on this host)
+    mod.addIncludePath(b.path("vendor/sqlite"));
+    mod.addCSourceFile(.{
+        .file = b.path("vendor/sqlite/sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_DQS=0",
+        },
+    });
 
     // Main executable
     const main_mod = b.createModule(.{
@@ -81,6 +92,20 @@ pub fn build(b: *std.Build) void {
     gateway_server_exe.root_module.link_libc = true;
     b.installArtifact(gateway_server_exe);
 
+    // WhatsApp native pairing tool (terminal QR)
+    const wa_pair_mod = b.createModule(.{
+        .root_source_file = b.path("src/tools/wa_pair.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wa_pair_mod.addImport("zeptoclaw", mod);
+    const wa_pair_exe = b.addExecutable(.{
+        .name = "zeptoclaw-wa-pair",
+        .root_module = wa_pair_mod,
+    });
+    wa_pair_exe.root_module.link_libc = true;
+    b.installArtifact(wa_pair_exe);
+
     // Run command
     const run_step = b.step("run", "Run Zeptoclaw agent");
     const run_cmd = b.addRunArtifact(exe);
@@ -91,7 +116,7 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-// Tests
+    // Tests
     const test_step = b.step("test", "Run tests");
 
     const mod_test = b.addTest(.{
