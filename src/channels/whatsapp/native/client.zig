@@ -23,6 +23,7 @@ const wanted_prekey_count: u32 = 50;
 /// Cache size for automatic retry-receipt resend (whatsmeow recentMessagesSize
 /// is 256; this is a single-account gateway, not a multi-tenant server).
 const recent_out_cap: usize = 64;
+const recent_in_cap: usize = 64;
 /// Cap on automatic resends per cached outbound message id (whatsmeow's
 /// internal retry counter drops at 10); stops a persistently broken session
 /// from causing an unbounded resend loop.
@@ -52,6 +53,18 @@ const RecentOut = struct {
     }
 };
 
+const RecentIn = struct {
+    id: []u8,
+    chat: []u8,
+    sender: []u8,
+
+    fn deinit(self: RecentIn, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.chat);
+        allocator.free(self.sender);
+    }
+};
+
 /// Decrypted chat message handed to the channel. Memory: receiver calls deinit.
 pub const InboundMessage = struct {
     allocator: std.mem.Allocator,
@@ -73,7 +86,7 @@ pub const InboundMessage = struct {
     location: ?proto.Geo = null,
     kind: Kind = .text,
 
-    pub const Kind = enum { text, reaction, poll, location };
+    pub const Kind = enum { text, reaction, poll, location, revoke };
 
     pub const MediaAttachment = struct {
         kind: media.Kind,
@@ -149,6 +162,9 @@ pub const Client = struct {
     recent_out_ring: [recent_out_cap]?[]u8 = [_]?[]u8{null} ** recent_out_cap,
     recent_out_ring_pos: usize = 0,
     recent_out_mu: std.Io.Mutex = .init,
+    recent_in: [recent_in_cap]?RecentIn = [_]?RecentIn{null} ** recent_in_cap,
+    recent_in_pos: usize = 0,
+    recent_in_mu: std.Io.Mutex = .init,
     /// Count of in-flight detached retry-resend worker threads; `disconnect`
     /// waits for this to hit zero so a worker never outlives its `*Client`.
     retry_workers_active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -244,6 +260,12 @@ pub const Client = struct {
         while (rot.next()) |kv| {
             self.allocator.free(kv.key_ptr.*);
             kv.value_ptr.*.deinit(self.allocator);
+        }
+        {
+            const io = ioOf();
+            self.recent_in_mu.lock(io) catch {};
+            for (self.recent_in) |slot| if (slot) |ri| ri.deinit(self.allocator);
+            self.recent_in_mu.unlock(io);
         }
         self.recent_out.deinit();
         var kit = self.sender_key_cache.iterator();
@@ -1351,7 +1373,6 @@ pub const Client = struct {
             defer self.allocator.free(plain);
             decrypted_any = true;
             const msg = proto.Message.decode(plain) catch continue;
-            if (msg.protocol_type != null) continue;
             if (msg.sender_key_distribution) |skd| {
                 self.processSenderKeyDistribution(info.chat, info.sender, skd.group_id, skd.axolotl) catch |err| {
                     std.log.warn("[whatsapp-native] skdm from {s} failed: {}", .{ info.sender, err });
@@ -1361,6 +1382,7 @@ pub const Client = struct {
             try takeMentions(self.allocator, msg, &mentions);
             try takeQuote(self.allocator, msg, &quoted_stanza_id, &quoted_participant, &quoted_text);
             applyKind(msg, &kind);
+            try takeTarget(self.allocator, msg, kind, &quoted_stanza_id, &quoted_participant);
             if (msg.location) |loc| location = loc;
             if (msg.device_sent) |ds| {
                 const inner = proto.Message.decode(ds.message) catch continue;
@@ -1368,6 +1390,7 @@ pub const Client = struct {
                 try takeMentions(self.allocator, inner, &mentions);
                 try takeQuote(self.allocator, inner, &quoted_stanza_id, &quoted_participant, &quoted_text);
                 applyKind(inner, &kind);
+                try takeTarget(self.allocator, inner, kind, &quoted_stanza_id, &quoted_participant);
                 if (inner.location) |loc| location = loc;
                 if (inner.reaction) |rxn| {
                     if (rxn.text.len > 0) {
@@ -1417,7 +1440,7 @@ pub const Client = struct {
         self.sendMessageReceipt(node, info);
         const body = text orelse try self.allocator.dupe(u8, "");
         errdefer self.allocator.free(body);
-        if (media_ref == null and body.len == 0 and location == null) {
+        if (media_ref == null and body.len == 0 and location == null and kind == .text) {
             self.allocator.free(body);
             return .idle;
         }
@@ -1427,6 +1450,11 @@ pub const Client = struct {
         quoted_stanza_id = null;
         quoted_participant = null;
         quoted_text = null;
+        errdefer {
+            if (owned_qid) |s| self.allocator.free(s);
+            if (owned_qp) |s| self.allocator.free(s);
+            if (owned_qt) |s| self.allocator.free(s);
+        }
         const chat_src = chat_override orelse info.chat;
         const sender_pn: ?[]u8 = blk: {
             if (jid.isPn(info.sender)) break :blk try self.allocator.dupe(u8, jid.user(info.sender));
@@ -1438,6 +1466,7 @@ pub const Client = struct {
             }
             break :blk null;
         };
+        rememberInbound(self, info.id, chat_src, info.sender);
         return .{ .message = .{
             .allocator = self.allocator,
             .id = try self.allocator.dupe(u8, info.id),
@@ -2162,7 +2191,14 @@ pub const Client = struct {
     }
 
     pub fn sendReaction(self: *Client, chat_jid: []const u8, message_id: []const u8, emoji: []const u8, participant: ?[]const u8) ![]u8 {
-        const proto_bytes = try proto.Message.encodeReaction(self.allocator, chat_jid, false, message_id, participant, emoji);
+        var looked_up: ?[]u8 = null;
+        defer if (looked_up) |s| self.allocator.free(s);
+        const part = participant orelse blk: {
+            if (!std.mem.eql(u8, jid.server(chat_jid), "g.us")) break :blk null;
+            looked_up = lookupInboundSender(self, chat_jid, message_id);
+            break :blk looked_up;
+        };
+        const proto_bytes = try proto.Message.encodeReaction(self.allocator, chat_jid, false, message_id, part, emoji);
         defer self.allocator.free(proto_bytes);
         return self.sendPlaintext(chat_jid, proto_bytes);
     }
@@ -2239,11 +2275,67 @@ fn takeQuote(
 fn applyKind(msg: proto.Message, kind: *InboundMessage.Kind) void {
     if (msg.reaction != null) {
         kind.* = .reaction;
+    } else if (msg.protocol_type) |pt| {
+        if (pt == 0) kind.* = .revoke;
     } else if (msg.poll_name != null) {
         kind.* = .poll;
     } else if (msg.location != null and kind.* == .text) {
         kind.* = .location;
     }
+}
+
+fn takeTarget(
+    alloc: std.mem.Allocator,
+    msg: proto.Message,
+    kind: InboundMessage.Kind,
+    stanza_id: *?[]u8,
+    participant: *?[]u8,
+) !void {
+    const key: ?proto.MessageKey = if (msg.reaction) |rxn|
+        rxn.key
+    else if (kind == .revoke and msg.protocol_key.id.len > 0)
+        msg.protocol_key
+    else
+        null;
+    const k = key orelse return;
+    if (k.id.len > 0 and stanza_id.* == null) {
+        stanza_id.* = try alloc.dupe(u8, k.id);
+    }
+    if (k.participant.len > 0 and participant.* == null) {
+        participant.* = try alloc.dupe(u8, k.participant);
+    }
+}
+
+fn rememberInbound(self: *Client, id: []const u8, chat: []const u8, sender: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    self.recent_in_mu.lock(io) catch return;
+    defer self.recent_in_mu.unlock(io);
+    const id_d = self.allocator.dupe(u8, id) catch return;
+    const chat_d = self.allocator.dupe(u8, chat) catch {
+        self.allocator.free(id_d);
+        return;
+    };
+    const sender_d = self.allocator.dupe(u8, sender) catch {
+        self.allocator.free(chat_d);
+        self.allocator.free(id_d);
+        return;
+    };
+    if (self.recent_in[self.recent_in_pos]) |old| old.deinit(self.allocator);
+    self.recent_in[self.recent_in_pos] = .{ .id = id_d, .chat = chat_d, .sender = sender_d };
+    self.recent_in_pos = (self.recent_in_pos + 1) % recent_in_cap;
+}
+
+fn lookupInboundSender(self: *Client, chat: []const u8, id: []const u8) ?[]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    self.recent_in_mu.lock(io) catch return null;
+    defer self.recent_in_mu.unlock(io);
+    for (self.recent_in) |slot| {
+        const rec = slot orelse continue;
+        if (std.mem.eql(u8, rec.id, id) and std.mem.eql(u8, rec.chat, chat)) {
+            return self.allocator.dupe(u8, rec.sender) catch null;
+        }
+    }
+    return null;
 }
 
 /// Keep the first decryptable media attachment (kind + direct path + key).
@@ -2685,5 +2777,16 @@ test "dropSession removes memory and store session" {
 
     cli.dropSession("216638251077681@lid");
     try std.testing.expect((try cli.store.?.getSession(cli.paired_jid.?, sid)) == null);
+}
+
+test "lookupInboundSender finds group participant" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+    rememberInbound(&cli, "MIDG", "120363425058847361@g.us", "216638251077681@lid");
+    const got = lookupInboundSender(&cli, "120363425058847361@g.us", "MIDG") orelse return error.TestUnexpectedResult;
+    defer alloc.free(got);
+    try std.testing.expectEqualStrings("216638251077681@lid", got);
+    try std.testing.expect(lookupInboundSender(&cli, "120363425058847361@g.us", "NOPE") == null);
 }
 

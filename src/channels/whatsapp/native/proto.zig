@@ -805,6 +805,28 @@ fn parseLocation(inner: []const u8) ?Geo {
     return .{ .lat = lat.?, .lon = lon.? };
 }
 
+fn parseProtocol(inner: []const u8) struct { typ: ?u32, key: MessageKey, edited: ?[]const u8 } {
+    var typ: ?u32 = null;
+    var key = MessageKey{};
+    var edited: ?[]const u8 = null;
+    var idx: usize = 0;
+    while (idx < inner.len) {
+        const tag = nextTag(inner, &idx) catch break;
+        if (tag.field == 1 and tag.wire == 2) {
+            const kb = readBytes(inner, &idx) catch break;
+            key = decodeMessageKey(kb);
+        } else if (tag.field == 2 and tag.wire == 0) {
+            typ = @intCast(readVarint(inner, &idx) catch break);
+        } else if (tag.field == 16 and tag.wire == 2) {
+            // ProtocolMessage.editedMessage (MESSAGE_EDIT = 14)
+            edited = readBytes(inner, &idx) catch break;
+        } else {
+            skipField(inner, &idx, tag.wire) catch break;
+        }
+    }
+    return .{ .typ = typ, .key = key, .edited = edited };
+}
+
 fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.conversation == null) dst.conversation = src.conversation;
     if (dst.extended_text == null) dst.extended_text = src.extended_text;
@@ -812,6 +834,7 @@ fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.media == null) dst.media = src.media;
     if (dst.device_sent == null) dst.device_sent = src.device_sent;
     if (dst.protocol_type == null) dst.protocol_type = src.protocol_type;
+    if (dst.protocol_key.id.len == 0 and src.protocol_key.id.len > 0) dst.protocol_key = src.protocol_key;
     if (dst.has_sender_key_distribution) dst.has_sender_key_distribution = src.has_sender_key_distribution;
     if (dst.sender_key_distribution == null) dst.sender_key_distribution = src.sender_key_distribution;
     if (dst.reaction == null) dst.reaction = src.reaction;
@@ -1127,6 +1150,7 @@ pub const Message = struct {
     media: ?Media = null,
     device_sent: ?struct { destination_jid: []const u8, message: []const u8 } = null,
     protocol_type: ?u32 = null,
+    protocol_key: MessageKey = .{},
     has_sender_key_distribution: bool = false,
     sender_key_distribution: ?SenderKeyDistribution = null,
     reaction: ?struct { key: MessageKey, text: []const u8 } = null,
@@ -1227,7 +1251,13 @@ pub const Message = struct {
                         continue;
                     }
                     const inner = try readBytes(data, &idx);
-                    out.protocol_type = nestedVarintField(inner, 2);
+                    const proto_info = parseProtocol(inner);
+                    out.protocol_type = proto_info.typ;
+                    out.protocol_key = proto_info.key;
+                    if (proto_info.edited) |eb| {
+                        const edited_msg = decodeFields(eb, true) catch Message{};
+                        overlayMessage(&out, edited_msg);
+                    }
                 },
                 26 => {
                     if (t.wire != 2) {
@@ -1833,6 +1863,47 @@ test "Message decode protocol" {
     try writeBytes(&buf, alloc, 12, proto_msg.items);
     const msg = try Message.decode(buf.items);
     try std.testing.expectEqual(@as(u32, 5), msg.protocol_type.?);
+}
+
+test "Message decode protocol revoke key" {
+    const alloc = std.testing.allocator;
+    var key = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer key.deinit(alloc);
+    try writeBytes(&key, alloc, 1, "120363425058847361@g.us");
+    try writeBytes(&key, alloc, 3, "DEADMSG");
+    try writeBytes(&key, alloc, 4, "p@lid");
+    var proto_msg = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer proto_msg.deinit(alloc);
+    try writeBytes(&proto_msg, alloc, 1, key.items);
+    try writeVarintField(&proto_msg, alloc, 2, 0);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 12, proto_msg.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expectEqual(@as(u32, 0), msg.protocol_type.?);
+    try std.testing.expectEqualStrings("DEADMSG", msg.protocol_key.id);
+    try std.testing.expectEqualStrings("p@lid", msg.protocol_key.participant);
+}
+
+test "Message decode protocol edit overlays new text" {
+    const alloc = std.testing.allocator;
+    const inner_text = try Message.encodeText(alloc, "edited body");
+    defer alloc.free(inner_text);
+    var key = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer key.deinit(alloc);
+    try writeBytes(&key, alloc, 3, "ORIGID");
+    var proto_msg = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer proto_msg.deinit(alloc);
+    try writeBytes(&proto_msg, alloc, 1, key.items);
+    try writeVarintField(&proto_msg, alloc, 2, 14);
+    try writeBytes(&proto_msg, alloc, 16, inner_text);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 12, proto_msg.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expectEqual(@as(u32, 14), msg.protocol_type.?);
+    try std.testing.expectEqualStrings("ORIGID", msg.protocol_key.id);
+    try std.testing.expectEqualStrings("edited body", msg.text().?);
 }
 
 test "Message decode empty and unknown fields" {

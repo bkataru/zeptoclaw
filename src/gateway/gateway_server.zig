@@ -407,7 +407,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     core_tools.setExecEnabled(is_dm and eff_msg.from_me and is_self_chat);
     defer core_tools.setExecEnabled(true);
     const triggered = is_main_target or media_dm;
-    const event_only = eff_msg.message_type == .reaction or eff_msg.message_type == .poll;
+    const event_only = eff_msg.message_type == .reaction or eff_msg.message_type == .poll or eff_msg.message_type == .revoke;
     const gate = zeptoclaw.channels.whatsapp.engagement.decideTurn(
         is_dm,
         eff_msg.from_me,

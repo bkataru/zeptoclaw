@@ -11,6 +11,7 @@ pub const MessageType = enum {
     location,
     poll,
     reaction,
+    revoke,
     unknown,
 };
 
@@ -179,7 +180,10 @@ pub const WhatsAppMessage = struct {
     }
 
     pub fn hasMedia(self: *const WhatsAppMessage) bool {
-        return self.message_type != .text and self.message_type != .reaction and self.message_type != .poll;
+        return switch (self.message_type) {
+            .image, .video, .audio, .document => true,
+            .text, .location, .poll, .reaction, .revoke, .unknown => false,
+        };
     }
 };
 

@@ -220,6 +220,7 @@ pub const WhatsAppChannel = struct {
             .file_len = n,
             .media_key_timestamp = compat.timestamp(),
             .file_name = guessed.file_name,
+            .ptt = guessed.kind == .ptt,
         });
         defer self.allocator.free(proto_bytes);
         return cli.sendPlaintext(to, proto_bytes);
@@ -962,6 +963,7 @@ pub fn inboundToWhatsAppMessage(
         .reaction => .reaction,
         .poll => .poll,
         .location => .location,
+        .revoke => .revoke,
     };
     try replaceOwned(allocator, &msg.body, inbound.text);
 
@@ -1033,7 +1035,7 @@ fn guessOutboundMedia(path: []const u8) OutboundMediaGuess {
     if (std.ascii.eqlIgnoreCase(ext, ".gif")) return .{ .kind = .image, .mime = "image/gif", .file_name = base };
     if (std.ascii.eqlIgnoreCase(ext, ".mp4")) return .{ .kind = .video, .mime = "video/mp4", .file_name = base };
     if (std.ascii.eqlIgnoreCase(ext, ".ogg") or std.ascii.eqlIgnoreCase(ext, ".opus"))
-        return .{ .kind = .audio, .mime = "audio/ogg; codecs=opus", .file_name = base };
+        return .{ .kind = .ptt, .mime = "audio/ogg; codecs=opus", .file_name = base };
     if (std.ascii.eqlIgnoreCase(ext, ".m4a")) return .{ .kind = .audio, .mime = "audio/mp4", .file_name = base };
     if (std.ascii.eqlIgnoreCase(ext, ".amr")) return .{ .kind = .audio, .mime = "audio/amr", .file_name = base };
     if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .{ .kind = .document, .mime = "application/pdf", .file_name = base };
@@ -1192,6 +1194,13 @@ test "inboundToWhatsAppMessage fromMe self-chat LID and peer PN DM" {
     defer rxn_msg.deinit();
     try std.testing.expectEqual(types.MessageType.reaction, rxn_msg.message_type);
     try std.testing.expectEqualStrings("👍", rxn_msg.body);
+
+    peer.kind = .revoke;
+    allocator.free(peer.text);
+    peer.text = try allocator.dupe(u8, "");
+    var rev_msg = try inboundToWhatsAppMessage(allocator, peer, own_jid, own_e164);
+    defer rev_msg.deinit();
+    try std.testing.expectEqual(types.MessageType.revoke, rev_msg.message_type);
 }
 
 fn fuzzParseInbound(_: void, smith: *std.testing.Smith) !void {
