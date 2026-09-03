@@ -1279,7 +1279,7 @@ pub const Message = struct {
                     }
                     out.reaction = .{ .key = key, .text = rxn_text };
                 },
-                51 => {
+                49, 51 => {
                     if (t.wire != 2) {
                         try skipField(data, &idx, t.wire);
                         continue;
@@ -1522,7 +1522,8 @@ pub const Message = struct {
         return owned;
     }
 
-    /// Memory: caller frees. Message{pollCreationMessage=51{encKey=1, name=2, options=3, selectable=4}}.
+    /// Memory: caller frees. Message{pollCreationMessage=49{encKey=1, name=2, options=3, selectable=4}}.
+    /// Field 49 is WAProto pollCreationMessage; 51 is pollCreationMessageV3 / keepInChat (decode both).
     pub fn encodePoll(
         allocator: std.mem.Allocator,
         name: []const u8,
@@ -1543,7 +1544,7 @@ pub const Message = struct {
         try writeVarintField(&inner, allocator, 4, selectable);
         var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
         errdefer buf.deinit(allocator);
-        try writeBytes(&buf, allocator, 51, inner.items);
+        try writeBytes(&buf, allocator, 49, inner.items);
         const owned = try buf.toOwnedSlice(allocator);
         inner.deinit(allocator);
         return owned;
@@ -1708,6 +1709,31 @@ test "Message encodeLocation roundtrip" {
     try std.testing.expect(msg.location != null);
     try std.testing.expectApproxEqAbs(@as(f64, 12.5), msg.location.?.lat, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 77.25), msg.location.?.lon, 1e-9);
+}
+
+test "Message encodePoll uses field 49 and roundtrips name" {
+    const alloc = std.testing.allocator;
+    const enc_key = [_]u8{0x11} ** 32;
+    const options = [_][]const u8{ "yes", "no" };
+    const blob = try Message.encodePoll(alloc, "lunch?", &options, 1, &enc_key);
+    defer alloc.free(blob);
+    var idx: usize = 0;
+    const tag = try readVarint(blob, &idx);
+    try std.testing.expectEqual(@as(u64, (49 << 3) | 2), tag);
+    const msg = try Message.decode(blob);
+    try std.testing.expectEqualStrings("lunch?", msg.poll_name.?);
+}
+
+test "Message decode poll field 51 legacy keepInChat" {
+    const alloc = std.testing.allocator;
+    var inner = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer inner.deinit(alloc);
+    try writeBytes(&inner, alloc, 2, "legacy-poll");
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 51, inner.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expectEqualStrings("legacy-poll", msg.poll_name.?);
 }
 
 test "Message encodeReaction roundtrip" {

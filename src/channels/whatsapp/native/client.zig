@@ -956,8 +956,9 @@ pub const Client = struct {
 
     /// Cache `plaintext` (the raw, pre-DSM-wrap conversation proto) for `msg_id`
     /// so a later `<receipt type=retry>` from any fanned-out device can trigger
-    /// an automatic resend. Evicts the oldest entry past `recent_out_cap`. DM
-    /// sends only (`sendText`); group retries are not cached/handled.
+    /// an automatic resend. Evicts the oldest entry past `recent_out_cap`.
+    /// DM (`sendText`) and group (`sendGroupPlaintext`) sends; group retries
+    /// resend as SKDM + skmsg via `resendGroupForRetry`.
     fn rememberOutbound(self: *Client, msg_id: []const u8, dest: []const u8, plaintext: []const u8) !void {
         const io = ioOf();
         try self.recent_out_mu.lock(io);
@@ -1106,6 +1107,9 @@ pub const Client = struct {
     /// Runs on the detached worker thread spawned by `handleRetryReceipt`.
     fn resendForRetry(self: *Client, work: *RetryWork) !void {
         if (!self.isConnected()) return error.NotConnected;
+        if (std.mem.eql(u8, jid.server(work.dest), "g.us")) {
+            return self.resendGroupForRetry(work);
+        }
         const own = self.paired_jid orelse return error.NotPaired;
         const own_lid = self.paired_lid;
 
@@ -1139,6 +1143,85 @@ pub const Client = struct {
         defer self.allocator.free(frame);
         try self.writeFrame(frame);
         std.log.info("[whatsapp-native][diag] retry resend id={s} to={s} device={s} enc_type={s}", .{ work.msg_id, work.dest, work.from_device, enc.enc_type.attr() });
+    }
+
+    /// Sender-key retry: SKDM to the failing device + skmsg of the cached
+    /// group plaintext (whatsmeow handleRetryReceipt for g.us). Pairwise
+    /// `encodeRetryResend` cannot decrypt on group devices.
+    fn resendGroupForRetry(self: *Client, work: *RetryWork) !void {
+        if (!self.isConnected()) return error.NotConnected;
+        const alloc = self.allocator;
+        const io = ioOf();
+        const own = self.paired_jid orelse return error.NotPaired;
+        const own_lid = self.paired_lid;
+
+        const enc_jid = try self.encryptionJid(work.from_device, null);
+        defer alloc.free(enc_jid);
+
+        self.dropSession(enc_jid);
+        try self.fetchAndProcessPreKeys(&.{enc_jid});
+
+        const skdm_plain = blk: {
+            try self.state_mu.lock(io);
+            defer self.state_mu.unlock(io);
+            const rec = try self.senderKeyRecordPtr(work.dest, own);
+            const axolotl = try sg.create(alloc, rec, io);
+            defer alloc.free(axolotl);
+            self.saveSenderKeyRecord(work.dest, own, rec);
+            break :blk try proto.Message.encodeSenderKeyDistribution(alloc, work.dest, axolotl);
+        };
+        defer alloc.free(skdm_plain);
+
+        const enc = try self.encryptForDevice(enc_jid, skdm_plain);
+        defer alloc.free(enc.ciphertext);
+        const skdm_targets = [1]stanza.Participant{.{
+            .jid = enc_jid,
+            .enc_type = enc.enc_type,
+            .ciphertext = enc.ciphertext,
+        }};
+
+        const padded = try proto.padMessageRandom(alloc, work.plaintext, io);
+        defer alloc.free(padded);
+        const skmsg = blk: {
+            try self.state_mu.lock(io);
+            defer self.state_mu.unlock(io);
+            const rec = try self.senderKeyRecordPtr(work.dest, own);
+            const ct = try sg.encrypt(alloc, rec, padded, io);
+            self.saveSenderKeyRecord(work.dest, own, rec);
+            break :blk ct;
+        };
+        defer alloc.free(skmsg);
+
+        var phash_devs: std.ArrayList([]const u8) = .empty;
+        defer phash_devs.deinit(alloc);
+        if (own_lid) |ol| try phash_devs.append(alloc, ol);
+        var own_dev_buf: [128]u8 = undefined;
+        const own_dev = std.fmt.bufPrint(&own_dev_buf, "{s}:{d}@{s}", .{
+            jid.user(own), jid.device(own), jid.server(own),
+        }) catch return error.JidTooLong;
+        try phash_devs.append(alloc, own_dev);
+        try phash_devs.append(alloc, work.from_device);
+
+        const addressing_mode: []const u8 = if (jid.isLid(work.from_device)) "lid" else "";
+        var node = try groups_mod.buildGroupMessageNode(alloc, .{
+            .id = work.msg_id,
+            .to_group = work.dest,
+            .own_jid = own,
+            .own_lid = own_lid,
+            .addressing_mode = addressing_mode,
+            .participants_device_jids = phash_devs.items,
+            .skmsg_ciphertext = skmsg,
+            .skdm_payload = skdm_plain,
+            .skdm_targets = &skdm_targets,
+            .device_identity = if (enc.enc_type == .pkmsg) self.adv_account else null,
+        });
+        defer node.deinit();
+        const frame = try binary.marshal(alloc, node);
+        defer alloc.free(frame);
+        try self.writeFrame(frame);
+        std.log.info("[whatsapp-native][diag] group retry resend id={s} to={s} device={s} enc_type={s}", .{
+            work.msg_id, work.dest, work.from_device, enc.enc_type.attr(),
+        });
     }
 
     // ---- group sender keys (signal_groups over sqlite) ---------------------------
@@ -1916,6 +1999,7 @@ pub const Client = struct {
         defer alloc.free(send.frame);
         defer alloc.free(send.id);
         try self.writeFrame(send.frame);
+        self.rememberOutbound(send.id, to, msg_plain) catch |err| storeWarn("remember outbound", err);
         return alloc.dupe(u8, send.id);
     }
 
@@ -2556,6 +2640,18 @@ test "rememberOutbound and takeRecentOutboundForRetry cache + cap retries" {
         try std.testing.expectEqualStrings("hello-plaintext", got.plaintext);
     }
     try std.testing.expectError(error.TooManyRetries, cli.takeRecentOutboundForRetry("MID1"));
+}
+
+test "rememberOutbound caches group dest for retry" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+
+    try cli.rememberOutbound("GID1", "120363425058847361@g.us", "group-plain");
+    const got = (try cli.takeRecentOutboundForRetry("GID1")) orelse return error.TestUnexpectedResult;
+    defer got.deinit(alloc);
+    try std.testing.expectEqualStrings("120363425058847361@g.us", got.dest);
+    try std.testing.expectEqualStrings("group-plain", got.plaintext);
 }
 
 test "rememberOutbound evicts oldest past recent_out_cap" {
