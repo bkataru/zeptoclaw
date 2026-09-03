@@ -582,6 +582,7 @@ pub const WhatsAppChannel = struct {
 
     fn parseMessageType(s: []const u8) types.MessageType {
         if (std.mem.eql(u8, s, "image") or std.mem.startsWith(u8, s, "image")) return .image;
+        if (std.mem.eql(u8, s, "sticker") or std.mem.startsWith(u8, s, "sticker")) return .image;
         if (std.mem.eql(u8, s, "video") or std.mem.startsWith(u8, s, "video")) return .video;
         if (std.mem.eql(u8, s, "audio") or std.mem.startsWith(u8, s, "audio")) return .audio;
         if (std.mem.eql(u8, s, "document") or std.mem.startsWith(u8, s, "document")) return .document;
@@ -838,6 +839,12 @@ pub const WhatsAppChannel = struct {
             if (owned.media_type) |old| self.allocator.free(old);
             owned.media_type = self.allocator.dupe(u8, mt) catch null;
             owned.message_type = parseMessageType(mt);
+            if (owned.body.len == 0) {
+                if (std.fmt.allocPrint(self.allocator, "[{s} attached]", .{@tagName(owned.message_type)})) |s| {
+                    self.allocator.free(owned.body);
+                    owned.body = s;
+                } else |_| {}
+            }
             self.saveNativeMedia(&owned, a) catch |err| {
                 std.log.warn("[whatsapp] native media download failed ({s}): {}", .{ mt, err });
             };

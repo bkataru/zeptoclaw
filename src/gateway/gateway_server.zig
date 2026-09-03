@@ -342,7 +342,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             return;
         };
     };
-    if (eff_msg.body.len == 0) {
+    if (eff_msg.body.len == 0 and !eff_msg.keepEmptyBody()) {
         g_whatsapp_mu.unlock(compat.getIo());
         return;
     }
@@ -350,7 +350,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     // Always listen: persist inbound even when we choose not to speak.
     const chat_id_copy = try g_whatsapp_alloc.dupe(u8, eff_msg.chat_id);
     defer g_whatsapp_alloc.free(chat_id_copy);
-    const body_copy = try g_whatsapp_alloc.dupe(u8, eff_msg.body);
+    var body_scratch: [32]u8 = undefined;
+    const body_src: []const u8 = if (eff_msg.body.len > 0) eff_msg.body else std.fmt.bufPrint(&body_scratch, "[{s}]", .{@tagName(eff_msg.message_type)}) catch @tagName(eff_msg.message_type);
+    const body_copy = try g_whatsapp_alloc.dupe(u8, body_src);
     defer g_whatsapp_alloc.free(body_copy);
     var journal_body = body_copy;
     var journal_body_owned = false;

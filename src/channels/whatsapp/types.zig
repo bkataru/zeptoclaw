@@ -185,6 +185,16 @@ pub const WhatsAppMessage = struct {
             .text, .location, .poll, .reaction, .revoke, .unknown => false,
         };
     }
+
+    /// Empty-body inbound that still has a payload (media / reaction / revoke / location).
+    pub fn keepEmptyBody(self: *const WhatsAppMessage) bool {
+        if (self.hasMedia()) return true;
+        if (self.media_path) |mp| if (mp.len > 0) return true;
+        return switch (self.message_type) {
+            .reaction, .poll, .revoke, .location, .image, .video, .audio, .document => true,
+            .text, .unknown => false,
+        };
+    }
 };
 
 /// Poll option
@@ -390,6 +400,22 @@ pub const Debouncer = struct {
         return entries.value;
     }
 };
+
+test "keepEmptyBody covers media reaction revoke location" {
+    const allocator = std.testing.allocator;
+    var msg = try WhatsAppMessage.init(allocator);
+    defer msg.deinit();
+    try std.testing.expect(!msg.keepEmptyBody());
+    msg.message_type = .reaction;
+    try std.testing.expect(msg.keepEmptyBody());
+    msg.message_type = .revoke;
+    try std.testing.expect(msg.keepEmptyBody());
+    msg.message_type = .image;
+    try std.testing.expect(msg.keepEmptyBody());
+    msg.message_type = .text;
+    msg.media_path = try allocator.dupe(u8, "/tmp/sticker.webp");
+    try std.testing.expect(msg.keepEmptyBody());
+}
 
 test "WhatsAppMessage init/deinit" {
     const allocator = std.testing.allocator;
