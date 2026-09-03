@@ -4,6 +4,8 @@
 
 - Native WhatsApp client: 1:1 DMs (including self-chat) now address the recipient's LID with `peer_recipient_pn` set, matching current WhatsApp server behavior. The old PN-addressed envelope was server-ACKed but silently dropped by LID-keyed devices (the phone). `zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender for forcing a fresh outbound handshake when a peer device's session desyncs.
 
+- Native WhatsApp client: inbound `<receipt type=retry>` (a fanned-out device couldn't decrypt what we sent) now auto-recovers instead of requiring a manual session wipe. `sendText` caches the last 64 outbound DM plaintexts; a retry drops that one device's stale Signal session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 automatic resends per message). Group-chat retries are not handled.
+
 - Memory ingest child inherits process env (`compat.runParentEnv`). `dirExists` no longer panics on relative paths. Compact oneshot `TimeoutStartSec=0` so NIM retries are not SIGTERM at 15 min.
 
 

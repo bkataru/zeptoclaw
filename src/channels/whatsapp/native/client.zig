@@ -20,6 +20,13 @@ const iq_timeout_ms: i64 = 20_000;
 /// whatsmeow MinPreKeyCount / WantedPreKeyCount.
 const min_prekey_count: u32 = 5;
 const wanted_prekey_count: u32 = 50;
+/// Cache size for automatic retry-receipt resend (whatsmeow recentMessagesSize
+/// is 256; this is a single-account gateway, not a multi-tenant server).
+const recent_out_cap: usize = 64;
+/// Cap on automatic resends per cached outbound message id (whatsmeow's
+/// internal retry counter drops at 10); stops a persistently broken session
+/// from causing an unbounded resend loop.
+const max_auto_retries: u32 = 5;
 
 /// Port of whatsmeow/client.go connection lifecycle (Connect + doHandshake).
 /// Live WhatsAppChannel still uses Baileys; this is the native path behind
@@ -27,6 +34,22 @@ const wanted_prekey_count: u32 = 50;
 const PeerSession = struct {
     session: signal.Session,
     pending_prekey: ?signal.PreKeyHeader = null,
+};
+
+/// Cached plaintext of a message we sent, keyed by message id, so a later
+/// `<receipt type=retry>` from any fanned-out device can trigger an automatic
+/// resend (whatsmeow retry.go addRecentMessage). `dest` is the wire `to` used
+/// on the original send (post LID rewrite) — needed to rebuild the
+/// DeviceSentMessage wrapper for a retrying own-device.
+const RecentOut = struct {
+    dest: []u8,
+    plaintext: []u8,
+    retries: u32 = 0,
+
+    fn deinit(self: RecentOut, allocator: std.mem.Allocator) void {
+        allocator.free(self.dest);
+        allocator.free(self.plaintext);
+    }
 };
 
 /// Decrypted chat message handed to the channel. Memory: receiver calls deinit.
@@ -108,6 +131,14 @@ pub const Client = struct {
     pending_mu: std.Io.Mutex = .init,
     pending: std.StringHashMap(*Waiter),
     retries: std.StringHashMap(u32),
+    /// Bounded FIFO cache backing automatic retry-receipt resend; see `RecentOut`.
+    recent_out: std.StringHashMap(RecentOut),
+    recent_out_ring: [recent_out_cap]?[]u8 = [_]?[]u8{null} ** recent_out_cap,
+    recent_out_ring_pos: usize = 0,
+    recent_out_mu: std.Io.Mutex = .init,
+    /// Count of in-flight detached retry-resend worker threads; `disconnect`
+    /// waits for this to hit zero so a worker never outlives its `*Client`.
+    retry_workers_active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// In-memory sender-key records over sqlite (mirrors `sessions`).
     sender_key_cache: std.StringHashMap(*sg.SenderKeyRecord),
     keepalive_thread: ?std.Thread = null,
@@ -149,6 +180,7 @@ pub const Client = struct {
             .sessions = std.StringHashMap(PeerSession).init(allocator),
             .pending = std.StringHashMap(*Waiter).init(allocator),
             .retries = std.StringHashMap(u32).init(allocator),
+            .recent_out = std.StringHashMap(RecentOut).init(allocator),
             .sender_key_cache = std.StringHashMap(*sg.SenderKeyRecord).init(allocator),
             .id_epoch = std.mem.readInt(u32, &epoch_buf, .little) & 0xffff,
         };
@@ -164,6 +196,7 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
+        self.waitRetryWorkersIdle();
         self.stopKeepalive();
         self.clearQr();
         self.qr_codes.deinit(self.allocator);
@@ -189,6 +222,12 @@ pub const Client = struct {
         var rit = self.retries.iterator();
         while (rit.next()) |kv| self.allocator.free(kv.key_ptr.*);
         self.retries.deinit();
+        var rot = self.recent_out.iterator();
+        while (rot.next()) |kv| {
+            self.allocator.free(kv.key_ptr.*);
+            kv.value_ptr.*.deinit(self.allocator);
+        }
+        self.recent_out.deinit();
         var kit = self.sender_key_cache.iterator();
         while (kit.next()) |kv| {
             self.allocator.free(kv.key_ptr.*);
@@ -462,6 +501,7 @@ pub const Client = struct {
         self.connected = false;
         self.logged_in = false;
         self.failPendingIqs();
+        self.waitRetryWorkersIdle();
     }
 
     pub fn isConnected(self: *const Client) bool {
@@ -621,8 +661,14 @@ pub const Client = struct {
         if (std.mem.eql(u8, tag, "iq")) return self.dispatchIq(node, frame);
         if (std.mem.eql(u8, tag, "message")) return self.dispatchMessage(node);
         if (std.mem.eql(u8, tag, "receipt")) {
-            std.log.info("[whatsapp-native][diag] recv receipt id={s} type={s} from={s} participant={s}", .{ node.getAttr("id") orelse "-", node.getAttr("type") orelse "-", node.getAttr("from") orelse "-", node.getAttr("participant") orelse "-" });
+            const rtype = node.getAttr("type") orelse "";
+            std.log.info("[whatsapp-native][diag] recv receipt id={s} type={s} from={s} participant={s}", .{ node.getAttr("id") orelse "-", rtype, node.getAttr("from") orelse "-", node.getAttr("participant") orelse "-" });
             self.ackNode(node);
+            if (std.mem.eql(u8, rtype, "retry")) {
+                self.handleRetryReceipt(node) catch |err| {
+                    std.log.warn("[whatsapp-native] retry receipt handling failed: {}", .{err});
+                };
+            }
             return .idle;
         }
         if (std.mem.eql(u8, tag, "notification")) {
@@ -886,6 +932,194 @@ pub const Client = struct {
     /// row (e.g. FK failure before the device row exists) breaks decrypt after restart.
     fn storeWarn(what: []const u8, err: anyerror) void {
         std.log.warn("[whatsapp-native] store {s} write failed: {}", .{ what, err });
+    }
+
+    // ---- retry receipts (whatsmeow retry.go: addRecentMessage / handleRetryReceipt) --
+
+    /// Cache `plaintext` (the raw, pre-DSM-wrap conversation proto) for `msg_id`
+    /// so a later `<receipt type=retry>` from any fanned-out device can trigger
+    /// an automatic resend. Evicts the oldest entry past `recent_out_cap`. DM
+    /// sends only (`sendText`); group retries are not cached/handled.
+    fn rememberOutbound(self: *Client, msg_id: []const u8, dest: []const u8, plaintext: []const u8) !void {
+        const io = ioOf();
+        try self.recent_out_mu.lock(io);
+        defer self.recent_out_mu.unlock(io);
+        if (self.recent_out_ring[self.recent_out_ring_pos]) |old_key| {
+            if (self.recent_out.fetchRemove(old_key)) |kv| {
+                self.allocator.free(kv.key);
+                kv.value.deinit(self.allocator);
+            }
+        }
+        const key = try self.allocator.dupe(u8, msg_id);
+        errdefer self.allocator.free(key);
+        const d = try self.allocator.dupe(u8, dest);
+        errdefer self.allocator.free(d);
+        const pt = try self.allocator.dupe(u8, plaintext);
+        errdefer self.allocator.free(pt);
+        try self.recent_out.put(key, .{ .dest = d, .plaintext = pt });
+        self.recent_out_ring[self.recent_out_ring_pos] = key;
+        self.recent_out_ring_pos = (self.recent_out_ring_pos + 1) % recent_out_cap;
+    }
+
+    const RecentOutCopy = struct {
+        dest: []u8,
+        plaintext: []u8,
+
+        fn deinit(self: RecentOutCopy, allocator: std.mem.Allocator) void {
+            allocator.free(self.dest);
+            allocator.free(self.plaintext);
+        }
+    };
+
+    /// Copies out the cached plaintext for `msg_id` and bumps its retry
+    /// counter, capping automatic resends at `max_auto_retries` so a
+    /// persistently broken device session cannot trigger an unbounded loop.
+    fn takeRecentOutboundForRetry(self: *Client, msg_id: []const u8) !?RecentOutCopy {
+        const io = ioOf();
+        try self.recent_out_mu.lock(io);
+        defer self.recent_out_mu.unlock(io);
+        const e = self.recent_out.getPtr(msg_id) orelse return null;
+        e.retries += 1;
+        if (e.retries > max_auto_retries) return error.TooManyRetries;
+        return .{
+            .dest = try self.allocator.dupe(u8, e.dest),
+            .plaintext = try self.allocator.dupe(u8, e.plaintext),
+        };
+    }
+
+    /// Best-effort: drop the cached + persisted session so the next encrypt
+    /// forces a fresh handshake (used when a device reports it can't decrypt).
+    fn dropSession(self: *Client, enc_jid: []const u8) void {
+        const io = ioOf();
+        self.state_mu.lock(io) catch return;
+        defer self.state_mu.unlock(io);
+        const sid = jid.signalId(self.allocator, enc_jid) catch return;
+        defer self.allocator.free(sid);
+        if (self.sessions.fetchRemove(sid)) |kv| self.allocator.free(kv.key);
+        if (self.store) |*s| {
+            if (self.paired_jid) |own| s.deleteSession(own, sid) catch |err| storeWarn("delete session", err);
+        }
+    }
+
+    /// Retry-resend workers block on `sendIqWait`/`state_mu`; give them a
+    /// moment to notice a disconnect (via `failPendingIqs`, called just before
+    /// this) and exit before the caller may `deinit` this Client out from
+    /// under a still-running detached thread.
+    fn waitRetryWorkersIdle(self: *Client) void {
+        var waited_ms: u32 = 0;
+        while (self.retry_workers_active.load(.acquire) != 0 and waited_ms < 5000) {
+            sleepMs(20);
+            waited_ms += 20;
+        }
+    }
+
+    /// Heap-owned handoff to the detached retry-resend worker thread.
+    const RetryWork = struct {
+        client: *Client,
+        from_device: []u8,
+        msg_id: []u8,
+        dest: []u8,
+        plaintext: []u8,
+
+        fn deinit(self: *const RetryWork, allocator: std.mem.Allocator) void {
+            allocator.free(self.from_device);
+            allocator.free(self.msg_id);
+            allocator.free(self.dest);
+            allocator.free(self.plaintext);
+        }
+    };
+
+    /// Inbound `<receipt type=retry>`: a device we fanned out to (including our
+    /// own phone) couldn't decrypt what we sent and is asking for a resend.
+    /// Looks up the cached plaintext and hands off to a detached worker thread
+    /// that drops the stale session, re-establishes it via a fresh prekey
+    /// fetch, and resends to that one device with the same message id
+    /// (whatsmeow handleRetryReceipt). Must not run on the poll thread itself:
+    /// the prekey fetch blocks on `sendIqWait`, whose response only `poll`
+    /// (this very call stack) can deliver. DM-only; group retries (carrying a
+    /// `participant` attr) are not handled.
+    fn handleRetryReceipt(self: *Client, node: binary.Node) !void {
+        const from = node.getAttr("from") orelse return error.MissingFrom;
+        if (node.getAttr("participant") != null) return;
+        const msg_id = node.getAttr("id") orelse return error.MissingId;
+        if (node.getChildByTag("retry") == null) return error.MissingRetryChild;
+
+        const cached = self.takeRecentOutboundForRetry(msg_id) catch |err| {
+            std.log.warn("[whatsapp-native] dropping retry for {s} from {s}: {}", .{ msg_id, from, err });
+            return;
+        } orelse {
+            std.log.warn("[whatsapp-native] retry receipt for unknown/expired message id={s} from={s}", .{ msg_id, from });
+            return;
+        };
+
+        const work = try self.allocator.create(RetryWork);
+        work.* = .{
+            .client = self,
+            .from_device = try self.allocator.dupe(u8, from),
+            .msg_id = try self.allocator.dupe(u8, msg_id),
+            .dest = cached.dest,
+            .plaintext = cached.plaintext,
+        };
+        _ = self.retry_workers_active.fetchAdd(1, .monotonic);
+        const t = std.Thread.spawn(.{}, retryWorkerEntry, .{work}) catch |err| {
+            _ = self.retry_workers_active.fetchSub(1, .monotonic);
+            std.log.warn("[whatsapp-native] spawn retry worker for {s} failed: {}", .{ from, err });
+            work.deinit(self.allocator);
+            self.allocator.destroy(work);
+            return;
+        };
+        t.detach();
+    }
+
+    fn retryWorkerEntry(work: *RetryWork) void {
+        const client = work.client;
+        const alloc = client.allocator;
+        defer {
+            work.deinit(alloc);
+            alloc.destroy(work);
+            _ = client.retry_workers_active.fetchSub(1, .release);
+        }
+        client.resendForRetry(work) catch |err| {
+            std.log.warn("[whatsapp-native] retry resend to {s} for {s} failed: {}", .{ work.from_device, work.msg_id, err });
+        };
+    }
+
+    /// Runs on the detached worker thread spawned by `handleRetryReceipt`.
+    fn resendForRetry(self: *Client, work: *RetryWork) !void {
+        if (!self.isConnected()) return error.NotConnected;
+        const own = self.paired_jid orelse return error.NotPaired;
+        const own_lid = self.paired_lid;
+
+        const enc_jid = try self.encryptionJid(work.from_device, null);
+        defer self.allocator.free(enc_jid);
+
+        self.dropSession(enc_jid);
+        try self.fetchAndProcessPreKeys(&.{enc_jid});
+
+        const is_own_user = std.mem.eql(u8, jid.user(work.from_device), jid.user(own)) or
+            (own_lid != null and std.mem.eql(u8, jid.user(work.from_device), jid.user(own_lid.?)));
+        var plain_owned: ?[]u8 = null;
+        defer if (plain_owned) |p| self.allocator.free(p);
+        const plain: []const u8 = if (is_own_user) blk: {
+            const wrapped = try proto.Message.encodeDeviceSent(self.allocator, work.dest, work.plaintext);
+            plain_owned = wrapped;
+            break :blk wrapped;
+        } else work.plaintext;
+
+        const enc = try self.encryptForDevice(enc_jid, plain);
+        defer self.allocator.free(enc.ciphertext);
+
+        const frame = try stanza.encodeRetryResend(
+            self.allocator,
+            work.from_device,
+            work.msg_id,
+            enc.enc_type,
+            enc.ciphertext,
+            if (enc.enc_type == .pkmsg) self.adv_account else null,
+        );
+        defer self.allocator.free(frame);
+        try self.writeFrame(frame);
+        std.log.info("[whatsapp-native][diag] retry resend id={s} to={s} device={s} enc_type={s}", .{ work.msg_id, work.dest, work.from_device, enc.enc_type.attr() });
     }
 
     // ---- group sender keys (signal_groups over sqlite) ---------------------------
@@ -1384,6 +1618,7 @@ pub const Client = struct {
         defer alloc.free(frame);
         std.log.info("[whatsapp-native][diag] sendText frame to={s} dest={s} peer_pn={s} id={s} any_prekey={} devices={d} parts={d}", .{ to, dest, dm.pn_owned orelse "-", msg_id, any_prekey, devices.items.len, parts.items.len });
         try self.writeFrame(frame);
+        self.rememberOutbound(&msg_id, dest, msg_plain) catch |err| storeWarn("remember outbound", err);
         return alloc.dupe(u8, &msg_id);
     }
 
@@ -2089,5 +2324,57 @@ test "lidDmDestination rewrites PN to LID with peer_recipient_pn" {
     defer unknown.deinit(alloc);
     try std.testing.expectEqualStrings("15555550101@s.whatsapp.net", unknown.dest);
     try std.testing.expect(unknown.pn_owned == null);
+}
+
+test "rememberOutbound and takeRecentOutboundForRetry cache + cap retries" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+
+    try cli.rememberOutbound("MID1", "216638251077681@lid", "hello-plaintext");
+
+    try std.testing.expect((try cli.takeRecentOutboundForRetry("NOPE")) == null);
+
+    var i: u32 = 0;
+    while (i < max_auto_retries) : (i += 1) {
+        const got = (try cli.takeRecentOutboundForRetry("MID1")) orelse return error.TestUnexpectedResult;
+        defer got.deinit(alloc);
+        try std.testing.expectEqualStrings("216638251077681@lid", got.dest);
+        try std.testing.expectEqualStrings("hello-plaintext", got.plaintext);
+    }
+    try std.testing.expectError(error.TooManyRetries, cli.takeRecentOutboundForRetry("MID1"));
+}
+
+test "rememberOutbound evicts oldest past recent_out_cap" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+
+    var buf: [8]u8 = undefined;
+    var i: usize = 0;
+    while (i < recent_out_cap + 1) : (i += 1) {
+        const id = std.fmt.bufPrint(&buf, "id{d}", .{i}) catch unreachable;
+        try cli.rememberOutbound(id, "dest@s.whatsapp.net", "plain");
+    }
+    try std.testing.expect((try cli.takeRecentOutboundForRetry("id0")) == null);
+    const still_there = (try cli.takeRecentOutboundForRetry("id64")) orelse return error.TestUnexpectedResult;
+    still_there.deinit(alloc);
+}
+
+test "dropSession removes memory and store session" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+    try cli.openStore(":memory:");
+    try cli.setOwnJid("917019895010:58@s.whatsapp.net");
+    try cli.persistDevice();
+
+    const sid = "216638251077681";
+    try cli.store.?.putSession(cli.paired_jid.?, sid, "fake-session-blob");
+    const before = (try cli.store.?.getSession(cli.paired_jid.?, sid)) orelse return error.TestUnexpectedResult;
+    alloc.free(before);
+
+    cli.dropSession("216638251077681@lid");
+    try std.testing.expect((try cli.store.?.getSession(cli.paired_jid.?, sid)) == null);
 }
 

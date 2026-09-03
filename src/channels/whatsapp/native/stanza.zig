@@ -438,6 +438,41 @@ pub fn encodeMessageMulti(
     return binary.marshal(allocator, msg);
 }
 
+/// Memory: caller frees. Single-device resend of a message that got a
+/// `<receipt type=retry>`: bare `<enc>` (no `<participants>` wrapper),
+/// addressed directly at the retrying device with `device_fanout=false`
+/// (whatsmeow handleRetryReceipt — targeted resend, not a fresh fanout).
+pub fn encodeRetryResend(
+    allocator: std.mem.Allocator,
+    to_device: []const u8,
+    id: []const u8,
+    enc_type: EncType,
+    ciphertext: []const u8,
+    device_identity: ?[]const u8,
+) ![]u8 {
+    var enc = binary.Node.init(allocator, "enc");
+    defer enc.deinit();
+    try enc.attrs.put("v", "2");
+    try enc.attrs.put("type", enc_type.attr());
+    enc.content = .{ .bytes = ciphertext };
+
+    var di = binary.Node.init(allocator, "device-identity");
+    defer di.deinit();
+    if (device_identity) |d| di.content = .{ .bytes = d };
+
+    var kids: [2]binary.Node = .{ enc, di };
+    const n_kids: usize = if (device_identity != null) 2 else 1;
+
+    var msg = binary.Node.init(allocator, "message");
+    defer msg.deinit();
+    try msg.attrs.put("to", to_device);
+    try msg.attrs.put("id", id);
+    try msg.attrs.put("type", "text");
+    try msg.attrs.put("device_fanout", "false");
+    msg.content = .{ .nodes = kids[0..n_kids] };
+    return binary.marshal(allocator, msg);
+}
+
 /// Strings alias `node`. Memory: caller frees `encs`.
 pub const MessageInfo = struct {
     id: []const u8,
@@ -971,6 +1006,33 @@ test "encodeMessageMulti lid dest sets peer_recipient_pn" {
     defer node.deinit();
     try std.testing.expectEqualStrings("216638251077681@lid", node.getAttr("to").?);
     try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", node.getAttr("peer_recipient_pn").?);
+    try std.testing.expect(node.getChildByTag("device-identity") == null);
+}
+
+test "encodeRetryResend bare enc device_fanout false" {
+    const alloc = std.testing.allocator;
+    const wire = try encodeRetryResend(alloc, "216638251077681:56@lid", "MID3", .pkmsg, "ct", "ident-bytes");
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
+    try std.testing.expectEqualStrings("message", node.tag);
+    try std.testing.expectEqualStrings("216638251077681:56@lid", node.getAttr("to").?);
+    try std.testing.expectEqualStrings("MID3", node.getAttr("id").?);
+    try std.testing.expectEqualStrings("false", node.getAttr("device_fanout").?);
+    try std.testing.expect(node.getChildByTag("participants") == null);
+    const enc = node.getChildByTag("enc") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("pkmsg", enc.getAttr("type").?);
+    try std.testing.expectEqualStrings("ct", enc.contentBytes().?);
+    const di = node.getChildByTag("device-identity") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ident-bytes", di.contentBytes().?);
+}
+
+test "encodeRetryResend omits device-identity when null" {
+    const alloc = std.testing.allocator;
+    const wire = try encodeRetryResend(alloc, "111@s.whatsapp.net", "MID4", .msg, "ct2", null);
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
     try std.testing.expect(node.getChildByTag("device-identity") == null);
 }
 
