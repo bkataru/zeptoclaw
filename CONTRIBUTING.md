@@ -16,7 +16,7 @@ Node 18+ for WhatsApp (`ZEPTO_NODE` if needed). Do not commit `sessions/`, `.env
 ## Layout
 
 - `src/agent/loop.zig` - `runTurn` (tools + NIM). Gateway WhatsApp must go through this, not a one-shot `NIMClient.chat`.
-- `src/channels/whatsapp/` - live Baileys path. `native/` is the unfinished whatsmeow port.
+- `src/channels/whatsapp/` - live Baileys path. `native/` is an opt-in whatsmeow-style client, off by default. It supports DM text only; groups and media are pending.
 - `src/agent/memory.zig` - `journalAppend`, extractive fallback compact.
 - `src/agent/memory_update.zig` - ingest (`zeptoclaw memory update`).
 - `src/agent/memory_compact.zig` - densify (`zeptoclaw memory compact`).

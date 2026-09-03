@@ -1,32 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-03
 
-- Native WhatsApp client: 1:1 DMs (including self-chat) now address the recipient's LID with `peer_recipient_pn` set, matching current WhatsApp server behavior. The old PN-addressed envelope was server-ACKed but silently dropped by LID-keyed devices (the phone). `zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender for forcing a fresh outbound handshake when a peer device's session desyncs.
+### WhatsApp
 
-- Native WhatsApp client: inbound `<receipt type=retry>` (a fanned-out device couldn't decrypt what we sent) now auto-recovers instead of requiring a manual session wipe. `sendText` caches the last 64 outbound DM plaintexts; a retry drops that one device's stale Signal session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 automatic resends per message). Group-chat retries are not handled.
+- Added a native WhatsApp client (`src/channels/whatsapp/native/`). It is a full Signal/whatsmeow-style multi-device port: handshake, pairing, the binary wire codec, Curve25519/Ed25519 signing, groups, sender-key encryption, media, QR pairing, and a sqlite device store. Turn it on with `channels.whatsapp.native` (or `ZEPTO_WA_NATIVE=1`). Baileys stays the default.
+- Fixed a usync silent-drop. The binary encoder wrote JID-shaped attributes as plain text, not the `JIDPair`/`ADJID` tags the server expects. The server accepted the frame but never answered, so every send timed out with `error.IqTimeout`. usync now resolves in about 300ms.
+- Fixed silent delivery drops on 1:1 DMs, including self-chat. WhatsApp now delivers those chats on the recipient's LID, not the phone number. The old envelope got a server ACK, but the LID-keyed device (the phone) dropped it. `sendText` now resolves PN and LID through the stored `lid_map` and sets `peer_recipient_pn` on the envelope.
+- Added `zeptoclaw-wa-send <db-path> <to-jid> <text>`. It is a standalone one-shot sender. Use it to force a fresh handshake when a peer device's session goes out of sync.
+- The native client now recovers from a `<receipt type=retry>` on its own. `sendText` caches the last 64 outbound DM plaintexts. On a retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. Automatic resends are capped at 5 per message. Group retries are not covered yet.
+- Added `POST /reload`. It re-reads `allowFrom`, `dmPolicy`, and `groupPolicy` from `~/.zeptoclaw/config.json` and applies them without a gateway restart.
+- `exec` now runs only on an operator `fromMe` DM. A partner DM cannot run shell commands.
+- Baileys reconnects after `connection.close`, with backoff from 2s up to 60s. A `loggedOut` session stays dead until the next QR scan. Pending turns still replay on the following `connected` event.
+- Inbound images download to `sessions/whatsapp/media`. The gateway keeps the last image per chat JID and attaches it as NIM vision on later turns in that same chat.
+- Burst coalesce: while a chat has a NIM turn in flight, later messages in that chat merge into one follow-up turn. The gateway releases its lock during the NIM call, so a burst does not queue behind a rate-limit sleep.
+- Added a pending-inbound queue (`pending-turns.jsonl`). The gateway enqueues an inbound message before NIM and acks it after send or listen. A `SIGKILL` mid-turn no longer drops the message; the gateway replays the queue on the next connect.
+- `MEMORY.md` now auto-injects only on an operator `fromMe` DM. A peer's inbound message in that chat does not get it.
+- WhatsApp turns hydrate from same-chat journal lines before `runTurn`, on top of the JID isolation from 0.1.0.
 
-- Memory ingest child inherits process env (`compat.runParentEnv`). `dirExists` no longer panics on relative paths. Compact oneshot `TimeoutStartSec=0` so NIM retries are not SIGTERM at 15 min.
+### Vision
 
+- `nvidia/nemotron-3-ultra-550b-a55b` is now the primary agent model: fast, tool-capable, text-only. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` moved to `fallbacks[0]`. A new `see_image` tool dispatches it on demand, since the primary model rejects image input.
 
-- Baileys auto-reconnect after `connection.close` (backoff 2s..60s). `loggedOut` stays dead until QR. Pending-turns still replay on the following `connected`.
+### Memory
 
+- Fixed a memory-update child panic. The child now inherits the process env, and `dirExists` no longer panics on a relative path.
+- The compact oneshot now runs with `TimeoutStartSec=0`. A slow NIM retry no longer gets `SIGTERM` at 15 minutes.
 
-- `zeptoclaw fuzz [iters]` nightly havoc (default 50000). Property tests for JID isolation and pending ack. NIM `tryParseCompletion`. Redacted seeds in `testdata/fuzz/`. Zig `--fuzz` still broken on 0.16.0.
+### Fuzz
 
+- Added `zeptoclaw fuzz [iters]`, a nightly havoc run (50000 iterations by default). It runs property tests for JID isolation and pending-ack state, plus `tryParseCompletion` on NIM output. Seeds live under `testdata/fuzz/`, with secrets redacted. Zig's own `--fuzz` is still broken on 0.16.0.
+- Added `std.testing.fuzz` targets for inbound JSON, the journal JID filter, `pending-turns.jsonl`, tool-call hydration, and the memory-decide parser. Run them with `zig build test --fuzz`.
 
-- Fuzz targets (`std.testing.fuzz`) for inbound JSON, journal JID filter, pending-turns jsonl, tool-call hydrate, memory decide parsers. `zig build test --fuzz`.
+### Ops
 
-
-- Inbound images: download to `sessions/whatsapp/media`, last-image per JID, attach as NIM vision on that chat's later turns.
-
-
-- Burst coalesce: while NIM is in flight for a chat, later messages in that JID merge into one follow-up turn. Mutex released during NIM.
-
-
-- Pending inbound queue: `pending-turns.jsonl`. Enqueue before NIM, ack after send or listen. Replay on WhatsApp connect after SIGKILL.
-- `MEMORY.md` auto-injected only on Baala `fromMe` DMs. Peer inbound in that chat does not get it.
-- Same-chat journal hydrate (already in 0.1.0 follow-ups).
+- `build.zig.zon` version `0.2.0`. Tests: 419 pass, 3 skip without `NVIDIA_API_KEY`.
 
 ## 0.1.0 - 2026-08-22
 

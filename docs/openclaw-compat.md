@@ -157,6 +157,9 @@ WS   /ws
 GET  /  /ui  (control UI, gated)
 POST /autonomous/run|/browse|/search|/post|/idea
 GET  /discoveries  POST /discoveries/clear
+POST /agent  /agent/wait
+POST /exec/approve
+POST /reload
 POST /heartbeat  GET /state
 POST /gateway/incident  GET /gateway/incidents
 GET  /metrics  (Prometheus)

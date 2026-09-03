@@ -27,6 +27,10 @@ There is no mute-fromMe-for-N-seconds-after-connect. First deploy with an empty 
 
 Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist and a **barvis** mention (or equivalent policy). `leave` unsubscribes a chat until the next **barvis**.
 
+The `exec` tool only runs on an operator `fromMe` 1:1 DM. A partner DM cannot invoke `exec`, even inside an allowlisted chat.
+
+`POST /reload` on the gateway hot-reloads `allowFrom`, `dmPolicy`, and `groupPolicy` without a restart.
+
 ## Native (no Node) mode
 
 Set `channels.whatsapp.native` to `true` in `~/.zeptoclaw/config.json` (or `ZEPTO_WA_NATIVE=1`). The gateway then runs the Zig client instead of spawning the Node/Baileys child.
@@ -34,6 +38,14 @@ Set `channels.whatsapp.native` to `true` in `~/.zeptoclaw/config.json` (or `ZEPT
 Pair with `zeptoclaw whatsapp pair` — native mode prints a terminal QR (half-block glyphs) plus the raw pairing URL. Identity is stored at `{auth_dir}/native.sqlite` (default `~/.zeptoclaw/sessions/whatsapp/native.sqlite`). Do not delete that file (or Baileys `creds.json`) to unpair.
 
 Current limits: text DMs. Groups and media are pending.
+
+Native mode had a usync silent-drop bug: every outbound send failed with `error.IqTimeout`. The binary encoder wrote JID-shaped attributes as plain text instead of the `JIDPair`/`ADJID` binary tags WhatsApp's server requires, so the server never answered. This is fixed. Usync now resolves in about 300ms.
+
+Native mode also had a delivery bug on 1:1 DMs, including self-chat. WhatsApp now addresses those chats to the recipient's LID, not the phone number. The old envelope got a server ACK, but the phone (a LID-keyed device) silently dropped it. `sendText` now resolves the phone number and LID through the stored `lid_map`, and sets `peer_recipient_pn` on the envelope so the fanout reaches the phone.
+
+Native mode now recovers automatically from `<receipt type=retry>`. If a fanned-out device could not decrypt a message, the old fix required deleting that device's session row by hand and resending. Now `sendText` caches the last 64 outbound DM plaintexts. On a retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. This caps at 5 resends per message. Group retries are not covered.
+
+`zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender. Use it to force a fresh handshake by hand, outside the automatic path — for example, for a first-contact or self-chat probe, or when the automatic retry cap is hit. Stop the gateway first, so `wa-send` gets exclusive access to the sqlite session store.
 
 ## Signature
 

@@ -6,10 +6,16 @@
 
 ## Build Status
 
-**v0.1.0** (2026-08-22). `zig build test --summary all`: 260 tests (3 skip without `NVIDIA_API_KEY`). Zig 0.16.0.
+**v0.2.0** (2026-09-03). `zig build test --summary all`: 419 tests (3 skip without `NVIDIA_API_KEY`). Zig 0.16.0.
 
 ## Recent Updates
 
+- **Native WhatsApp client shipped** (opt-in, 2026-09-03): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. Baileys stays the default. It sends text DMs; groups and media are still pending
+- **usync silent-drop fix**: the binary encoder wrote JID attributes as plain text instead of the `JIDPair`/`ADJID` binary tags the server needs. usync now resolves in about 300ms instead of timing out
+- **LID self-chat delivery fix**: WhatsApp delivers 1:1 chats on the recipient's LID, not the phone number. `sendText` now resolves phone-number/LID pairs from `lid_map` and sets `peer_recipient_pn`
+- **Automatic retry-receipt recovery**: on a `<receipt type=retry>`, the native client drops the stale session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 resends per message). `zeptoclaw-wa-send` forces a fresh handshake by hand
+- **`POST /reload`**: hot-reloads `allowFrom`, `dmPolicy`, and `groupPolicy` without restarting the gateway
+- **`exec` gating**: the `exec` tool now runs only on an operator `fromMe` WhatsApp DM. A partner DM cannot invoke it
 - **Agent loop on WhatsApp** (2026-08-22): gateway inbound goes through `Agent.runTurn` (workspace markdown + tools + NIM), not `NIMClient.chat` once
 - **Memory**: daily journals `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (full `[in]`/`[out]`, no 2000-char clip). Tools `memory_get` / `memory_search` / `memory_append` / `memory_edit`. `zeptoclaw memory update` every 30 min (decide then synthesize). `zeptoclaw memory compact` every 2 h (densify MEMORY.md, does not dump journals)
 - **WhatsApp reliability**: inbound ledger (Baileys id + 3 min fingerprint), JSON-only RPC stdout, stderr drain, `RpcTimeout` on send ACK, LID/`fromMe` allowlist DMs, handler off the reader thread, Baileys auto-reconnect on `connection.close` (not `loggedOut`)
@@ -34,11 +40,11 @@
 
 | Metric | Value |
 |--------|-------|
-| **Zig source files** | 106 |
-| **Lines of code** | ~29k in `src/` |
+| **Zig source files** | 119 |
+| **Lines of code** | ~44.7k in `src/` |
 | **Build errors** | 0 |
-| **Tests** | 260 |
-| **Binaries** | 4 |
+| **Tests** | 419 |
+| **Binaries** | 6 |
 | **Skills ported** | 21 |
 
 ### Binaries
@@ -49,6 +55,8 @@
 | `zeptoclaw-gateway` | HTTP + WhatsApp (port 18789) |
 | `zeptoclaw-webhook` | Webhook helper (port 9000) |
 | `zeptoclaw-shell2http` | Shell-over-HTTP (port 9001) |
+| `zeptoclaw-wa-pair` | Terminal-QR pairing for native WhatsApp mode |
+| `zeptoclaw-wa-send <db-path> <to-jid> <text>` | One-shot native-mode DM sender; forces a fresh Signal handshake after a session desync |
 
 ## What is this?
 
@@ -59,7 +67,7 @@ ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+*
 - Zero bloat, built from scratch
 - UTCP (Universal Tool Calling Protocol) support
 - Modular: providers, agents, channels, tools
-- WhatsApp channel integration (Baileys live path; Zig whatsmeow port is compile-only)
+- WhatsApp channel integration: Baileys is the default live path. A native Zig client (`native/`) is a working, opt-in alternative for text DMs; turn it on with `channels.whatsapp.native`. Groups and media are still pending
 - Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `see_image` / `listen` / `leave` / `skill` / `memory_*`
 - 21 skills ported from OpenClaw
 - Cloudflare Worker for resilient routing
@@ -186,7 +194,7 @@ src/
 │       ├── config.zig
 │       ├── access_control.zig
 │       ├── types.zig
-│       └── native/             # whatsmeow Zig stubs (not live)
+│       └── native/             # opt-in multi-device client (text DMs; groups/media pending)
 ├── services/                   # HTTP services
 │   ├── gateway_server.zig      # Main gateway
 │   ├── webhook_server.zig      # Webhook handling
@@ -364,7 +372,7 @@ Fully implemented with Zig channel files plus the Node wrapper:
 - `inbound_media.zig` - Last inbound image per JID
 - `engagement.zig` - Language extra, ⚡ signature, subscribe/leave
 
-Replay is **message id + fingerprint** (`chatId|fromMe|body`), with a 3-minute same-body skip - not a mute window after connect. Wake word is **barvis** except allowlisted DMs / LID self-chat. `leave` unsubscribes a chat until the next barvis. Native whatsmeow under `native/` compiles; it is not the live path.
+Replay is **message id + fingerprint** (`chatId|fromMe|body`), with a 3-minute same-body skip - not a mute window after connect. Wake word is **barvis** except allowlisted DMs / LID self-chat. `leave` unsubscribes a chat until the next barvis. Native whatsmeow under `native/` is a working, opt-in path for text DMs; Baileys stays the live default.
 
 Pending turns replay on WhatsApp `connected`. Burst messages while NIM is in flight merge into a follow-up. Same-JID inbound images attach as NIM vision. Journals hydrate same-chat history after restart.
 
@@ -428,7 +436,7 @@ zig build test
 
 ### Project structure
 
-- `src/` (106 Zig files, ~29k lines)
+- `src/` (119 Zig files, ~44.7k lines)
 - `vendor/` (zeitgeist, comprezz)
 - `systemd/` and `contrib/systemd/` (unit templates, no secrets)
 - `scripts/migrate/`
@@ -509,10 +517,10 @@ The following changes were recently committed to complete the Zig 0.16.0 migrati
 5. **fix: Fix ArrayList.toOwnedSlice() in WhatsApp channel** - Ensures API compliance across channel files
 6. **fix: Update knowledge_base skill for Zig 0.16.0 compatibility** - Updates skill for latest Zig version
 
-Later work (August 2026) wired WhatsApp through `runTurn`, hardened Baileys RPC/ledger, added pending/burst/vision, and parser fuzz. History was rewritten to drop live tokens and junk blobs; clones should follow current `main`.
+Later work (August 2026) wired WhatsApp through `runTurn`, hardened Baileys RPC/ledger, added pending/burst/vision, and parser fuzz. History was rewritten to drop live tokens and junk blobs; clones should follow current `main`. In September 2026 a native WhatsApp client shipped as an opt-in alternative to Baileys; it fixed a usync silent-drop and a LID self-chat delivery bug, and added automatic retry-receipt recovery.
 
 ---
 
-**Status:** v0.1.0 tagged. WhatsApp `runTurn` + journals + memory update/compact. Post-tag: pending replay, burst coalesce, inbound vision, fuzz.
+**Status:** v0.2.0 tagged. WhatsApp `runTurn` + journals + memory update/compact. Post-tag: native WhatsApp groups and media, group-retry recovery.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

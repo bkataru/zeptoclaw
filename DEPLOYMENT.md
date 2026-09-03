@@ -35,6 +35,8 @@ Keep secrets in systemd or `chmod 600` env files. Do not put live keys in git.
 | `ZEPTO_EXEC_APPROVE` | no | `1` allows all `exec` tools |
 | `WHATSAPP_AUTH_DIR` | no | default `~/.zeptoclaw/sessions/whatsapp` |
 
+`exec` only runs on an operator `fromMe` WhatsApp DM. A partner DM cannot invoke it.
+
 WhatsApp allowlist is config, not env: `channels.whatsapp.allowFrom` and `dmPolicy` (`allowlist` recommended).
 
 ## systemd --user
@@ -65,9 +67,25 @@ Expect `connection status=connected` then inbound logs. First connect after an e
 
 `barvis-memory-update.timer` runs `zeptoclaw memory compact` every 2 hours. Journal ingest is the gateway child `zeptoclaw memory update` (`ZEPTO_MEMORY_SECS`). See `docs/memory.md`.
 
+`POST /reload` on the gateway HTTP port reloads `allowFrom`, `dmPolicy`, and `groupPolicy` from `~/.zeptoclaw/config.json`. Allowlist changes no longer need a `systemctl --user restart`.
+
 ## Optional services
 
 `zeptoclaw-webhook` (9000) and `zeptoclaw-shell2http` (9001) have templates in `systemd/`. Heartbeat/watchdog timers are optional. `whatsapp-responder.timer` is leftover; live replies come from the gateway.
+
+## Native WhatsApp mode (opt-in)
+
+Native mode is a Signal/whatsmeow-style client, separate from Baileys. Baileys stays the default. Turn on native mode with the `channels.whatsapp.native` config key, or set `ZEPTO_WA_NATIVE=1`. It sends and receives DM text only; groups and media are pending.
+
+Pair a device with `zeptoclaw-wa-pair` (terminal QR) or the `zeptoclaw whatsapp pair` subcommand.
+
+If a peer device's Signal session desyncs, force a fresh handshake with `zeptoclaw-wa-send`. Stop the gateway first: it holds an exclusive sqlite lock on the native session store.
+
+```bash
+systemctl --user stop zeptoclaw-gateway.service
+zeptoclaw-wa-send <db-path> <to-jid> <text>
+systemctl --user start zeptoclaw-gateway.service
+```
 
 ## OpenClaw data
 

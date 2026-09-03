@@ -21,6 +21,8 @@ Zig waited ~30s for a JSON-RPC ACK to `sendMessage`. Causes: Baileys hang (LID),
 
 Signal session desync. Usually recoverable; if persistent, re-pair (new `sessions/whatsapp` after backup).
 
+In native mode (`channels.whatsapp.native`), a Bad MAC or decrypt failure now usually self-heals through the automatic retry-receipt recovery in `sendText`. Re-pair only if it keeps failing past 5 auto-resends for the same message. This fix does not apply to Baileys mode.
+
 ## Logs
 
 ```bash
