@@ -92,12 +92,23 @@ pub const InboundProcessor = struct {
         return std.fmt.allocPrint(allocator, "{s}|{s}|{s}", .{ msg.chat_id, if (msg.from_me) "1" else "0", clipped });
     }
 
+    /// Content fingerprint is for *text* replay under a new wire id (offline batch).
+    /// Empty bodies, reactions, revokes, and media all collide if keyed on body alone
+    /// (two caption-less photos both become "[image attached]").
+    fn shouldFingerprint(msg: *const WhatsAppMessage) bool {
+        if (msg.message_type != .text) return false;
+        if (msg.hasMedia()) return false;
+        if (msg.media_path) |mp| if (mp.len > 0) return false;
+        return msg.body.len > 0;
+    }
+
     /// Check if message is a duplicate: exact id ever seen, or a matching
     /// content fingerprint within the TTL.
     fn isDuplicate(self: *InboundProcessor, msg: *const WhatsAppMessage) bool {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ msg.chat_id, msg.id }) catch return false;
         defer self.allocator.free(key);
         if (self.seen_messages.contains(key)) return true;
+        if (!shouldFingerprint(msg)) return false;
 
         const fp = fingerprintKey(self.allocator, msg) catch return false;
         defer self.allocator.free(fp);
@@ -148,7 +159,7 @@ pub const InboundProcessor = struct {
     /// fingerprint, then persists to disk so a later restart still knows.
     fn markSeen(self: *InboundProcessor, msg: *const WhatsAppMessage) !void {
         self.rememberId(msg) catch {};
-        self.rememberFingerprint(msg) catch {};
+        if (shouldFingerprint(msg)) self.rememberFingerprint(msg) catch {};
         self.saveLedger();
     }
 
@@ -469,6 +480,48 @@ test "InboundProcessor basic" {
     defer freePairing(allocator, result2.pairing_code);
     try std.testing.expectEqual(false, result2.allowed);
     try std.testing.expectEqualStrings("Duplicate message", result2.reason.?);
+}
+
+test "InboundProcessor does not fingerprint-collide empty media or reactions" {
+    const allocator = std.testing.allocator;
+    var config = try WhatsAppConfig.init(allocator);
+    defer config.deinit();
+
+    var whatsapp_session = try WhatsAppSession.init(allocator, config, 50);
+    defer whatsapp_session.deinit();
+
+    var processor = InboundProcessor.init(allocator, config, &whatsapp_session);
+    defer processor.deinit();
+
+    var img1 = try WhatsAppMessage.init(allocator);
+    defer img1.deinit();
+    try fillTestMsg(&img1, "img-1", "19082673946862@lid", "[image attached]");
+    img1.message_type = .image;
+    const r1 = try processor.process(img1);
+    defer freePairing(allocator, r1.pairing_code);
+
+    var img2 = try WhatsAppMessage.init(allocator);
+    defer img2.deinit();
+    try fillTestMsg(&img2, "img-2", "19082673946862@lid", "[image attached]");
+    img2.message_type = .image;
+    const r2 = try processor.process(img2);
+    defer freePairing(allocator, r2.pairing_code);
+    try std.testing.expect(r2.reason == null or !std.mem.eql(u8, r2.reason.?, "Duplicate message"));
+
+    var rxn1 = try WhatsAppMessage.init(allocator);
+    defer rxn1.deinit();
+    try fillTestMsg(&rxn1, "rxn-1", "19082673946862@lid", "");
+    rxn1.message_type = .reaction;
+    const r3 = try processor.process(rxn1);
+    defer freePairing(allocator, r3.pairing_code);
+
+    var rxn2 = try WhatsAppMessage.init(allocator);
+    defer rxn2.deinit();
+    try fillTestMsg(&rxn2, "rxn-2", "19082673946862@lid", "");
+    rxn2.message_type = .reaction;
+    const r4 = try processor.process(rxn2);
+    defer freePairing(allocator, r4.pairing_code);
+    try std.testing.expect(r4.reason == null or !std.mem.eql(u8, r4.reason.?, "Duplicate message"));
 }
 
 test "InboundProcessor content fingerprint catches same message under a new id" {
