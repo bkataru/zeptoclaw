@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0 - 2026-09-04
+
+### Tests
+
+- Fixed test discovery for four WhatsApp modules. `root.zig` imported `inbound`, `session`, `outbound`, and `access_control` as single types, and Zig collects no `test` blocks through that form. They are whole-file imports in the test-mode comptime list now. 16 previously silent tests run, including the inbound ledger restart-survival test.
+- Added an inbound dedup ledger (`{auth_dir}/gateway-inbound-ledger.json`). The processor records wire ids plus content fingerprints and reloads them after a restart, so an offline-batch redelivery never triggers a second reply.
+
+### Native media decoders
+
+- Fixed `ImageMessage.direct_path`: the decoder read field 10, the wire sends 11. Image downloads lost their path before this fix.
+- Rewrote the `StickerMessage` decoder. Every field except `url` was misnumbered or sat behind a wire-type guard that never matches, so no sticker ever decrypted. The decoder now follows the source-verified field table.
+- `encodeReceipt` accepts a `t` timestamp. Read receipts need it. The delivery-ack caller passes null.
+
+### NIM reliability
+
+- Raised the NIM timeout default from 30s to 120s. Ultra answers trivial prompts in ~32s, so the old default killed every request just before the answer arrived. The constructors hardcoded 30000 and ignored the config value; they use `cfg.nim_timeout_ms` now, with tests that pin the wiring.
+- Raised agent `max_tokens` from 1024 to 4096. Ultra spends most of 1024 tokens on hidden reasoning and returns a stub. Replies use tools and full sentences again.
+- Split retries into transient and permanent. `Timeout` / `RateLimit` / `Network` retry forever. Any other error gets 3 tries in `chatUntilDone` and 3 turn retries in the gateway, then the turn answers with a fallback echo. A deterministic 400 no longer wedges the turn for 20 minutes and swallows later wake-ups through coalescing.
+- The gateway logs the HTTP status plus the first bytes of NVIDIA's error body on every non-200, plus a per-message shape summary (role, content length, tool-call counts) and the tool-call payloads. The next schema rejection names itself.
+- Tool outputs pass through a lossy UTF-8 scrub (invalid bytes become U+FFFD) before they enter history. Raw `ls` bytes from a bad filename used to poison the request JSON and draw a 400 on every later attempt of the turn.
+- Hydrated text-emitted tool calls get unique ids (`text-tool-{seq}`). The old constant id collided when one turn hydrated twice.
+
+### Replies
+
+- Burst prompts lead with the newest message and instruct tool use for DO / CHECK / RUN / TELL parts, so a greeting burst no longer swallows an action ask.
+- Tests: 441 pass, 3 skip without `NVIDIA_API_KEY`.
+
 ## 0.2.0 - 2026-09-03
 
 ### WhatsApp

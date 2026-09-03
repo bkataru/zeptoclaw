@@ -125,19 +125,26 @@ pub fn encodeAck(allocator: std.mem.Allocator, inbound: binary.Node) ![]u8 {
     return binary.marshal(allocator, ack);
 }
 
-/// Memory: caller frees. `<receipt to id [type] [participant]/>`.
+/// Memory: caller frees. `<receipt to id [type] [t] [participant]/>`.
+/// `t` is Unix seconds, required on explicit read/read-self receipts.
 pub fn encodeReceipt(
     allocator: std.mem.Allocator,
     to: []const u8,
     id: []const u8,
     receipt_type: ?[]const u8,
     participant: ?[]const u8,
+    t: ?i64,
 ) ![]u8 {
     var rec = binary.Node.init(allocator, "receipt");
     defer rec.deinit();
     try rec.attrs.put("to", to);
     try rec.attrs.put("id", id);
-    if (receipt_type) |t| try rec.attrs.put("type", t);
+    if (receipt_type) |tt| try rec.attrs.put("type", tt);
+    if (t) |ts| {
+        var ts_buf: [24]u8 = undefined;
+        const ts_s = std.fmt.bufPrint(&ts_buf, "{d}", .{ts}) catch return error.OutOfMemory;
+        try rec.attrs.put("t", ts_s);
+    }
     if (participant) |p| try rec.attrs.put("participant", p);
     return binary.marshal(allocator, rec);
 }
@@ -730,7 +737,7 @@ test "encodeAck receipt copies type" {
 
 test "encodeReceipt roundtrip" {
     const alloc = std.testing.allocator;
-    const wire = try encodeReceipt(alloc, "1234@s.whatsapp.net", "MID", "inactive", "p@s.whatsapp.net");
+    const wire = try encodeReceipt(alloc, "1234@s.whatsapp.net", "MID", "inactive", "p@s.whatsapp.net", null);
     defer alloc.free(wire);
     var node = try binary.decodeNode(alloc, wire);
     defer node.deinit();
@@ -739,6 +746,17 @@ test "encodeReceipt roundtrip" {
     try std.testing.expectEqualStrings("MID", node.getAttr("id").?);
     try std.testing.expectEqualStrings("inactive", node.getAttr("type").?);
     try std.testing.expectEqualStrings("p@s.whatsapp.net", node.getAttr("participant").?);
+    try std.testing.expect(node.getAttr("t") == null);
+}
+
+test "encodeReceipt read includes t" {
+    const alloc = std.testing.allocator;
+    const wire = try encodeReceipt(alloc, "1234@s.whatsapp.net", "MID", "read", null, 1700000000);
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
+    try std.testing.expectEqualStrings("read", node.getAttr("type").?);
+    try std.testing.expectEqualStrings("1700000000", node.getAttr("t").?);
 }
 
 test "encodePingIq roundtrip" {

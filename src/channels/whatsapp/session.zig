@@ -537,10 +537,12 @@ test "WhatsAppSession access control" {
     msg.sender_e164 = try allocator.dupe(u8, "1234567890");
 
     const result = try session.checkAccessControl(&msg);
+    defer if (result.pairing_code) |c| allocator.free(c);
     try std.testing.expectEqual(false, result.allowed);
     try std.testing.expect(result.pairing_code != null);
 
     try session.pairSender("1234567890");
     const result2 = try session.checkAccessControl(&msg);
+    defer if (result2.pairing_code) |c| allocator.free(c);
     try std.testing.expectEqual(true, result2.allowed);
 }

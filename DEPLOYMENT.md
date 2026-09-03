@@ -27,7 +27,7 @@ Keep secrets in systemd or `chmod 600` env files. Do not put live keys in git.
 | Variable | Required | Notes |
 |----------|----------|--------|
 | `NVIDIA_API_KEY` | yes | NIM (gateway and memory jobs) |
-| `NVIDIA_MODEL` | no | default `thinkingmachines/inkling` |
+| `NVIDIA_MODEL` | no | default `nvidia/nemotron-3-ultra-550b-a55b` |
 | `GATEWAY_AUTH_TOKEN` | recommended | HTTP auth; config `gateway.auth.token` also works |
 | `ZEPTO_NODE` | if `node` missing | absolute path to Node |
 | `ZEPTO_CRON_SECS` | no | `0` or unset = no heartbeat turns on the chat path |

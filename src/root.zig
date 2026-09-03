@@ -171,8 +171,16 @@ comptime {
         _ = autonomous.agent_framework;
         _ = gateway.token_auth;
         _ = gateway.session_store;
+        _ = channels.whatsapp.config;
         _ = channels.whatsapp.pending;
         _ = channels.whatsapp.inbound_media;
+        // Whole-file imports: field extraction (`@import("x.zig").Type`) does
+        // not register that file's `test` blocks. These four were silently
+        // absent from `zig build test` until this list included them.
+        _ = @import("channels/whatsapp/inbound.zig");
+        _ = @import("channels/whatsapp/session.zig");
+        _ = @import("channels/whatsapp/outbound.zig");
+        _ = @import("channels/whatsapp/access_control.zig");
         _ = channels.whatsapp.native.noise_crypto;
         _ = channels.whatsapp.native.noise_handshake;
         _ = channels.whatsapp.native.ws_client;

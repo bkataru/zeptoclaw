@@ -524,6 +524,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
+        var bad_turns: u32 = 0;
         const reply = while (true) {
             var mime_buf: [64]u8 = [_]u8{0} ** 64;
             var vision_path: ?[]u8 = null;
@@ -547,6 +548,14 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
                 .image_path = vision_path,
                 .image_mime = if (vision_path != null) vision_mime else null,
             }) catch |err| {
+                const transient = err == error.Timeout or err == error.RateLimit or err == error.Network;
+                if (!transient) {
+                    bad_turns += 1;
+                    if (bad_turns >= 3) {
+                        std.log.err("[whatsapp] agent run failed permanently ({}) after {d} tries; answering with fallback", .{ err, bad_turns });
+                        break fallback_reply(g_whatsapp_alloc, body_copy, cfg.nim_model) catch "";
+                    }
+                }
                 std.log.err("[whatsapp] agent run failed: {}; keeping inbound, backing off", .{err});
                 zeptoclaw.providers.nim.sleepAfterFailure();
                 continue;
@@ -554,7 +563,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         };
         break :blk reply;
     };
-    defer g_whatsapp_alloc.free(reply_text);
+    defer if (reply_text.len > 0) g_whatsapp_alloc.free(reply_text);
     if (reply_text.len == 0) {
         std.log.info("[whatsapp] silent/leave; not sending", .{});
         zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);

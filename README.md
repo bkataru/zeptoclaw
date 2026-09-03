@@ -29,7 +29,7 @@
 - **Zig 0.16.0 Migration** (February 28, 2026): All 11 phases finalized with zero errors
 - **ArrayList API**: Fixed `toOwnedSlice()` across all 9 skill modules (nufast_physics, knowledge_base, semantic_search, local_llm, adhd_workflow, dirmacs_docs, planckeon_sites, discovery, memory_tree_search)
 - **Thread Safety**: Added mutex protection to WhatsApp channel shared state; eliminated global mutable state via per-execution skill instances
-- **HTTP Robustness**: Implemented configurable request timeouts in NIMClient (default 30s) to prevent hangs
+- **HTTP Robustness**: Implemented configurable request timeouts in NIMClient (default 120s) to prevent hangs
 - **Type Safety**: Replaced all 31 `@intCast` occurrences with validated `std.math.cast` and error propagation across 18 files
 - **Error Handling**: Reviewed 117 `catch unreachable` patterns; kept unreachable where genuinely impossible (with comments), propagated errors in test fixtures
 - **Testing & Quality**: Restored integration tests with proper Config; added unit tests for ConfigLoader error paths; thread safety stress tests for WhatsApp channel
@@ -521,6 +521,6 @@ Later work (August 2026) wired WhatsApp through `runTurn`, hardened Baileys RPC/
 
 ---
 
-**Status:** v0.2.0 tagged. WhatsApp `runTurn` + journals + memory update/compact. Post-tag: native outbound media, group-retry recovery.
+**Status:** v0.3.0 tagged. WhatsApp `runTurn` + journals + memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

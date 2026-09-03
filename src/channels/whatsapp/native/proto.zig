@@ -756,15 +756,16 @@ fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.reaction == null) dst.reaction = src.reaction;
 }
 
-/// Per-kind field numbers verified against Baileys WAProto generated encoder:
+/// Per-kind field numbers verified against whatsmeow WAWebProtobufsE2E.proto
+/// and Baileys WAProto.proto (both agree):
 /// image 3{url=1,mimetype=2,caption=3,fileSha256=4,fileLength=5,height=6,width=7,
-/// mediaKey=8,fileEncSha256=9,directPath=10}; video 9{url=1,mimetype=2,fileSha256=3,
+/// mediaKey=8,fileEncSha256=9,directPath=11}; video 9{url=1,mimetype=2,fileSha256=3,
 /// fileLength=4,seconds=5,mediaKey=6,caption=7,height=9,width=10,fileEncSha256=11,
 /// directPath=13}; audio 8{url=1,mimetype=2,fileSha256=3,fileLength=4,seconds=5,ptt=6,
 /// mediaKey=7,fileEncSha256=8,directPath=9}; document 7{url=1,mimetype=2,title=3,
 /// fileSha256=4,fileLength=5,pageCount=6,mediaKey=7,fileName=8,fileEncSha256=9,
-/// directPath=10}; sticker 26{url=1,mimetype=2,fileSha256=3,fileLength=4,mediaKey=7,
-/// fileEncSha256=9,directPath=10}.
+/// directPath=10}; sticker 26{url=1,fileSha256=2,fileEncSha256=3,mediaKey=4,
+/// mimetype=5,height=6,width=7,directPath=8,fileLength=9,mediaKeyTimestamp=10}.
 pub const Media = struct {
     pub const Kind = enum { image, video, audio, document, sticker };
     kind: Kind,
@@ -841,7 +842,7 @@ fn parseMediaInner(kind: Media.Kind, inner: []const u8) Media {
                 } else {
                     skipField(inner, &idx, t.wire) catch break;
                 },
-                10 => if (t.wire == 2) {
+                11 => if (t.wire == 2) {
                     m.direct_path = readBytes(inner, &idx) catch break;
                 } else {
                     skipField(inner, &idx, t.wire) catch break;
@@ -1004,32 +1005,42 @@ fn parseMediaInner(kind: Media.Kind, inner: []const u8) Media {
                     skipField(inner, &idx, t.wire) catch break;
                 },
                 2 => if (t.wire == 2) {
-                    m.mimetype = readBytes(inner, &idx) catch break;
-                } else {
-                    skipField(inner, &idx, t.wire) catch break;
-                },
-                3 => if (t.wire == 2) {
                     m.file_sha256 = readBytes(inner, &idx) catch break;
                 } else {
                     skipField(inner, &idx, t.wire) catch break;
                 },
-                4 => if (t.wire == 0) {
-                    m.file_len = readVarint(inner, &idx) catch 0;
-                } else {
-                    skipField(inner, &idx, t.wire) catch break;
-                },
-                7 => if (t.wire == 2) {
-                    m.media_key = readBytes(inner, &idx) catch break;
-                } else {
-                    skipField(inner, &idx, t.wire) catch break;
-                },
-                9 => if (t.wire == 2) {
+                3 => if (t.wire == 2) {
                     m.file_enc_sha256 = readBytes(inner, &idx) catch break;
                 } else {
                     skipField(inner, &idx, t.wire) catch break;
                 },
-                10 => if (t.wire == 2) {
+                4 => if (t.wire == 2) {
+                    m.media_key = readBytes(inner, &idx) catch break;
+                } else {
+                    skipField(inner, &idx, t.wire) catch break;
+                },
+                5 => if (t.wire == 2) {
+                    m.mimetype = readBytes(inner, &idx) catch break;
+                } else {
+                    skipField(inner, &idx, t.wire) catch break;
+                },
+                6 => if (t.wire == 0) {
+                    m.height = varintU32(inner, &idx);
+                } else {
+                    skipField(inner, &idx, t.wire) catch break;
+                },
+                7 => if (t.wire == 0) {
+                    m.width = varintU32(inner, &idx);
+                } else {
+                    skipField(inner, &idx, t.wire) catch break;
+                },
+                8 => if (t.wire == 2) {
                     m.direct_path = readBytes(inner, &idx) catch break;
+                } else {
+                    skipField(inner, &idx, t.wire) catch break;
+                },
+                9 => if (t.wire == 0) {
+                    m.file_len = readVarint(inner, &idx) catch 0;
                 } else {
                     skipField(inner, &idx, t.wire) catch break;
                 },
@@ -1437,7 +1448,7 @@ test "Message image media fields decode" {
     try writeVarint(&img, alloc, 200);
     try writeBytes(&img, alloc, 8, &[_]u8{0x22} ** 32);
     try writeBytes(&img, alloc, 9, &[_]u8{0x33} ** 32);
-    try writeBytes(&img, alloc, 10, "/v/t62/abc");
+    try writeBytes(&img, alloc, 11, "/v/t62/abc");
     var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
     defer buf.deinit(alloc);
     try writeTag(&buf, alloc, 3, 2);
@@ -1454,4 +1465,39 @@ test "Message image media fields decode" {
     try std.testing.expectEqual(@as(u32, 200), m.width);
     try std.testing.expectEqual(@as(usize, 32), m.media_key.?.len);
     try std.testing.expectEqualStrings("/v/t62/abc", m.direct_path.?);
+}
+
+test "Message sticker media fields decode" {
+    const alloc = std.testing.allocator;
+    var inner = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer inner.deinit(alloc);
+    try writeBytes(&inner, alloc, 1, "https://mmg/sticker.webp");
+    try writeBytes(&inner, alloc, 2, &[_]u8{0x11} ** 32);
+    try writeBytes(&inner, alloc, 3, &[_]u8{0x22} ** 32);
+    try writeBytes(&inner, alloc, 4, &[_]u8{0x33} ** 32);
+    try writeBytes(&inner, alloc, 5, "image/webp");
+    try writeTag(&inner, alloc, 6, 0);
+    try writeVarint(&inner, alloc, 512);
+    try writeTag(&inner, alloc, 7, 0);
+    try writeVarint(&inner, alloc, 512);
+    try writeBytes(&inner, alloc, 8, "/v/t62/sticker");
+    try writeTag(&inner, alloc, 9, 0);
+    try writeVarint(&inner, alloc, 1024);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeTag(&buf, alloc, 26, 2);
+    try writeVarint(&buf, alloc, inner.items.len);
+    try buf.appendSlice(alloc, inner.items);
+    const msg = try Message.decode(buf.items);
+    const m = msg.media orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Media.Kind.sticker, m.kind);
+    try std.testing.expectEqualStrings("https://mmg/sticker.webp", m.url.?);
+    try std.testing.expectEqualStrings("image/webp", m.mimetype.?);
+    try std.testing.expectEqual(@as(usize, 32), m.media_key.?.len);
+    try std.testing.expectEqual(@as(usize, 32), m.file_sha256.?.len);
+    try std.testing.expectEqual(@as(usize, 32), m.file_enc_sha256.?.len);
+    try std.testing.expectEqualStrings("/v/t62/sticker", m.direct_path.?);
+    try std.testing.expectEqual(@as(u64, 1024), m.file_len);
+    try std.testing.expectEqual(@as(u32, 512), m.height);
+    try std.testing.expectEqual(@as(u32, 512), m.width);
 }

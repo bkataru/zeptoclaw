@@ -1382,7 +1382,7 @@ pub const Client = struct {
     fn sendMessageReceipt(self: *Client, node: binary.Node, info: stanza.MessageInfo) void {
         const to = node.getAttr("from") orelse return;
         const rtype: ?[]const u8 = if (info.from_me) "sender" else "inactive";
-        const frame = stanza.encodeReceipt(self.allocator, to, info.id, rtype, node.getAttr("participant")) catch |err| {
+        const frame = stanza.encodeReceipt(self.allocator, to, info.id, rtype, node.getAttr("participant"), null) catch |err| {
             std.log.warn("[whatsapp-native] receipt encode failed for id={s}: {}", .{ info.id, err });
             return;
         };

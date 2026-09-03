@@ -12,7 +12,7 @@ pub const Config = struct {
     max_iterations: u32,
     temperature: f32,
     max_tokens: u32,
-    nim_timeout_ms: u32 = 30000,
+    nim_timeout_ms: u32 = 120000,
     // New fields for multi-provider support
     fallback_models: [][]const u8,
     image_model: []const u8,

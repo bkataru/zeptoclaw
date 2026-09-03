@@ -289,7 +289,8 @@ pub const MarkdownTableConverter = struct {
 
             // Convert table row
             const converted = try self.convertTableRow(line);
-            try result.appendSlice(converted);
+            defer self.allocator.free(converted);
+            try result.appendSlice(self.allocator, converted);
             try result.append(self.allocator, '\n');
         }
 
@@ -324,7 +325,7 @@ pub const MarkdownTableConverter = struct {
                 if (result.items.len > 0) {
                     try result.append(self.allocator, ' ');
                 }
-                try result.appendSlice(trimmed);
+                try result.appendSlice(self.allocator, trimmed);
             }
         }
 
@@ -340,10 +341,10 @@ test "OutboundProcessor chunking" {
     var processor = OutboundProcessor.init(allocator, config);
 
     const text = "This is a short message";
-    const chunks = try processor.chunkText(text);
+    var chunks = try processor.chunkText(text);
     defer {
         for (chunks.items) |chunk| allocator.free(chunk);
-        chunks.deinit();
+        chunks.deinit(allocator);
     }
 
     try std.testing.expectEqual(@as(usize, 1), chunks.items.len);
@@ -360,7 +361,7 @@ test "OutboundProcessor table conversion" {
     const converted = try processor.convertMarkdownTables(markdown);
     defer allocator.free(converted);
 
-    try std.testing.expect(!std.mem.indexOf(u8, converted, "|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "|") == null);
 }
 
 test "MarkdownTableConverter basic" {
@@ -371,7 +372,7 @@ test "MarkdownTableConverter basic" {
     const converted = try converter.convert(markdown);
     defer allocator.free(converted);
 
-    try std.testing.expect(!std.mem.indexOf(u8, converted, "|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "|") == null);
     try std.testing.expect(std.mem.indexOf(u8, converted, "A") != null);
     try std.testing.expect(std.mem.indexOf(u8, converted, "B") != null);
 }

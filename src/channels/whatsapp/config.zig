@@ -63,17 +63,17 @@ test "loadFromZeptoConfig with pairing policy" {
         whatsapp_enabled: bool = true,
         whatsapp_auth_dir: []const u8 = "/tmp/whatsapp",
         whatsapp_dm_policy: []const u8 = "pairing",
-        whatsapp_allow_from: [][]const u8 = &.{},
+        whatsapp_allow_from: []const []const u8 = &.{},
         whatsapp_group_policy: []const u8 = "allowlist",
         whatsapp_media_max_mb: u32 = 50,
         whatsapp_debounce_ms: u32 = 0,
         whatsapp_send_read_receipts: bool = true,
         whatsapp_group_require_mention: bool = true,
-        whatsapp_group_activation_commands: [][]const u8 = &.{"/start"},
+        whatsapp_group_activation_commands: []const []const u8 = &.{"/start"},
     };
 
     const mock_config = MockZeptoConfig{};
-    const whatsapp_config = try loadFromZeptoConfig(allocator, mock_config);
+    var whatsapp_config = try loadFromZeptoConfig(allocator, mock_config);
     defer whatsapp_config.deinit();
 
     try std.testing.expectEqual(true, whatsapp_config.enabled);
@@ -89,13 +89,13 @@ test "loadFromZeptoConfig with invalid dm policy" {
         whatsapp_enabled: bool = true,
         whatsapp_auth_dir: []const u8 = "/tmp/whatsapp",
         whatsapp_dm_policy: []const u8 = "invalid",
-        whatsapp_allow_from: [][]const u8 = &.{},
+        whatsapp_allow_from: []const []const u8 = &.{},
         whatsapp_group_policy: []const u8 = "allowlist",
         whatsapp_media_max_mb: u32 = 50,
         whatsapp_debounce_ms: u32 = 0,
         whatsapp_send_read_receipts: bool = true,
         whatsapp_group_require_mention: bool = true,
-        whatsapp_group_activation_commands: [][]const u8 = &.{"/start"},
+        whatsapp_group_activation_commands: []const []const u8 = &.{"/start"},
     };
 
     const mock_config = MockZeptoConfig{};

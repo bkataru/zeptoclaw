@@ -201,7 +201,7 @@ pub const Agent = struct {
                 std.log.warn("[agent] tool round cap {d}; asking for text without tools", .{opts.max_iters});
             }
             const use_tools: ?[]const types.ToolDefinition = if (tool_rounds >= opts.max_iters) null else defs;
-            var response = self.chatUntilDone(use_tools);
+            var response = try self.chatUntilDone(use_tools);
             defer response.deinit(self.allocator);
             if (response.choices.len == 0) {
                 std.log.warn("[agent] empty choices; keeping this turn, backing off", .{});
@@ -243,8 +243,15 @@ pub const Agent = struct {
             const calls = assistant.tool_calls.?;
             for (calls) |call| {
                 std.log.info("[agent] tool {s} args={s}", .{ call.function.name, call.function.arguments });
-                const out = self.core.execute(call.function.name, call.function.arguments) catch |err|
+                const raw = self.core.execute(call.function.name, call.function.arguments) catch |err|
                     try std.fmt.allocPrint(self.allocator, "tool error: {s}", .{@errorName(err)});
+                defer self.allocator.free(raw);
+                // Tool output is arbitrary process bytes (e.g. filenames that
+                // are not valid UTF-8). NVIDIA parses request JSON as strict
+                // UTF-8 and 400s the whole turn when a tool result carries
+                // raw non-UTF-8 bytes — observed 2026-09-04 via `ls` output.
+                // Scrub to U+FFFD so history stays valid UTF-8.
+                const out = try sanitizeUtf8(self.allocator, raw);
                 defer self.allocator.free(out);
                 const tool_msg = try message.toolResultMessage(self.allocator, call.id, out);
                 try self.session.addMessage(tool_msg);
@@ -262,12 +269,32 @@ pub const Agent = struct {
         }
     }
 
-    fn chatUntilDone(self: *Agent, defs: ?[]const types.ToolDefinition) types.ChatCompletionResponse {
+    /// Transient errors (server slow, throttled, connection blip) deserve
+    /// infinite retry. Anything else (bad key, malformed/rejected request)
+    /// fails deterministically — retrying the identical body forever wedges
+    /// the turn and swallows every later wake-up via coalescing.
+    pub fn isTransient(err: types.ProviderError) bool {
+        return switch (err) {
+            error.Timeout, error.RateLimit, error.Network => true,
+            else => false,
+        };
+    }
+
+    /// Permanent errors get 3 attempts, then propagate so the caller can
+    /// answer gracefully instead of wedging the turn forever.
+    pub const MAX_PERMANENT_RETRIES: u32 = 3;
+
+    fn chatUntilDone(self: *Agent, defs: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
         var n: u32 = 0;
+        var bad: u32 = 0;
         while (true) : (n += 1) {
             if (self.nim_client.chatWithTools(self.session.getHistory(), defs)) |resp| return resp else |err| {
                 std.log.warn("[agent] {} — keeping turn, retry {d}", .{ err, n + 1 });
                 nim.sleepAfterFailure();
+                if (!isTransient(err)) {
+                    bad += 1;
+                    if (bad >= MAX_PERMANENT_RETRIES) return err;
+                }
             }
         }
     }
@@ -284,6 +311,48 @@ fn jsonValueToOwnedString(allocator: std.mem.Allocator, v: std.json.Value) ![]u8
     var stringifier = std.json.Stringify{ .writer = &out.writer, .options = .{} };
     stringifier.write(v) catch return error.OutOfMemory;
     return allocator.dupe(u8, out.written());
+}
+
+/// Lossy UTF-8 scrub: copies `s`, replacing each invalid byte sequence with
+/// U+FFFD. Tool subprocesses emit arbitrary bytes; request JSON must be
+/// strict UTF-8 or NVIDIA 400s the turn.
+fn sanitizeUtf8(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, s.len);
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < s.len) {
+        // utf8Decode panics (unreachable) on invalid start bytes instead of
+        // erroring, so classify the lead byte first, then bounds-check.
+        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch {
+            try out.appendSlice(allocator, "\u{FFFD}");
+            i += 1;
+            continue;
+        };
+        if (i + n > s.len) {
+            try out.appendSlice(allocator, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        const cp = std.unicode.utf8Decode(s[i..][0..n]) catch {
+            try out.appendSlice(allocator, "\u{FFFD}");
+            i += 1;
+            continue;
+        };
+        const m = std.unicode.utf8CodepointSequenceLength(cp) catch {
+            try out.appendSlice(allocator, "\u{FFFD}");
+            i += 1;
+            continue;
+        };
+        // Overlong encodings decode but re-encode shorter: reject them.
+        if (m != n) {
+            try out.appendSlice(allocator, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        try out.appendSlice(allocator, s[i..][0..n]);
+        i += n;
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn hydrateToolCallsFromContent(allocator: std.mem.Allocator, assistant: *types.Message) !void {
@@ -305,10 +374,18 @@ fn hydrateToolCallsFromContent(allocator: std.mem.Allocator, assistant: *types.M
         return;
     };
     errdefer allocator.free(args);
+    // Unique per hydration: two text-emitted calls in one turn must not
+    // share an id — NVIDIA rejects the follow-up request (400) when two
+    // tool messages reference the same tool_call_id.
+    const seq = struct {
+        var n: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
+    }.n.fetchAdd(1, .monotonic);
+    const call_id = try std.fmt.allocPrint(allocator, "text-tool-{d}", .{seq});
+    errdefer allocator.free(call_id);
     const calls = try allocator.alloc(types.ToolCall, 1);
     errdefer allocator.free(calls);
     calls[0] = .{
-        .id = try allocator.dupe(u8, "text-tool-1"),
+        .id = call_id,
         .@"type" = try allocator.dupe(u8, "function"),
         .function = .{
             .name = try allocator.dupe(u8, name),
@@ -335,6 +412,15 @@ test "isBlank treats whitespace as empty" {
     try std.testing.expect(!isBlank("ok"));
 }
 
+test "isTransient splits retryable from fatal" {
+    try std.testing.expect(Agent.isTransient(error.Timeout));
+    try std.testing.expect(Agent.isTransient(error.RateLimit));
+    try std.testing.expect(Agent.isTransient(error.Network));
+    try std.testing.expect(!Agent.isTransient(error.InvalidResponse));
+    try std.testing.expect(!Agent.isTransient(error.Auth));
+    try std.testing.expect(!Agent.isTransient(error.ParseError));
+}
+
 test "hydrateToolCallsFromContent parses exec json" {
     const allocator = std.testing.allocator;
     var msg = try message.assistantMessage(allocator, "{\"name\":\"exec\",\"args\":{\"command\":\"cat memory/2026-08-22.md\"}}");
@@ -345,12 +431,40 @@ test "hydrateToolCallsFromContent parses exec json" {
     try std.testing.expect(std.mem.indexOf(u8, msg.tool_calls.?[0].function.arguments, "cat memory") != null);
 }
 
+test "hydrateToolCallsFromContent mints unique ids" {
+    const allocator = std.testing.allocator;
+    var m1 = try message.assistantMessage(allocator, "{\"name\":\"exec\",\"args\":{\"command\":\"pwd\"}}");
+    defer m1.deinit(allocator);
+    var m2 = try message.assistantMessage(allocator, "{\"name\":\"exec\",\"args\":{\"command\":\"ls\"}}");
+    defer m2.deinit(allocator);
+    try hydrateToolCallsFromContent(allocator, &m1);
+    try hydrateToolCallsFromContent(allocator, &m2);
+    try std.testing.expect(m1.hasToolCalls());
+    try std.testing.expect(m2.hasToolCalls());
+    const id1 = m1.tool_calls.?[0].id;
+    const id2 = m2.tool_calls.?[0].id;
+    try std.testing.expect(!std.mem.eql(u8, id1, id2));
+}
+
 test "hydrateToolCallsFromContent ignores normal chat" {
     const allocator = std.testing.allocator;
     var msg = try message.assistantMessage(allocator, "hey I read SOUL.md");
     defer msg.deinit(allocator);
     try hydrateToolCallsFromContent(allocator, &msg);
     try std.testing.expect(!msg.hasToolCalls());
+}
+
+test "sanitizeUtf8 scrubs invalid bytes" {
+    const allocator = std.testing.allocator;
+    const dirty = "exit 0\nfile \xaa\xaa\xaa ok";
+    const clean = try sanitizeUtf8(allocator, dirty);
+    defer allocator.free(clean);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(clean));
+    try std.testing.expect(std.mem.indexOf(u8, clean, "file ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clean, " ok") != null);
+    const valid = try sanitizeUtf8(allocator, "plain ascii");
+    defer allocator.free(valid);
+    try std.testing.expectEqualStrings("plain ascii", valid);
 }
 
 test "setWorkspace does not drop transcript dir ownership" {

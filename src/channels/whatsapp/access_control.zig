@@ -184,7 +184,7 @@ pub const AccessControl = struct {
 
     /// Generate pairing code
     pub fn generatePairingCode(self: *AccessControl, sender_e164: []const u8) ![]const u8 {
-        const code = try std.fmt.allocPrint(self.allocator, "{d}", .{std.crypto.random.int(u32)});
+        const code = try std.fmt.allocPrint(self.allocator, "{d}", .{compat.randomInt(u32)});
         const key = try self.allocator.dupe(u8, sender_e164);
 
         const pairing = PendingPairing{
@@ -294,19 +294,19 @@ const PendingPairing = struct {
 pub const E164Normalizer = struct {
     pub fn normalize(allocator: Allocator, input: []const u8) ![]const u8 {
         var result = try std.ArrayList(u8).initCapacity(allocator, 0);
-        errdefer result.deinit();
+        errdefer result.deinit(allocator);
 
         // Remove all non-digit characters
         for (input) |c| {
             if (c >= '0' and c <= '9') {
-                try result.append(c);
+                try result.append(allocator, c);
             }
         }
 
         // Ensure it starts with country code (simplified check)
         if (result.items.len > 0 and result.items[0] != '+') {
             // Assume it needs a + prefix
-            try result.insert(0, '+');
+            try result.insert(allocator, 0, '+');
         }
 
         return result.toOwnedSlice(allocator);
@@ -361,13 +361,14 @@ test "AccessControl pairing code" {
     const sender = "1234567890";
 
     const code = try access.generatePairingCode(sender);
-    defer allocator.free(code);
-
     try std.testing.expect(code.len > 0);
 
+    // validatePairingCode consumes and frees the stored code pointer.
     const valid = try access.validatePairingCode(sender, code);
     try std.testing.expectEqual(true, valid);
 
+    const code2 = try access.generatePairingCode(sender);
+    _ = code2;
     const invalid = try access.validatePairingCode(sender, "wrong");
     try std.testing.expectEqual(false, invalid);
 }

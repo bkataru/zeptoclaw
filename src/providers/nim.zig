@@ -105,7 +105,7 @@ pub const NIMClient = struct {
             .api_key = cfg.nim_api_key,
             .model = cfg.nim_model,
             .base_url = DEFAULT_BASE_URL,
-            .timeout_ms = 30000,
+            .timeout_ms = cfg.nim_timeout_ms,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
@@ -119,7 +119,7 @@ pub const NIMClient = struct {
             .api_key = cfg.nim_api_key,
             .model = model_id,
             .base_url = DEFAULT_BASE_URL,
-            .timeout_ms = 30000,
+            .timeout_ms = cfg.nim_timeout_ms,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
@@ -270,6 +270,16 @@ pub fn deinit(self: *NIMClient) void {
                 stringifier.write(content) catch |err| return switch (err) {
                     error.WriteFailed => types.ProviderError.Network,
                 };
+            } else if (msg.role == .tool or msg.tool_calls != null) {
+                // NVIDIA validates tool-role and tool_calls-bearing messages
+                // against a strict untagged enum: a MISSING content field
+                // matches no variant (400). Empty string always validates.
+                stringifier.objectField("content") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
+                stringifier.write("") catch |err| return switch (err) {
+                    error.WriteFailed => types.ProviderError.Network,
+                };
             }
             if (msg.tool_call_id) |tcid| {
                 stringifier.objectField("tool_call_id") catch |err| return switch (err) {
@@ -409,7 +419,29 @@ pub fn deinit(self: *NIMClient) void {
                     std.log.warn("[nim] {} attempt {d}; will keep retrying until this request succeeds", .{ err, attempt + 1 });
                     sleepAfterFailure();
                 },
-                else => return err,
+                else => {
+                    const tail_n = @min(body.len, 3000);
+                    std.log.warn("[nim] body tail ({d} total): {s}", .{ body.len, body[body.len - tail_n ..] });
+                    for (messages, 0..) |m, i| {
+                        std.log.warn("[nim] req msg[{d}] role={s} clen={d} ntcalls={d} tcid={d} img={d}", .{
+                            i,
+                            m.role.toString(),
+                            if (m.content) |c| @as(i64, @intCast(c.len)) else @as(i64, -1),
+                            if (m.tool_calls) |tc| @as(i64, @intCast(tc.len)) else @as(i64, -1),
+                            @intFromBool(m.tool_call_id != null),
+                            @intFromBool(m.image_data_url != null),
+                        });
+                        if (m.tool_calls) |tc| for (tc) |call| {
+                            const an = @min(call.function.arguments.len, 300);
+                            std.log.warn("[nim] req msg[{d}] call id={s} fn={s} args={s}", .{ i, call.id, call.function.name, call.function.arguments[0..an] });
+                        };
+                        if (m.role == .tool) {
+                            const cn = @min(if (m.content) |c| c.len else 0, 200);
+                            std.log.warn("[nim] req msg[{d}] tool_call_id={s} out={s}", .{ i, m.tool_call_id orelse "?", if (m.content) |c| c[0..cn] else "" });
+                        }
+                    }
+                    return err;
+                },
             }
         }
     }
@@ -460,8 +492,15 @@ pub fn deinit(self: *NIMClient) void {
         if ((@as(u64, @intCast(compat.timestamp() - start_ns)) * @as(u64, std.time.ns_per_s)) > overall_timeout_ns) {
             return types.ProviderError.Timeout;
         }
-        // Check response status
+        // Check response status. Error bodies are small JSON diagnostics
+        // (no secrets — NVIDIA never echoes the key); capture the head so
+        // a deterministic 4xx names its cause instead of "InvalidResponse".
+        var transfer_buffer: [4096]u8 = undefined;
         if (response.head.status != .ok) {
+            const ereader = response.reader(&transfer_buffer);
+            const ebytes = ereader.allocRemaining(self.allocator, .limited(512)) catch "";
+            defer if (ebytes.len > 0) self.allocator.free(ebytes);
+            std.log.warn("[nim] HTTP {s} from model {s}: {s}", .{ @tagName(response.head.status), self.model, ebytes });
             return switch (response.head.status) {
                 .unauthorized => types.ProviderError.Auth,
                 .too_many_requests => types.ProviderError.RateLimit,
@@ -470,7 +509,6 @@ pub fn deinit(self: *NIMClient) void {
         }
 
         // Read response body
-        var transfer_buffer: [4096]u8 = undefined;
         const reader = response.reader(&transfer_buffer);
 
         // Read all remaining bytes from response
@@ -524,6 +562,7 @@ test "NIMClient initialization" {
         .max_iterations = 10,
         .temperature = 0.7,
         .max_tokens = 1024,
+        .nim_timeout_ms = 12345,
         .fallback_models = &.{},
         .image_model = "test-image-model",
     .gateway_port = 18789,
@@ -551,6 +590,7 @@ defer client.deinit();
 
 try std.testing.expectEqualStrings("test-key", client.api_key);
 try std.testing.expectEqualStrings("test-model", client.model);
+try std.testing.expectEqual(@as(u32, 12345), client.timeout_ms);
 }
 
 test "NIMClient initWithModel" {
@@ -562,6 +602,7 @@ test "NIMClient initWithModel" {
         .max_iterations = 10,
         .temperature = 0.7,
         .max_tokens = 1024,
+        .nim_timeout_ms = 12345,
         .fallback_models = &.{},
         .image_model = "test-image-model",
         .gateway_port = 18789,
@@ -589,6 +630,7 @@ test "NIMClient initWithModel" {
 
     try std.testing.expectEqualStrings("test-key", client.api_key);
     try std.testing.expectEqualStrings("custom-model", client.model);
+    try std.testing.expectEqual(@as(u32, 12345), client.timeout_ms);
 }
 
 test "NIMClient initWithBaseUrl" {
