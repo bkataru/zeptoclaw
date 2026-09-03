@@ -106,6 +106,20 @@ pub fn build(b: *std.Build) void {
     wa_pair_exe.root_module.link_libc = true;
     b.installArtifact(wa_pair_exe);
 
+    // WhatsApp native one-shot sender (session-recovery tool)
+    const wa_send_mod = b.createModule(.{
+        .root_source_file = b.path("src/tools/wa_send.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wa_send_mod.addImport("zeptoclaw", mod);
+    const wa_send_exe = b.addExecutable(.{
+        .name = "zeptoclaw-wa-send",
+        .root_module = wa_send_mod,
+    });
+    wa_send_exe.root_module.link_libc = true;
+    b.installArtifact(wa_send_exe);
+
     // Run command
     const run_step = b.step("run", "Run Zeptoclaw agent");
     const run_cmd = b.addRunArtifact(exe);

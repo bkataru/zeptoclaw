@@ -384,13 +384,16 @@ pub fn parseUsyncDevices(allocator: std.mem.Allocator, node: binary.Node) ![]Dev
 
 pub const Participant = struct { jid: []const u8, enc_type: EncType, ciphertext: []const u8 };
 
-/// Memory: caller frees. `<message to id type=text><participants><to jid><enc v=2 type>ct</enc></to>…</participants>[device-identity]</message>`.
+/// Memory: caller frees. `<message to id type=text [peer_recipient_pn]><participants>…</participants>[device-identity]</message>`.
+/// `peer_recipient_pn` is the recipient's phone JID; required for LID-addressed 1:1 DMs
+/// (whatsmeow SendMessage rewrites PN destinations to LID and sets this attr).
 pub fn encodeMessageMulti(
     allocator: std.mem.Allocator,
     to: []const u8,
     id: []const u8,
     participants: []const Participant,
     device_identity: ?[]const u8,
+    peer_recipient_pn: ?[]const u8,
 ) ![]u8 {
     const enc_nodes = try allocator.alloc(binary.Node, participants.len);
     defer {
@@ -430,6 +433,7 @@ pub fn encodeMessageMulti(
     try msg.attrs.put("to", to);
     try msg.attrs.put("id", id);
     try msg.attrs.put("type", "text");
+    if (peer_recipient_pn) |pn| try msg.attrs.put("peer_recipient_pn", pn);
     msg.content = .{ .nodes = kids };
     return binary.marshal(allocator, msg);
 }
@@ -925,7 +929,7 @@ test "encodeMessageMulti participants and device-identity" {
         .{ .jid = "111:5@s.whatsapp.net", .enc_type = .msg, .ciphertext = "bbb" },
     };
     const ident = "dev-ident-bytes";
-    const wire = try encodeMessageMulti(alloc, "111@s.whatsapp.net", "MID", &parts, ident);
+    const wire = try encodeMessageMulti(alloc, "111@s.whatsapp.net", "MID", &parts, ident, null);
     defer alloc.free(wire);
     var node = try binary.decodeNode(alloc, wire);
     defer node.deinit();
@@ -946,6 +950,28 @@ test "encodeMessageMulti participants and device-identity" {
     try std.testing.expectEqualStrings("msg", enc1.getAttr("type").?);
     const di = node.getChildByTag("device-identity") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(ident, di.contentBytes().?);
+    try std.testing.expect(node.getAttr("peer_recipient_pn") == null);
+}
+
+test "encodeMessageMulti lid dest sets peer_recipient_pn" {
+    const alloc = std.testing.allocator;
+    const parts = [_]Participant{
+        .{ .jid = "216638251077681:0@lid", .enc_type = .msg, .ciphertext = "ct" },
+    };
+    const wire = try encodeMessageMulti(
+        alloc,
+        "216638251077681@lid",
+        "MID2",
+        &parts,
+        null,
+        "917019895010@s.whatsapp.net",
+    );
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
+    try std.testing.expectEqualStrings("216638251077681@lid", node.getAttr("to").?);
+    try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", node.getAttr("peer_recipient_pn").?);
+    try std.testing.expect(node.getChildByTag("device-identity") == null);
 }
 
 test "parseMessageInfo PN DM from peer" {

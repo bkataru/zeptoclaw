@@ -617,9 +617,11 @@ pub const Client = struct {
 
     fn dispatch(self: *Client, node: binary.Node, frame: []const u8) !Event {
         const tag = node.tag;
+        std.log.info("[whatsapp-native][diag] recv tag={s} id={s} type={s} from={s}", .{ tag, node.getAttr("id") orelse "-", node.getAttr("type") orelse "-", node.getAttr("from") orelse "-" });
         if (std.mem.eql(u8, tag, "iq")) return self.dispatchIq(node, frame);
         if (std.mem.eql(u8, tag, "message")) return self.dispatchMessage(node);
         if (std.mem.eql(u8, tag, "receipt")) {
+            std.log.info("[whatsapp-native][diag] recv receipt id={s} type={s} from={s} participant={s}", .{ node.getAttr("id") orelse "-", node.getAttr("type") orelse "-", node.getAttr("from") orelse "-", node.getAttr("participant") orelse "-" });
             self.ackNode(node);
             return .idle;
         }
@@ -1162,7 +1164,11 @@ pub const Client = struct {
         if (count == 0 or count >= 5) return;
         const from = node.getAttr("from") orelse return;
         var one_time: ?stanza.PreKeyPub = null;
-        if (count > 1) {
+        // Offer a fresh one-time prekey unconditionally (not just after the 2nd
+        // failure like whatsmeow's default): a peer sending genuinely new messages
+        // rather than retrying the same one never reaches count>1, so a stale
+        // cached prekey bundle on their end would otherwise never get corrected.
+        {
             if (self.store) |*s| {
                 if (self.paired_jid) |own| {
                     const io = ioOf();
@@ -1217,6 +1223,48 @@ pub const Client = struct {
     }
 
     // ---- outbound ---------------------------------------------------------------------
+    const LidDmDest = struct {
+        dest: []const u8,
+        dest_owned: ?[]u8 = null,
+        pn_owned: ?[]u8 = null,
+
+        fn deinit(self: LidDmDest, alloc: std.mem.Allocator) void {
+            if (self.dest_owned) |p| alloc.free(p);
+            if (self.pn_owned) |p| alloc.free(p);
+        }
+    };
+
+    /// whatsmeow SendMessage (2026): 1:1 DMs are addressed to the recipient LID
+    /// with `peer_recipient_pn` = their phone JID. Without this the server ACKs
+    /// but LID-keyed clients (the phone) drop the stanza.
+    fn lidDmDestination(self: *Client, to: []const u8) !LidDmDest {
+        const alloc = self.allocator;
+        if (jid.isPn(to)) {
+            if (self.store) |*s| {
+                if (s.getLidForPn(jid.user(to)) catch null) |lid_user| {
+                    defer alloc.free(lid_user);
+                    const dest_owned = try jid.lidJid(alloc, lid_user, 0);
+                    errdefer alloc.free(dest_owned);
+                    const pn_owned = try jid.pnJid(alloc, jid.user(to), 0);
+                    return .{ .dest = dest_owned, .dest_owned = dest_owned, .pn_owned = pn_owned };
+                }
+            }
+            return .{ .dest = to };
+        }
+        if (jid.isLid(to)) {
+            const dest_owned = try jid.lidJid(alloc, jid.user(to), 0);
+            errdefer alloc.free(dest_owned);
+            var pn_owned: ?[]u8 = null;
+            if (self.store) |*s| {
+                if (s.getPnForLid(jid.user(to)) catch null) |pn_user| {
+                    defer alloc.free(pn_user);
+                    pn_owned = try jid.pnJid(alloc, pn_user, 0);
+                }
+            }
+            return .{ .dest = dest_owned, .dest_owned = dest_owned, .pn_owned = pn_owned };
+        }
+        return .{ .dest = to };
+    }
 
     /// Send a text to a DM chat: usync devices for the peer and ourselves, fetch
     /// prekeys for devices without sessions, encrypt per device (DeviceSentMessage
@@ -1229,15 +1277,28 @@ pub const Client = struct {
         const alloc = self.allocator;
         if (std.mem.eql(u8, jid.server(to), "g.us")) return self.sendGroupText(to, text);
 
-        // 1. devices
-        const to_user = try jid.format(alloc, jid.user(to), 0, jid.server(to));
-        defer alloc.free(to_user);
-        const own_user = try jid.format(alloc, jid.user(own), 0, jid.server(own));
-        defer alloc.free(own_user);
-        // Self chat (to = own PN or own LID): one device list, PN-addressed.
+        const dm = try self.lidDmDestination(to);
+        defer dm.deinit(alloc);
+        const dest = dm.dest;
+        std.log.info("[whatsapp-native][diag] sendText dest={s} peer_pn={s} orig={s}", .{
+            dest,
+            dm.pn_owned orelse "-",
+            to,
+        });
+
+        // 1. devices — usync dest + own. LID dest uses own LID so device 0 (phone)
+        // is included as `…@lid` rather than skipped/misaddressed as PN.
+        const dest_user = try jid.format(alloc, jid.user(dest), 0, jid.server(dest));
+        defer alloc.free(dest_user);
+        const own_sync = if (jid.isLid(dest) and own_lid != null)
+            try jid.format(alloc, jid.user(own_lid.?), 0, jid.server(own_lid.?))
+        else
+            try jid.format(alloc, jid.user(own), 0, jid.server(own));
+        defer alloc.free(own_sync);
         const to_is_self = std.mem.eql(u8, jid.user(to), jid.user(own)) or
-            (own_lid != null and std.mem.eql(u8, jid.user(to), jid.user(own_lid.?)));
-        var users_buf: [2][]const u8 = .{ own_user, to_user };
+            (own_lid != null and std.mem.eql(u8, jid.user(to), jid.user(own_lid.?))) or
+            std.mem.eql(u8, jid.user(dest_user), jid.user(own_sync));
+        var users_buf: [2][]const u8 = .{ dest_user, own_sync };
         const users: []const []const u8 = if (to_is_self) users_buf[0..1] else users_buf[0..2];
         var id_buf: [24]u8 = undefined;
         const usync_id = self.nextId(&id_buf);
@@ -1266,11 +1327,12 @@ pub const Client = struct {
             try devices.append(alloc, dj);
         }
         if (devices.items.len == 0) return error.NoDevices;
+        for (devices.items) |dj| std.log.info("[whatsapp-native][diag] sendText target device={s}", .{dj});
 
         // 2. plaintexts
         const msg_plain = try proto.Message.encodeText(alloc, text);
         defer alloc.free(msg_plain);
-        const dsm_plain = try proto.Message.encodeDeviceSent(alloc, to, msg_plain);
+        const dsm_plain = try proto.Message.encodeDeviceSent(alloc, dest, msg_plain);
         defer alloc.free(dsm_plain);
 
         // 3. encryption ids + prekey fetch for missing sessions
@@ -1318,8 +1380,9 @@ pub const Client = struct {
         var rnd: [8]u8 = undefined;
         std.Io.Threaded.global_single_threaded.io().random(&rnd);
         const msg_id = std.fmt.bytesToHex(rnd, .upper);
-        const frame = try stanza.encodeMessageMulti(alloc, to, &msg_id, parts.items, if (any_prekey) self.adv_account else null);
+        const frame = try stanza.encodeMessageMulti(alloc, dest, &msg_id, parts.items, if (any_prekey) self.adv_account else null, dm.pn_owned);
         defer alloc.free(frame);
+        std.log.info("[whatsapp-native][diag] sendText frame to={s} dest={s} peer_pn={s} id={s} any_prekey={} devices={d} parts={d}", .{ to, dest, dm.pn_owned orelse "-", msg_id, any_prekey, devices.items.len, parts.items.len });
         try self.writeFrame(frame);
         return alloc.dupe(u8, &msg_id);
     }
@@ -1998,3 +2061,33 @@ test "client pair-device stores QR codes in Baileys comma format" {
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, qr, ","));
     try std.testing.expect(std.mem.indexOf(u8, qr, "https://") == null);
 }
+
+test "lidDmDestination rewrites PN to LID with peer_recipient_pn" {
+    const alloc = std.testing.allocator;
+    var rnd: [6]u8 = undefined;
+    std.Io.Threaded.global_single_threaded.io().random(&rnd);
+    const db_path = try std.fmt.allocPrintSentinel(alloc, "/tmp/zepto-lid-dm-{s}.sqlite", .{std.fmt.bytesToHex(rnd, .lower)}, 0);
+    defer alloc.free(db_path);
+    defer _ = std.c.unlink(db_path.ptr);
+
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+    try cli.openStore(db_path);
+    try cli.store.?.putLidMap("216638251077681", "917019895010");
+
+    const from_pn = try cli.lidDmDestination("917019895010:58@s.whatsapp.net");
+    defer from_pn.deinit(alloc);
+    try std.testing.expectEqualStrings("216638251077681@lid", from_pn.dest);
+    try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", from_pn.pn_owned.?);
+
+    const from_lid = try cli.lidDmDestination("216638251077681:55@lid");
+    defer from_lid.deinit(alloc);
+    try std.testing.expectEqualStrings("216638251077681@lid", from_lid.dest);
+    try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", from_lid.pn_owned.?);
+
+    const unknown = try cli.lidDmDestination("15555550101@s.whatsapp.net");
+    defer unknown.deinit(alloc);
+    try std.testing.expectEqualStrings("15555550101@s.whatsapp.net", unknown.dest);
+    try std.testing.expect(unknown.pn_owned == null);
+}
+
