@@ -33,11 +33,11 @@ The `exec` tool only runs on an operator `fromMe` 1:1 DM. A partner DM cannot in
 
 ## Native (no Node) mode
 
-Set `channels.whatsapp.native` to `true` in `~/.zeptoclaw/config.json` (or `ZEPTO_WA_NATIVE=1`). The gateway then runs the Zig client instead of spawning the Node/Baileys child.
+Set `channels.whatsapp.native` to `true` in `~/.zeptoclaw/config.json` (or `ZEPTO_WA_NATIVE=1`). The gateway then runs the Zig client instead of spawning the Node/Baileys child. Baileys stays the default for a fresh install; this deployment runs native mode and carries all live traffic on it.
 
 Pair with `zeptoclaw whatsapp pair` — native mode prints a terminal QR (half-block glyphs) plus the raw pairing URL. Identity is stored at `{auth_dir}/native.sqlite` (default `~/.zeptoclaw/sessions/whatsapp/native.sqlite`). Do not delete that file (or Baileys `creds.json`) to unpair.
 
-Current limits: text DMs. Groups and media are pending.
+Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media also downloads and decrypts. Outbound media send, presence, reactions, polls, and explicit read receipts have no native implementation yet. None of those run on either transport today, so this gap does not block current use.
 
 Native mode had a usync silent-drop bug: every outbound send failed with `error.IqTimeout`. The binary encoder wrote JID-shaped attributes as plain text instead of the `JIDPair`/`ADJID` binary tags WhatsApp's server requires, so the server never answered. This is fixed. Usync now resolves in about 300ms.
 

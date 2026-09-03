@@ -10,7 +10,7 @@
 
 ## Recent Updates
 
-- **Native WhatsApp client shipped** (opt-in, 2026-09-03): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. Baileys stays the default. It sends text DMs; groups and media are still pending
+- **Native WhatsApp client shipped** (opt-in, 2026-09-03): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. Baileys stays the default. It carries this deployment's live traffic: DM text and group text both send and receive, plus inbound media. Outbound media, presence, reactions, and polls are not ported yet
 - **usync silent-drop fix**: the binary encoder wrote JID attributes as plain text instead of the `JIDPair`/`ADJID` binary tags the server needs. usync now resolves in about 300ms instead of timing out
 - **LID self-chat delivery fix**: WhatsApp delivers 1:1 chats on the recipient's LID, not the phone number. `sendText` now resolves phone-number/LID pairs from `lid_map` and sets `peer_recipient_pn`
 - **Automatic retry-receipt recovery**: on a `<receipt type=retry>`, the native client drops the stale session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 resends per message). `zeptoclaw-wa-send` forces a fresh handshake by hand
@@ -67,7 +67,7 @@ ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+*
 - Zero bloat, built from scratch
 - UTCP (Universal Tool Calling Protocol) support
 - Modular: providers, agents, channels, tools
-- WhatsApp channel integration: Baileys is the default live path. A native Zig client (`native/`) is a working, opt-in alternative for text DMs; turn it on with `channels.whatsapp.native`. Groups and media are still pending
+- WhatsApp channel integration: Baileys is the default live path. A native Zig client (`native/`) is a working, opt-in alternative; this deployment runs on it. DM and group text send/receive, plus inbound media, all work. Outbound media, presence, reactions, and polls are not ported yet
 - Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `see_image` / `listen` / `leave` / `skill` / `memory_*`
 - 21 skills ported from OpenClaw
 - Cloudflare Worker for resilient routing
@@ -521,6 +521,6 @@ Later work (August 2026) wired WhatsApp through `runTurn`, hardened Baileys RPC/
 
 ---
 
-**Status:** v0.2.0 tagged. WhatsApp `runTurn` + journals + memory update/compact. Post-tag: native WhatsApp groups and media, group-retry recovery.
+**Status:** v0.2.0 tagged. WhatsApp `runTurn` + journals + memory update/compact. Post-tag: native outbound media, group-retry recovery.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

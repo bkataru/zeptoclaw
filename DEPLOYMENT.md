@@ -75,7 +75,7 @@ Expect `connection status=connected` then inbound logs. First connect after an e
 
 ## Native WhatsApp mode (opt-in)
 
-Native mode is a Signal/whatsmeow-style client, separate from Baileys. Baileys stays the default. Turn on native mode with the `channels.whatsapp.native` config key, or set `ZEPTO_WA_NATIVE=1`. It sends and receives DM text only; groups and media are pending.
+Native mode is a Signal/whatsmeow-style client, separate from Baileys. Baileys stays the default; this deployment runs native mode and carries all live traffic on it. Turn on native mode with the `channels.whatsapp.native` config key, or set `ZEPTO_WA_NATIVE=1`. It sends and receives DM and group text. Outbound media, presence, reactions, and polls are not ported yet; the live gateway does not use them on either transport.
 
 Pair a device with `zeptoclaw-wa-pair` (terminal QR) or the `zeptoclaw whatsapp pair` subcommand.
 
