@@ -1,6 +1,12 @@
 const std = @import("std");
 
 // Proto2 varint/length-delimited helpers for whatsmeow hot protos (waWa6).
+fn nowMs() u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ns = std.Io.Clock.real.now(io).nanoseconds;
+    return @intCast(@divTrunc(@max(@as(i128, 0), ns), 1_000_000));
+}
+
 pub fn writeVarint(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, v: u64) !void {
     var val = v;
     while (val >= 0x80) {
@@ -817,8 +823,9 @@ fn parseProtocol(inner: []const u8) struct { typ: ?u32, key: MessageKey, edited:
             key = decodeMessageKey(kb);
         } else if (tag.field == 2 and tag.wire == 0) {
             typ = @intCast(readVarint(inner, &idx) catch break);
-        } else if (tag.field == 16 and tag.wire == 2) {
-            // ProtocolMessage.editedMessage (MESSAGE_EDIT = 14)
+        } else if (tag.field == 14 and tag.wire == 2) {
+            // ProtocolMessage.editedMessage (WAWebProtobufsE2E.proto field 14).
+            // Field 16 is PeerDataOperationRequestMessage, not the edit body.
             edited = readBytes(inner, &idx) catch break;
         } else {
             skipField(inner, &idx, tag.wire) catch break;
@@ -835,7 +842,11 @@ fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.device_sent == null) dst.device_sent = src.device_sent;
     if (dst.protocol_type == null) dst.protocol_type = src.protocol_type;
     if (dst.protocol_key.id.len == 0 and src.protocol_key.id.len > 0) dst.protocol_key = src.protocol_key;
-    if (dst.has_sender_key_distribution) dst.has_sender_key_distribution = src.has_sender_key_distribution;
+    // Merge, don't overwrite: an ephemeral/view-once wrapper's inner payload
+    // usually has no SKDM, while the outer Message{2} does. The old
+    // `if (dst.has) dst.has = src.has` cleared the outer flag (and never
+    // copied an inner flag onto an empty outer).
+    if (!dst.has_sender_key_distribution) dst.has_sender_key_distribution = src.has_sender_key_distribution;
     if (dst.sender_key_distribution == null) dst.sender_key_distribution = src.sender_key_distribution;
     if (dst.reaction == null) dst.reaction = src.reaction;
     if (dst.mentioned_jid_count == 0 and src.mentioned_jid_count > 0) {
@@ -1451,11 +1462,86 @@ pub const Message = struct {
         errdefer rxn.deinit(allocator);
         try writeBytes(&rxn, allocator, 1, key.items);
         try writeBytes(&rxn, allocator, 2, emoji);
+        const ts: u64 = nowMs();
+        try writeVarintField(&rxn, allocator, 4, ts);
         var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
         errdefer buf.deinit(allocator);
         try writeBytes(&buf, allocator, 46, rxn.items);
         const owned = try buf.toOwnedSlice(allocator);
         rxn.deinit(allocator);
+        key.deinit(allocator);
+        return owned;
+    }
+
+    /// Memory: caller frees. Message{protocolMessage=12{key=1, type=2=REVOKE(0)}}.
+    pub fn encodeRevoke(
+        allocator: std.mem.Allocator,
+        remote_jid: []const u8,
+        from_me: bool,
+        id: []const u8,
+        participant: ?[]const u8,
+    ) ![]u8 {
+        var key = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer key.deinit(allocator);
+        try writeBytes(&key, allocator, 1, remote_jid);
+        try writeBoolField(&key, allocator, 2, from_me);
+        try writeBytes(&key, allocator, 3, id);
+        if (participant) |p| if (p.len > 0) try writeBytes(&key, allocator, 4, p);
+        var proto_msg = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer proto_msg.deinit(allocator);
+        try writeBytes(&proto_msg, allocator, 1, key.items);
+        try writeVarintField(&proto_msg, allocator, 2, 0);
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 12, proto_msg.items);
+        const owned = try buf.toOwnedSlice(allocator);
+        proto_msg.deinit(allocator);
+        key.deinit(allocator);
+        return owned;
+    }
+
+    /// Memory: caller frees. whatsmeow BuildEdit:
+    /// Message{editedMessage=58{message=1{protocolMessage=12{
+    ///   key=1, type=2=MESSAGE_EDIT(14), editedMessage=14, timestampMS=15}}}}.
+    pub fn encodeEdit(
+        allocator: std.mem.Allocator,
+        remote_jid: []const u8,
+        id: []const u8,
+        new_text: []const u8,
+    ) ![]u8 {
+        const content = try encodeText(allocator, new_text);
+        defer allocator.free(content);
+
+        var key = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer key.deinit(allocator);
+        try writeBytes(&key, allocator, 1, remote_jid);
+        try writeBoolField(&key, allocator, 2, true);
+        try writeBytes(&key, allocator, 3, id);
+
+        var proto_msg = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer proto_msg.deinit(allocator);
+        try writeBytes(&proto_msg, allocator, 1, key.items);
+        try writeVarintField(&proto_msg, allocator, 2, 14);
+        try writeBytes(&proto_msg, allocator, 14, content);
+        const ts: u64 = nowMs();
+        try writeVarintField(&proto_msg, allocator, 15, ts);
+
+        var inner_msg = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer inner_msg.deinit(allocator);
+        try writeBytes(&inner_msg, allocator, 12, proto_msg.items);
+
+        var fp = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer fp.deinit(allocator);
+        try writeBytes(&fp, allocator, 1, inner_msg.items);
+
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 58, fp.items);
+
+        const owned = try buf.toOwnedSlice(allocator);
+        fp.deinit(allocator);
+        inner_msg.deinit(allocator);
+        proto_msg.deinit(allocator);
         key.deinit(allocator);
         return owned;
     }
@@ -1766,6 +1852,53 @@ test "Message decode poll field 51 legacy keepInChat" {
     try std.testing.expectEqualStrings("legacy-poll", msg.poll_name.?);
 }
 
+test "Message encodeRevoke roundtrip" {
+    const alloc = std.testing.allocator;
+    const enc = try Message.encodeRevoke(alloc, "120363@g.us", true, "MSGID", "p@lid");
+    defer alloc.free(enc);
+    const msg = try Message.decode(enc);
+    try std.testing.expectEqual(@as(u32, 0), msg.protocol_type.?);
+    try std.testing.expectEqualStrings("MSGID", msg.protocol_key.id);
+    try std.testing.expect(msg.protocol_key.from_me);
+    try std.testing.expectEqualStrings("p@lid", msg.protocol_key.participant);
+}
+
+test "Message encodeEdit roundtrip via editedMessage field 58" {
+    const alloc = std.testing.allocator;
+    const enc = try Message.encodeEdit(alloc, "19082673946862@lid", "ORIGID", "edited body");
+    defer alloc.free(enc);
+    var tag_i: usize = 0;
+    const first = try nextTag(enc, &tag_i);
+    try std.testing.expectEqual(@as(u32, 58), first.field);
+    try std.testing.expectEqual(@as(u32, 2), first.wire);
+    const msg = try Message.decode(enc);
+    try std.testing.expectEqual(@as(u32, 14), msg.protocol_type.?);
+    try std.testing.expectEqualStrings("ORIGID", msg.protocol_key.id);
+    try std.testing.expect(msg.protocol_key.from_me);
+    try std.testing.expectEqualStrings("19082673946862@lid", msg.protocol_key.remote_jid);
+    try std.testing.expectEqualStrings("edited body", msg.text().?);
+}
+
+test "overlayMessage keeps outer SKDM across ephemeral unwrap" {
+    const alloc = std.testing.allocator;
+    const ax = [_]u8{0xAB} ** 8;
+    const skdm = try Message.encodeSenderKeyDistribution(alloc, "120363421845733873@g.us", &ax);
+    defer alloc.free(skdm);
+    const text = try Message.encodeText(alloc, "hi");
+    defer alloc.free(text);
+    var fp = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer fp.deinit(alloc);
+    try writeBytes(&fp, alloc, 1, text);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try buf.appendSlice(alloc, skdm);
+    try writeBytes(&buf, alloc, 40, fp.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expect(msg.has_sender_key_distribution);
+    try std.testing.expect(msg.sender_key_distribution != null);
+    try std.testing.expectEqualStrings("hi", msg.text().?);
+}
+
 test "Message encodeReaction roundtrip" {
     const alloc = std.testing.allocator;
     const enc = try Message.encodeReaction(alloc, "120363@g.us", false, "MSGID", "p@lid", "👍");
@@ -1896,7 +2029,7 @@ test "Message decode protocol edit overlays new text" {
     defer proto_msg.deinit(alloc);
     try writeBytes(&proto_msg, alloc, 1, key.items);
     try writeVarintField(&proto_msg, alloc, 2, 14);
-    try writeBytes(&proto_msg, alloc, 16, inner_text);
+    try writeBytes(&proto_msg, alloc, 14, inner_text);
     var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
     defer buf.deinit(alloc);
     try writeBytes(&buf, alloc, 12, proto_msg.items);

@@ -457,6 +457,7 @@ pub fn encodeMessageMulti(
     participants: []const Participant,
     device_identity: ?[]const u8,
     peer_recipient_pn: ?[]const u8,
+    edit: ?[]const u8,
 ) ![]u8 {
     const enc_nodes = try allocator.alloc(binary.Node, participants.len);
     defer {
@@ -497,6 +498,8 @@ pub fn encodeMessageMulti(
     try msg.attrs.put("id", id);
     try msg.attrs.put("type", "text");
     if (peer_recipient_pn) |pn| try msg.attrs.put("peer_recipient_pn", pn);
+    // whatsmeow getEditAttribute: "1" = message edit, "7" = sender revoke.
+    if (edit) |e| if (e.len > 0) try msg.attrs.put("edit", e);
     msg.content = .{ .nodes = kids };
     return binary.marshal(allocator, msg);
 }
@@ -1038,7 +1041,7 @@ test "encodeMessageMulti participants and device-identity" {
         .{ .jid = "111:5@s.whatsapp.net", .enc_type = .msg, .ciphertext = "bbb" },
     };
     const ident = "dev-ident-bytes";
-    const wire = try encodeMessageMulti(alloc, "111@s.whatsapp.net", "MID", &parts, ident, null);
+    const wire = try encodeMessageMulti(alloc, "111@s.whatsapp.net", "MID", &parts, ident, null, null);
     defer alloc.free(wire);
     var node = try binary.decodeNode(alloc, wire);
     defer node.deinit();
@@ -1062,6 +1065,18 @@ test "encodeMessageMulti participants and device-identity" {
     try std.testing.expect(node.getAttr("peer_recipient_pn") == null);
 }
 
+test "encodeMessageMulti stamps edit attr" {
+    const alloc = std.testing.allocator;
+    const parts = [_]Participant{
+        .{ .jid = "111:0@s.whatsapp.net", .enc_type = .msg, .ciphertext = "ct" },
+    };
+    const wire = try encodeMessageMulti(alloc, "111@s.whatsapp.net", "MID3", &parts, null, null, "1");
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
+    try std.testing.expectEqualStrings("1", node.getAttr("edit").?);
+}
+
 test "encodeMessageMulti lid dest sets peer_recipient_pn" {
     const alloc = std.testing.allocator;
     const parts = [_]Participant{
@@ -1074,6 +1089,7 @@ test "encodeMessageMulti lid dest sets peer_recipient_pn" {
         &parts,
         null,
         "917019895010@s.whatsapp.net",
+        null,
     );
     defer alloc.free(wire);
     var node = try binary.decodeNode(alloc, wire);

@@ -13,7 +13,7 @@ On disconnect, the native client reconnects with exponential backoff (2s, cap 60
 `~/.zeptoclaw/sessions/whatsapp/inbound-ledger.json`:
 
 - wire message ids in `seen` / `sent`
-- Fingerprint `chatId|fromMe|collapsed-body` with a 3 minute skip window in `isReplay`
+- Fingerprint `chatId|fromMe|collapsed-body` with a 3 minute skip window in `isReplay`, but only for non-empty text. Caption-less media, reactions, and revokes are keyed by wire id so they do not collide.
 
 There is no mute-fromMe-for-N-seconds-after-connect. First deploy with an empty ledger can process history once; those ids then persist.
 
@@ -29,13 +29,13 @@ The `exec` tool only runs on an operator `fromMe` 1:1 DM. A partner DM cannot in
 
 Pair with `zeptoclaw whatsapp pair` — it prints a terminal QR (half-block glyphs) plus the raw pairing URL. Identity is stored at `{auth_dir}/native.sqlite` (default `~/.zeptoclaw/sessions/whatsapp/native.sqlite`). Deleting that file unpairs the device.
 
-Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media downloads and decrypts. Outbound media, presence, reactions, polls, and read receipts use the same native client.
+Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media downloads and decrypts. Outbound media, presence, reactions, revokes, edits, polls, location, and read receipts use the same native client.
 
 Native mode had a usync silent-drop bug: every outbound send failed with `error.IqTimeout`. The binary encoder wrote JID-shaped attributes as plain text instead of the `JIDPair`/`ADJID` binary tags WhatsApp's server requires, so the server never answered. This is fixed. Usync now resolves in about 300ms.
 
 Native mode also had a delivery bug on 1:1 DMs, including self-chat. WhatsApp now addresses those chats to the recipient's LID, not the phone number. The old envelope got a server ACK, but the phone (a LID-keyed device) silently dropped it. `sendText` now resolves the phone number and LID through the stored `lid_map`, and sets `peer_recipient_pn` on the envelope so the fanout reaches the phone.
 
-Native mode now recovers automatically from `<receipt type=retry>`. If a fanned-out device could not decrypt a message, the old fix required deleting that device's session row by hand and resending. Now `sendText` caches the last 64 outbound DM plaintexts. On a retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. This caps at 5 resends per message. Group retries are not covered.
+Native mode now recovers automatically from `<receipt type=retry>`. If a fanned-out device could not decrypt a message, the old fix required deleting that device's session row by hand and resending. Now `sendText` caches the last 64 outbound plaintexts. On a 1:1 retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. On a group retry it fans out a sender-key distribution plus an `skmsg` of the cached plaintext. This caps at 5 resends per message.
 
 `zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender. Use it to force a fresh handshake by hand, outside the automatic path — for example, for a first-contact or self-chat probe, or when the automatic retry cap is hit. Stop the gateway first, so `wa-send` gets exclusive access to the sqlite session store.
 

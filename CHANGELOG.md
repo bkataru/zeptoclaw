@@ -6,7 +6,9 @@
 
 - Native Zig client is the only WhatsApp transport. Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
 - Inbound `ContextInfo.mentionedJid` is decoded and copied onto `WhatsAppMessage`. A group @mention of the bot's PN/LID/device JID triggers a turn in addition to the `barvis` wake word.
-- Native outbound: media upload, reactions, polls, presence, and read receipts. Group metadata IQ is used for group send and `getGroupMetadata`.
+- Native outbound: media upload, reactions, revokes, edits, polls, location, presence, and read receipts. Group metadata IQ is used for group send and `getGroupMetadata`.
+- Inbound edits decode `ProtocolMessage.editedMessage` at field 14 (WAProto) and unwrap `Message.editedMessage` (field 58). Caption-less media no longer fingerprint-collides.
+- Group `<receipt type=retry>` resends as SKDM+skmsg. Outbound edits/revokes set the stanza `edit` attr (`1` / `7` / `8`).
 - Removed the Node WhatsApp child, root `package.json`, and all remaining Node spawn/JSON-RPC paths.
 
 

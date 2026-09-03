@@ -233,6 +233,23 @@ pub const WhatsAppChannel = struct {
         self.allocator.free(id);
     }
 
+    pub fn sendRevoke(self: *WhatsAppChannel, chat_jid: []const u8, message_id: []const u8) !void {
+        const cli = self.native_client orelse return error.NotConnected;
+        const id = try cli.sendRevoke(chat_jid, message_id, null);
+        self.allocator.free(id);
+    }
+
+    pub fn sendEdit(self: *WhatsAppChannel, chat_jid: []const u8, message_id: []const u8, new_text: []const u8) !void {
+        const cli = self.native_client orelse return error.NotConnected;
+        const id = try cli.sendEdit(chat_jid, message_id, new_text);
+        self.allocator.free(id);
+    }
+
+    pub fn sendLocation(self: *WhatsAppChannel, to: []const u8, lat: f64, lon: f64) ![]const u8 {
+        const cli = self.native_client orelse return error.NotConnected;
+        return cli.sendLocation(to, lat, lon);
+    }
+
     /// Memory: Caller owns returned messageId slice; must free with allocator.free.
     /// Send a poll
     pub fn sendPoll(self: *WhatsAppChannel, to: []const u8, poll: types.Poll) ![]const u8 {

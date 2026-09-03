@@ -391,6 +391,8 @@ pub const GroupMessageOpts = struct {
     /// `attrs.type`; null derives whatsmeow's `getTypeFromMessage`: `"media"` when a
     /// media_type is present, else `"text"`.
     msg_type: ?[]const u8 = null,
+    /// whatsmeow `edit` attr: `"1"` message edit, `"7"` sender revoke. Omitted if null.
+    edit: ?[]const u8 = null,
     /// SKDM wrapper plaintext (`proto.Message.encodeSenderKeyDistribution`). A target
     /// with an empty `ciphertext` falls back to these bytes verbatim, which lets
     /// callers that pre-encrypt elsewhere (or tests) reuse one payload.
@@ -514,6 +516,9 @@ pub fn buildGroupMessageNode(allocator: std.mem.Allocator, opts: GroupMessageOpt
     }
     if (opts.push_name) |pn| {
         if (pn.len > 0) try setAttr(&msg, "notify", pn);
+    }
+    if (opts.edit) |e| {
+        if (e.len > 0) try setAttr(&msg, "edit", e);
     }
     try setAttr(&msg, "phash", phash);
 

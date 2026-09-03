@@ -57,6 +57,7 @@ const RecentIn = struct {
     id: []u8,
     chat: []u8,
     sender: []u8,
+    from_me: bool,
 
     fn deinit(self: RecentIn, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -1466,7 +1467,7 @@ pub const Client = struct {
             }
             break :blk null;
         };
-        rememberInbound(self, info.id, chat_src, info.sender);
+        rememberInbound(self, info.id, chat_src, info.sender, info.from_me);
         return .{ .message = .{
             .allocator = self.allocator,
             .id = try self.allocator.dupe(u8, info.id),
@@ -1698,12 +1699,16 @@ pub const Client = struct {
     /// Encrypt and send a pre-encoded protobuf Message to a DM or group JID.
     /// Memory: caller frees the message id.
     pub fn sendPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
-        if (!self.isConnected()) return error.NotConnected;
-        if (std.mem.eql(u8, jid.server(to), "g.us")) return self.sendGroupPlaintext(to, msg_plain);
-        return self.sendDmPlaintext(to, msg_plain);
+        return self.sendPlaintextWithEdit(to, msg_plain, null);
     }
 
-    fn sendDmPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
+    fn sendPlaintextWithEdit(self: *Client, to: []const u8, msg_plain: []const u8, edit: ?[]const u8) ![]u8 {
+        if (!self.isConnected()) return error.NotConnected;
+        if (std.mem.eql(u8, jid.server(to), "g.us")) return self.sendGroupPlaintext(to, msg_plain, edit);
+        return self.sendDmPlaintext(to, msg_plain, edit);
+    }
+
+    fn sendDmPlaintext(self: *Client, to: []const u8, msg_plain: []const u8, edit: ?[]const u8) ![]u8 {
         const own = self.paired_jid orelse return error.NotPaired;
         const own_lid = self.paired_lid;
         const alloc = self.allocator;
@@ -1809,7 +1814,7 @@ pub const Client = struct {
         var rnd: [8]u8 = undefined;
         std.Io.Threaded.global_single_threaded.io().random(&rnd);
         const msg_id = std.fmt.bytesToHex(rnd, .upper);
-        const frame = try stanza.encodeMessageMulti(alloc, dest, &msg_id, parts.items, if (any_prekey) self.adv_account else null, dm.pn_owned);
+        const frame = try stanza.encodeMessageMulti(alloc, dest, &msg_id, parts.items, if (any_prekey) self.adv_account else null, dm.pn_owned, edit);
         defer alloc.free(frame);
         std.log.info("[whatsapp-native][diag] sendText frame to={s} dest={s} peer_pn={s} id={s} any_prekey={} devices={d} parts={d}", .{ to, dest, dm.pn_owned orelse "-", msg_id, any_prekey, devices.items.len, parts.items.len });
         try self.writeFrame(frame);
@@ -1826,10 +1831,10 @@ pub const Client = struct {
     pub fn buildGroupText(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, text: []const u8) !GroupSend {
         const msg_plain = try proto.Message.encodeTextWith(self.allocator, text, .{});
         defer self.allocator.free(msg_plain);
-        return self.buildGroupPayload(to, addressing_mode, device_jids, msg_plain);
+        return self.buildGroupPayload(to, addressing_mode, device_jids, msg_plain, null);
     }
 
-    pub fn buildGroupPayload(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, msg_plain: []const u8) !GroupSend {
+    pub fn buildGroupPayload(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, msg_plain: []const u8, edit: ?[]const u8) !GroupSend {
         const alloc = self.allocator;
         const io = ioOf();
         const own = self.paired_jid orelse return error.NotPaired;
@@ -1915,6 +1920,7 @@ pub const Client = struct {
             .skmsg_ciphertext = skmsg,
             .skdm_payload = skdm_plain,
             .skdm_targets = parts.items,
+            .edit = edit,
         });
         defer node.deinit();
         const frame = try binary.marshal(alloc, node);
@@ -1927,10 +1933,10 @@ pub const Client = struct {
     pub fn sendGroupText(self: *Client, to: []const u8, text: []const u8) ![]u8 {
         const msg_plain = try proto.Message.encodeTextWith(self.allocator, text, .{});
         defer self.allocator.free(msg_plain);
-        return self.sendGroupPlaintext(to, msg_plain);
+        return self.sendGroupPlaintext(to, msg_plain, null);
     }
 
-    fn sendGroupPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
+    fn sendGroupPlaintext(self: *Client, to: []const u8, msg_plain: []const u8, edit: ?[]const u8) ![]u8 {
         if (!self.isConnected()) return error.NotConnected;
         if (!std.mem.eql(u8, jid.server(to), "g.us")) return error.NotGroupJid;
         const alloc = self.allocator;
@@ -2024,7 +2030,7 @@ pub const Client = struct {
         try all_devices.append(alloc, own_dev);
         for (devices.items) |d| try all_devices.append(alloc, d);
 
-        const send = try self.buildGroupPayload(to, if (std.mem.eql(u8, info.addressing_mode, "lid")) "lid" else "", all_devices.items, msg_plain);
+        const send = try self.buildGroupPayload(to, if (std.mem.eql(u8, info.addressing_mode, "lid")) "lid" else "", all_devices.items, msg_plain, edit);
         defer alloc.free(send.frame);
         defer alloc.free(send.id);
         try self.writeFrame(send.frame);
@@ -2193,14 +2199,38 @@ pub const Client = struct {
     pub fn sendReaction(self: *Client, chat_jid: []const u8, message_id: []const u8, emoji: []const u8, participant: ?[]const u8) ![]u8 {
         var looked_up: ?[]u8 = null;
         defer if (looked_up) |s| self.allocator.free(s);
+        const hit = lookupInbound(self, chat_jid, message_id);
+        if (hit) |h| looked_up = h.sender;
         const part = participant orelse blk: {
             if (!std.mem.eql(u8, jid.server(chat_jid), "g.us")) break :blk null;
-            looked_up = lookupInboundSender(self, chat_jid, message_id);
             break :blk looked_up;
         };
-        const proto_bytes = try proto.Message.encodeReaction(self.allocator, chat_jid, false, message_id, part, emoji);
+        const from_me = if (hit) |h| h.from_me else false;
+        const proto_bytes = try proto.Message.encodeReaction(self.allocator, chat_jid, from_me, message_id, part, emoji);
         defer self.allocator.free(proto_bytes);
         return self.sendPlaintext(chat_jid, proto_bytes);
+    }
+
+    pub fn sendRevoke(self: *Client, chat_jid: []const u8, message_id: []const u8, participant: ?[]const u8) ![]u8 {
+        var looked_up: ?[]u8 = null;
+        defer if (looked_up) |s| self.allocator.free(s);
+        const hit = lookupInbound(self, chat_jid, message_id);
+        if (hit) |h| looked_up = h.sender;
+        const part = participant orelse blk: {
+            if (!std.mem.eql(u8, jid.server(chat_jid), "g.us")) break :blk null;
+            break :blk looked_up;
+        };
+        const from_me = if (hit) |h| h.from_me else true;
+        const proto_bytes = try proto.Message.encodeRevoke(self.allocator, chat_jid, from_me, message_id, part);
+        defer self.allocator.free(proto_bytes);
+        const edit_attr: []const u8 = if (from_me) "7" else "8";
+        return self.sendPlaintextWithEdit(chat_jid, proto_bytes, edit_attr);
+    }
+
+    pub fn sendEdit(self: *Client, chat_jid: []const u8, message_id: []const u8, new_text: []const u8) ![]u8 {
+        const proto_bytes = try proto.Message.encodeEdit(self.allocator, chat_jid, message_id, new_text);
+        defer self.allocator.free(proto_bytes);
+        return self.sendPlaintextWithEdit(chat_jid, proto_bytes, "1");
     }
 
     pub fn sendPoll(self: *Client, to: []const u8, name: []const u8, options: []const []const u8, selectable: u32) ![]u8 {
@@ -2306,7 +2336,7 @@ fn takeTarget(
     }
 }
 
-fn rememberInbound(self: *Client, id: []const u8, chat: []const u8, sender: []const u8) void {
+fn rememberInbound(self: *Client, id: []const u8, chat: []const u8, sender: []const u8, from_me: bool) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     self.recent_in_mu.lock(io) catch return;
     defer self.recent_in_mu.unlock(io);
@@ -2321,21 +2351,29 @@ fn rememberInbound(self: *Client, id: []const u8, chat: []const u8, sender: []co
         return;
     };
     if (self.recent_in[self.recent_in_pos]) |old| old.deinit(self.allocator);
-    self.recent_in[self.recent_in_pos] = .{ .id = id_d, .chat = chat_d, .sender = sender_d };
+    self.recent_in[self.recent_in_pos] = .{ .id = id_d, .chat = chat_d, .sender = sender_d, .from_me = from_me };
     self.recent_in_pos = (self.recent_in_pos + 1) % recent_in_cap;
 }
 
-fn lookupInboundSender(self: *Client, chat: []const u8, id: []const u8) ?[]u8 {
+const InboundHit = struct { sender: []u8, from_me: bool };
+
+fn lookupInbound(self: *Client, chat: []const u8, id: []const u8) ?InboundHit {
     const io = std.Io.Threaded.global_single_threaded.io();
     self.recent_in_mu.lock(io) catch return null;
     defer self.recent_in_mu.unlock(io);
     for (self.recent_in) |slot| {
         const rec = slot orelse continue;
         if (std.mem.eql(u8, rec.id, id) and std.mem.eql(u8, rec.chat, chat)) {
-            return self.allocator.dupe(u8, rec.sender) catch null;
+            const sender = self.allocator.dupe(u8, rec.sender) catch return null;
+            return .{ .sender = sender, .from_me = rec.from_me };
         }
     }
     return null;
+}
+
+fn lookupInboundSender(self: *Client, chat: []const u8, id: []const u8) ?[]u8 {
+    const hit = lookupInbound(self, chat, id) orelse return null;
+    return hit.sender;
 }
 
 /// Keep the first decryptable media attachment (kind + direct path + key).
@@ -2783,10 +2821,15 @@ test "lookupInboundSender finds group participant" {
     const alloc = std.testing.allocator;
     var cli = Client.init(alloc);
     defer cli.deinit();
-    rememberInbound(&cli, "MIDG", "120363425058847361@g.us", "216638251077681@lid");
+    rememberInbound(&cli, "MIDG", "120363425058847361@g.us", "216638251077681@lid", false);
     const got = lookupInboundSender(&cli, "120363425058847361@g.us", "MIDG") orelse return error.TestUnexpectedResult;
     defer alloc.free(got);
     try std.testing.expectEqualStrings("216638251077681@lid", got);
     try std.testing.expect(lookupInboundSender(&cli, "120363425058847361@g.us", "NOPE") == null);
+
+    rememberInbound(&cli, "OWN1", "19082673946862@lid", "917019895010:58@s.whatsapp.net", true);
+    const own = lookupInbound(&cli, "19082673946862@lid", "OWN1") orelse return error.TestUnexpectedResult;
+    defer alloc.free(own.sender);
+    try std.testing.expect(own.from_me);
 }
 
