@@ -1,6 +1,6 @@
 # OpenClaw compatibility
 
-Zig-only bridge (`src/openclaw_compat/openclaw.zig`). No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is Baileys + `Agent.runTurn`. Gateway port **18789**. Workspace markdown (soul, identity, journals, `MEMORY.md`) is `~/.zeptoclaw/workspace`.
+Zig-only bridge (`src/openclaw_compat/openclaw.zig`). No npm `openclaw`. `$HOME/.zeptoclaw` first, then read-only `~/.openclaw`. Live WhatsApp is the native client + `Agent.runTurn`. Gateway port **18789**. Workspace markdown (soul, identity, journals, `MEMORY.md`) is `~/.zeptoclaw/workspace`.
 
 ## 1. Principles
 

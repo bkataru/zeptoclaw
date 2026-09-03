@@ -65,9 +65,9 @@ fn setNodes(node: *binary.Node, kids: []const binary.Node) !void {
 
 /// whatsmeow `getGroupInfo` (wm2_group.go:658) → `sendGroupIQ(iqGet, jid,
 /// <query request="interactive">)`; xmlns goes on the `<iq>` (wm_request.go:119),
-/// not on the `<query>`. Baileys `groupMetadata` (Socket/groups.js:18) is identical.
+/// not on the `<query>`. WhatsApp web `groupMetadata` (Socket/groups.js:18) is identical.
 /// Neither adds a `notify` attr — `notify` is the inbound sender push name only.
-/// `id` may be bare (no `@`), in which case `@g.us` is appended (Baileys
+/// `id` may be bare (no `@`), in which case `@g.us` is appended (WhatsApp web
 /// `extractGroupMetadata` tolerates the same asymmetry on the way back).
 /// Memory: caller owns the node; `deinit` frees it.
 pub fn buildGroupInfoQuery(allocator: std.mem.Allocator, id: []const u8, iq_id: []const u8) !binary.Node {
@@ -95,7 +95,7 @@ fn groupJidString(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
 // ---------------------------------------------------------------- group info parse
 
 /// One `<participant>` of a `<group>`/`<query>` element. `jid` is the wire attr
-/// verbatim; `lid` follows Baileys (groups.js:316): when `jid` is itself a lid it is
+/// verbatim; `lid` follows WhatsApp web (groups.js:316): when `jid` is itself a lid it is
 /// mirrored there, otherwise it carries the separate `lid` attr. Admin mirrors
 /// whatsmeow `parseParticipant` (wm2_group.go:704): `superadmin` implies admin.
 pub const Participant = struct {
@@ -113,7 +113,7 @@ pub const GroupInfo = struct {
     subject_time: i64 = 0,
     creation: i64 = 0,
     addressing_mode: []const u8 = "",
-    /// `<locked/>` child or `locked="true"` attr (Baileys `restrict`).
+    /// `<locked/>` child or `locked="true"` attr (WhatsApp web `restrict`).
     locked: bool = false,
     participants: []Participant = &.{},
 
@@ -369,7 +369,7 @@ pub const GroupMessageOpts = struct {
     /// Message id (`attrs.id`).
     id: []const u8,
     /// Group JID, e.g. `120363421845733873@g.us`. Sent verbatim as `attrs.to` —
-    /// neither whatsmeow (wm2_send.go:1195) nor Baileys rewrites the group JID for
+    /// neither whatsmeow (wm2_send.go:1195) nor WhatsApp web rewrites the group JID for
     /// lid-addressed groups; only the participant JIDs and `addressing_mode` change.
     to_group: []const u8,
     /// Your own device JID. Targets equal to this (or `own_lid`) are dropped from the
@@ -378,7 +378,7 @@ pub const GroupMessageOpts = struct {
     own_jid: []const u8,
     own_lid: ?[]const u8 = null,
     /// `"lid"` for lid-addressed groups (whatsmeow sets it there only), `"pn"` for
-    /// Baileys-parity, `""` to omit the attr entirely.
+    /// WhatsApp-web-parity, `""` to omit the attr entirely.
     addressing_mode: []const u8 = "",
     /// whatsmeow `allDevices` — the phash input, own devices included.
     participants_device_jids: []const []const u8 = &.{},
@@ -405,7 +405,7 @@ pub const GroupMessageOpts = struct {
     /// Optional `t` attr. Neither oracle sends `t` outbound (the server stamps it on
     /// the echo), so this stays null unless you specifically want it.
     timestamp: ?i64 = null,
-    /// Optional `notify` attr (sender push name). whatsmeow and Baileys never set it
+    /// Optional `notify` attr (sender push name). whatsmeow and WhatsApp web never set it
     /// on outbound messages — the server echoes the name it knows — so null is default.
     push_name: ?[]const u8 = null,
 };
@@ -738,7 +738,7 @@ test "parseGroupInfo reads a w:g2 group element" {
 
     const lid_member = info.participants[1];
     try std.testing.expectEqualStrings("15551234@lid", lid_member.jid);
-    // Baileys groups.js:316: a lid `jid` is mirrored into `lid`.
+    // WhatsApp web groups.js:316: a lid `jid` is mirrored into `lid`.
     try std.testing.expectEqualStrings("15551234@lid", lid_member.lid.?);
     try std.testing.expect(!lid_member.admin);
     try std.testing.expect(!lid_member.super_admin);

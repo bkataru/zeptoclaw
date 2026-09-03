@@ -744,6 +744,25 @@ fn nestedVarintField(data: []const u8, field: u32) ?u32 {
     return null;
 }
 
+/// ContextInfo.mentionedJid is field 15 (repeated string). ContextInfo sits
+/// at field 17 on ExtendedText / Image / Video / Audio / Document / Sticker.
+fn collectContextMentions(inner: []const u8, out: *Message) void {
+    const ctx = nestedStringField(inner, 17) orelse return;
+    var idx: usize = 0;
+    while (idx < ctx.len) {
+        const t = nextTag(ctx, &idx) catch break;
+        if (t.field == 15 and t.wire == 2) {
+            const jid = readBytes(ctx, &idx) catch break;
+            if (out.mentioned_jid_count < out.mentioned_jids.len) {
+                out.mentioned_jids[out.mentioned_jid_count] = jid;
+                out.mentioned_jid_count += 1;
+            }
+        } else {
+            skipField(ctx, &idx, t.wire) catch break;
+        }
+    }
+}
+
 fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.conversation == null) dst.conversation = src.conversation;
     if (dst.extended_text == null) dst.extended_text = src.extended_text;
@@ -754,10 +773,14 @@ fn overlayMessage(dst: *Message, src: Message) void {
     if (dst.has_sender_key_distribution) dst.has_sender_key_distribution = src.has_sender_key_distribution;
     if (dst.sender_key_distribution == null) dst.sender_key_distribution = src.sender_key_distribution;
     if (dst.reaction == null) dst.reaction = src.reaction;
+    if (dst.mentioned_jid_count == 0 and src.mentioned_jid_count > 0) {
+        dst.mentioned_jids = src.mentioned_jids;
+        dst.mentioned_jid_count = src.mentioned_jid_count;
+    }
 }
 
 /// Per-kind field numbers verified against whatsmeow WAWebProtobufsE2E.proto
-/// and Baileys WAProto.proto (both agree):
+/// and WhatsApp web WAProto.proto (both agree):
 /// image 3{url=1,mimetype=2,caption=3,fileSha256=4,fileLength=5,height=6,width=7,
 /// mediaKey=8,fileEncSha256=9,directPath=11}; video 9{url=1,mimetype=2,fileSha256=3,
 /// fileLength=4,seconds=5,mediaKey=6,caption=7,height=9,width=10,fileEncSha256=11,
@@ -1060,6 +1083,8 @@ pub const Message = struct {
     has_sender_key_distribution: bool = false,
     sender_key_distribution: ?SenderKeyDistribution = null,
     reaction: ?struct { key: MessageKey, text: []const u8 } = null,
+    mentioned_jids: [16][]const u8 = [_][]const u8{&[_]u8{}} ** 16,
+    mentioned_jid_count: u8 = 0,
 
     fn decodeFields(data: []const u8, unwrap: bool) !Message {
         var out = Message{};
@@ -1095,6 +1120,7 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.image, inner);
                     if (nestedStringField(inner, 3)) |c| out.caption = c;
+                    collectContextMentions(inner, &out);
                 },
                 6 => {
                     if (t.wire != 2) {
@@ -1103,6 +1129,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.extended_text = nestedStringField(inner, 1);
+                    collectContextMentions(inner, &out);
                 },
                 7 => {
                     if (t.wire != 2) {
@@ -1112,6 +1139,7 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.document, inner);
                     if (nestedStringField(inner, 20)) |c| out.caption = c;
+                    collectContextMentions(inner, &out);
                 },
                 8 => {
                     if (t.wire != 2) {
@@ -1120,6 +1148,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.audio, inner);
+                    collectContextMentions(inner, &out);
                 },
                 9 => {
                     if (t.wire != 2) {
@@ -1129,6 +1158,7 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.video, inner);
                     if (nestedStringField(inner, 7)) |c| out.caption = c;
+                    collectContextMentions(inner, &out);
                 },
                 12 => {
                     if (t.wire != 2) {
@@ -1145,6 +1175,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.sticker, inner);
+                    collectContextMentions(inner, &out);
                 },
                 31 => {
                     if (t.wire != 2) {
@@ -1247,6 +1278,151 @@ pub const Message = struct {
         skdm.deinit(allocator);
         return buf.toOwnedSlice(allocator);
     }
+
+    /// Memory: caller frees. Message{reactionMessage=46{key=1, text=2}}.
+    pub fn encodeReaction(
+        allocator: std.mem.Allocator,
+        remote_jid: []const u8,
+        from_me: bool,
+        id: []const u8,
+        participant: ?[]const u8,
+        emoji: []const u8,
+    ) ![]u8 {
+        var key = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer key.deinit(allocator);
+        try writeBytes(&key, allocator, 1, remote_jid);
+        try writeBoolField(&key, allocator, 2, from_me);
+        try writeBytes(&key, allocator, 3, id);
+        if (participant) |p| if (p.len > 0) try writeBytes(&key, allocator, 4, p);
+        var rxn = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer rxn.deinit(allocator);
+        try writeBytes(&rxn, allocator, 1, key.items);
+        try writeBytes(&rxn, allocator, 2, emoji);
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 46, rxn.items);
+        const owned = try buf.toOwnedSlice(allocator);
+        rxn.deinit(allocator);
+        key.deinit(allocator);
+        return owned;
+    }
+
+    pub const MediaEncode = struct {
+        kind: Media.Kind,
+        url: []const u8 = "",
+        direct_path: []const u8,
+        mimetype: []const u8,
+        caption: ?[]const u8 = null,
+        media_key: []const u8,
+        file_sha256: []const u8,
+        file_enc_sha256: []const u8,
+        file_len: u64,
+        media_key_timestamp: i64,
+        file_name: ?[]const u8 = null,
+    };
+
+    /// Memory: caller frees. Image/video/audio/document/sticker Message.
+    pub fn encodeMedia(allocator: std.mem.Allocator, m: MediaEncode) ![]u8 {
+        var inner = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer inner.deinit(allocator);
+        const url = if (m.url.len > 0) m.url else m.direct_path;
+        switch (m.kind) {
+            .image => {
+                try writeBytes(&inner, allocator, 1, url);
+                try writeBytes(&inner, allocator, 2, m.mimetype);
+                if (m.caption) |c| if (c.len > 0) try writeBytes(&inner, allocator, 3, c);
+                try writeBytes(&inner, allocator, 4, m.file_sha256);
+                try writeVarintField(&inner, allocator, 5, m.file_len);
+                try writeBytes(&inner, allocator, 8, m.media_key);
+                try writeBytes(&inner, allocator, 9, m.file_enc_sha256);
+                try writeBytes(&inner, allocator, 11, m.direct_path);
+                try writeVarintField(&inner, allocator, 12, @bitCast(m.media_key_timestamp));
+            },
+            .video => {
+                try writeBytes(&inner, allocator, 1, url);
+                try writeBytes(&inner, allocator, 2, m.mimetype);
+                try writeBytes(&inner, allocator, 3, m.file_sha256);
+                try writeVarintField(&inner, allocator, 4, m.file_len);
+                try writeBytes(&inner, allocator, 6, m.media_key);
+                if (m.caption) |c| if (c.len > 0) try writeBytes(&inner, allocator, 7, c);
+                try writeBytes(&inner, allocator, 11, m.file_enc_sha256);
+                try writeBytes(&inner, allocator, 13, m.direct_path);
+                try writeVarintField(&inner, allocator, 14, @bitCast(m.media_key_timestamp));
+            },
+            .audio => {
+                try writeBytes(&inner, allocator, 1, url);
+                try writeBytes(&inner, allocator, 2, m.mimetype);
+                try writeBytes(&inner, allocator, 3, m.file_sha256);
+                try writeVarintField(&inner, allocator, 4, m.file_len);
+                try writeBytes(&inner, allocator, 7, m.media_key);
+                try writeBytes(&inner, allocator, 8, m.file_enc_sha256);
+                try writeBytes(&inner, allocator, 9, m.direct_path);
+                try writeVarintField(&inner, allocator, 10, @bitCast(m.media_key_timestamp));
+            },
+            .document => {
+                try writeBytes(&inner, allocator, 1, url);
+                try writeBytes(&inner, allocator, 2, m.mimetype);
+                try writeBytes(&inner, allocator, 4, m.file_sha256);
+                try writeVarintField(&inner, allocator, 5, m.file_len);
+                try writeBytes(&inner, allocator, 7, m.media_key);
+                if (m.file_name) |n| try writeBytes(&inner, allocator, 8, n);
+                try writeBytes(&inner, allocator, 9, m.file_enc_sha256);
+                try writeBytes(&inner, allocator, 10, m.direct_path);
+                try writeVarintField(&inner, allocator, 11, @bitCast(m.media_key_timestamp));
+                if (m.caption) |c| if (c.len > 0) try writeBytes(&inner, allocator, 20, c);
+            },
+            .sticker => {
+                try writeBytes(&inner, allocator, 1, url);
+                try writeBytes(&inner, allocator, 2, m.file_sha256);
+                try writeBytes(&inner, allocator, 3, m.file_enc_sha256);
+                try writeBytes(&inner, allocator, 4, m.media_key);
+                try writeBytes(&inner, allocator, 5, m.mimetype);
+                try writeBytes(&inner, allocator, 8, m.direct_path);
+                try writeVarintField(&inner, allocator, 9, m.file_len);
+                try writeVarintField(&inner, allocator, 10, @bitCast(m.media_key_timestamp));
+            },
+        }
+        const field: u32 = switch (m.kind) {
+            .image => 3,
+            .video => 9,
+            .audio => 8,
+            .document => 7,
+            .sticker => 26,
+        };
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, field, inner.items);
+        const owned = try buf.toOwnedSlice(allocator);
+        inner.deinit(allocator);
+        return owned;
+    }
+
+    /// Memory: caller frees. Message{pollCreationMessage=51{encKey=1, name=2, options=3, selectable=4}}.
+    pub fn encodePoll(
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        options: []const []const u8,
+        selectable: u32,
+        enc_key: []const u8,
+    ) ![]u8 {
+        var inner = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer inner.deinit(allocator);
+        try writeBytes(&inner, allocator, 1, enc_key);
+        try writeBytes(&inner, allocator, 2, name);
+        for (options) |opt| {
+            var opt_buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+            defer opt_buf.deinit(allocator);
+            try writeBytes(&opt_buf, allocator, 1, opt);
+            try writeBytes(&inner, allocator, 3, opt_buf.items);
+        }
+        try writeVarintField(&inner, allocator, 4, selectable);
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 51, inner.items);
+        const owned = try buf.toOwnedSlice(allocator);
+        inner.deinit(allocator);
+        return owned;
+    }
 };
 
 pub const ConversationMessage = struct {
@@ -1343,6 +1519,63 @@ test "Message decode extendedText" {
     const msg = try Message.decode(buf.items);
     try std.testing.expectEqualStrings("hello", msg.extended_text.?);
     try std.testing.expectEqualStrings("hello", msg.text().?);
+}
+
+test "Message decode extendedText mentionedJid" {
+    const alloc = std.testing.allocator;
+    var ctx = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer ctx.deinit(alloc);
+    try writeBytes(&ctx, alloc, 15, "216638251077681@lid");
+    try writeBytes(&ctx, alloc, 15, "917019895010@s.whatsapp.net");
+    var inner = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer inner.deinit(alloc);
+    try writeBytes(&inner, alloc, 1, "@barvis yo?");
+    try writeBytes(&inner, alloc, 17, ctx.items);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 6, inner.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expectEqualStrings("@barvis yo?", msg.extended_text.?);
+    try std.testing.expectEqual(@as(u8, 2), msg.mentioned_jid_count);
+    try std.testing.expectEqualStrings("216638251077681@lid", msg.mentioned_jids[0]);
+    try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", msg.mentioned_jids[1]);
+}
+
+test "Message encodeReaction roundtrip" {
+    const alloc = std.testing.allocator;
+    const enc = try Message.encodeReaction(alloc, "120363@g.us", false, "MSGID", "p@lid", "👍");
+    defer alloc.free(enc);
+    const msg = try Message.decode(enc);
+    try std.testing.expectEqualStrings("👍", msg.reaction.?.text);
+    try std.testing.expectEqualStrings("MSGID", msg.reaction.?.key.id);
+    try std.testing.expectEqualStrings("120363@g.us", msg.reaction.?.key.remote_jid);
+    try std.testing.expect(!msg.reaction.?.key.from_me);
+    try std.testing.expectEqualStrings("p@lid", msg.reaction.?.key.participant);
+}
+
+test "Message encodeMedia image roundtrip" {
+    const alloc = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    const sha = [_]u8{0x22} ** 32;
+    const enc_sha = [_]u8{0x33} ** 32;
+    const blob = try Message.encodeMedia(alloc, .{
+        .kind = .image,
+        .direct_path = "/v/t62/x",
+        .mimetype = "image/jpeg",
+        .caption = "hi",
+        .media_key = &key,
+        .file_sha256 = &sha,
+        .file_enc_sha256 = &enc_sha,
+        .file_len = 99,
+        .media_key_timestamp = 1700000000,
+    });
+    defer alloc.free(blob);
+    const msg = try Message.decode(blob);
+    try std.testing.expectEqualStrings("hi", msg.caption.?);
+    try std.testing.expect(msg.media != null);
+    try std.testing.expectEqual(Media.Kind.image, msg.media.?.kind);
+    try std.testing.expectEqualStrings("/v/t62/x", msg.media.?.direct_path.?);
+    try std.testing.expectEqual(@as(u64, 99), msg.media.?.file_len);
 }
 
 test "Message decode deviceSent nested inner decodes to text" {

@@ -1,10 +1,10 @@
 # Native WhatsApp Zig Architecture — whatsmeow Port Audit
 
-**Status:** compile-only stubs. Production still uses Baileys.
+**Status:** live transport. Pair with `zeptoclaw whatsapp pair`.
 
 **Source:** `tulir/whatsmeow` (Go, MPL-2.0) — Zig 0.16.0 target
 **Scope audited:** `client.go` 1066 lines, `store/store.go` 324, `store/sqlstore/*`, `appstate/*`, `qrchan.go` 222, `pair.go` 314, `pair-code.go` 248, `pair-passkey.go` 324, `handshake.go` 182, `socket/*`
-**Existing shim:** `src/channels/whatsapp/whatsapp_channel.zig` — Baileys Node.js bridge via JSON-RPC over stdio + reader thread (`compat.getIo()` Io API, `std.Thread`, `std.Io.Mutex`). Native port must implement same `WhatsAppChannel` surface so `zeptoclaw whatsapp pair` / gateway need no CLI change.
+**Façade:** `src/channels/whatsapp/whatsapp_channel.zig` — native `Client` plus poll thread (`compat.getIo()`, `std.Thread`, `std.Io.Mutex`). `zeptoclaw whatsapp pair` / gateway share this surface.
 
 ---
 
@@ -123,15 +123,12 @@ src/channels/whatsapp/native/store/
 
 ---
 
-## 6. Existing Zig wrapper audit — `whatsapp_channel.zig` 529 lines
+## 6. Channel façade — `whatsapp_channel.zig`
 
-- Holds `node_process Child`, `node_std/stdout/stderr File`, `connected bool`, `self_jid/self_e164 ?[]u8`, handlers, `reader_thread Thread`, `mutex Io.Mutex`.
-- `connect` spawns `node baileys_wrapper.js`, sends `init{auth_dir, print_qr, allow_from}` then `onMessage/onConnection/onQr` JSON-RPC; `readerLoop` (8 KiB buf, line-buffered `\n` split) → `processLine` (dispatch `message/connection/qr`), `sendRequest` placeholder (fire-and-forget today — needs id→future).
-- `disconnect` sends `disconnect` RPC, `nanosleep 100ms`, `kill+wait`, `thread.join`; `waitForConnection` polls `connected` with 100 ms sleep until timeout.
-- `sendMessage/sendMedia/sendReaction/sendPoll/markRead/sendPresence/getContactInfo/getGroupMetadata` all JSON-RPC.
-- `compat.getIo()` threaded Io introduced for 0.16; builds GREEN.
-
-**Migration strategy:** keep `whatsapp_channel.zig` as façade, add compile flag `config.whatsapp_native: bool` (or runtime fallback) that picks `native/client.zig` vs child process. Interface stays `{connect, disconnect, waitForConnection, sendMessage, onMessage, onConnection, onQr}`.
+- Holds `connected`, `self_jid`/`self_e164`, handlers, poll `reader_thread`, `mutex`, and `native_client`.
+- `connect` opens `{auth_dir}/native.sqlite` and spawns `nativeLoop` (`Client.connect` + `poll`).
+- `disconnect` stops the poll loop, joins the thread, and frees the client.
+- `sendMessage` / `sendMedia` / `sendReaction` / `sendPoll` / `markRead` / `sendPresence` / `getGroupMetadata` call `native/client.zig`.
 
 ---
 
@@ -141,7 +138,7 @@ src/channels/whatsapp/native/store/
 
 ```
 src/channels/whatsapp/
-  whatsapp_channel.zig   // façade, picks native vs baileys
+  whatsapp_channel.zig   // façade over native/client.zig
   types.zig              // unchanged
   config.zig, inbound.zig, outbound.zig, session.zig  // unchanged
   pairing.zig            // thin CLI entry, delegates to native/pair.zig
@@ -205,7 +202,7 @@ src/channels/whatsapp/
 
 ### Risks
 
-- **Signal** is the long pole; without it `handleEncryptedMessage` can't decrypt. Recommend keeping Baileys fallback until Signal phase passes interop tests.
+- **Signal** decrypts inbound `handleEncryptedMessage` on this path.
 - **Zig 0.16 Io** is still evolving — `compat.zig` already abstracts it.
 - **Protobuf churn** — pin `proto` at same commit as whatsmeow Go mod.
 - **SQLite WAL** on network FS — document local `~/.local/share/zeptoclaw/` path only.

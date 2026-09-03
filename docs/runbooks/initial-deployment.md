@@ -1,6 +1,6 @@
 # Initial deployment
 
-1. Install Zig 0.16.0 and Node 18+.
+1. Install Zig 0.16.0.
 2. `zig build` in the repo.
 3. Set `NVIDIA_API_KEY` and `GATEWAY_AUTH_TOKEN` on the user systemd unit or `~/.config/zeptoclaw/env` (`chmod 600`). Copy the same NVIDIA key to `~/.config/zeptoclaw/nim.env` for memory oneshots.
 4. Put WhatsApp allowlist in OpenClaw-compatible config (`channels.whatsapp`). Workspace is `~/.zeptoclaw/workspace`.

@@ -6,4 +6,4 @@ Known classes (fixed in current Zig):
 - RPC deadlock: never call `sendMessage` on the stdout reader thread.
 - Stdout spin: skip non-JSON lines without skipping the newline advance.
 
-Debug a hang with `journalctl` plus `pgrep -af 'zeptoclaw-gateway|baileys_wrapper'`. A live Node with no Zig `inbound` lines means the reader died or JSON parse failed.
+Debug a hang with `journalctl` plus `pgrep -af zeptoclaw-gateway`. Connected with no `inbound` lines means the native poll loop stalled.

@@ -1,5 +1,5 @@
 # WhatsApp native (Zig)
 
-Incomplete whatsmeow-inspired port. Compiles with the rest of the tree. **Live transport is still Baileys** (`baileys_wrapper.js`).
+Live WhatsApp transport. Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
 
-Swap would happen behind `WhatsAppChannel` without changing CLI entrypoints. See `ARCHITECTURE.md` for the Go → Zig map.
+See `ARCHITECTURE.md` for the whatsmeow → Zig map.

@@ -4,19 +4,19 @@
 
 Zig **0.16.0**. `zig build` and `zig build test --summary all`.
 
-Node 18+ for WhatsApp (`ZEPTO_NODE` if needed). Do not commit `sessions/`, `.env`, or live tokens.
+Do not commit `sessions/`, `.env`, or live tokens.
 
 ## Zig 0.16 notes
 
 - `ArrayList.append` / `appendSlice` / `deinit` / `toOwnedSlice` take the allocator.
 - `std.json.ObjectMap.init(allocator, &.{}, &.{})`.
-- `compat.getIo()` uses a failing `processSpawn`. Spawn Node (and `zeptoclaw memory update` children) with a dedicated `std.Io.Threaded`, never `compat.getIo()`.
+- `compat.getIo()` uses a failing `processSpawn`. Spawn `zeptoclaw memory update` children with a dedicated `std.Io.Threaded`, never `compat.getIo()`.
 - Public alloc/ownership transfers need a greppable `/// Memory:` comment (caller owns vs callee takes).
 
 ## Layout
 
 - `src/agent/loop.zig` - `runTurn` (tools + NIM). Gateway WhatsApp must go through this, not a one-shot `NIMClient.chat`.
-- `src/channels/whatsapp/` - live Baileys path. `native/` is an opt-in whatsmeow-style client, off by default in fresh installs (the live deployment runs it). DM and group text send/receive and inbound media work; outbound media/presence/reactions/polls are not ported.
+- `src/channels/whatsapp/` - live native multi-device client (`native/`). Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
 - `src/agent/memory.zig` - `journalAppend`, extractive fallback compact.
 - `src/agent/memory_update.zig` - ingest (`zeptoclaw memory update`).
 - `src/agent/memory_compact.zig` - densify (`zeptoclaw memory compact`).

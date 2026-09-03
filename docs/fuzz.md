@@ -11,11 +11,11 @@ Unit tests call `std.testing.fuzz` with a small corpus (once per `zig build test
 
 Nightly (optional): copy `contrib/systemd/zeptoclaw-fuzz.{service,timer}` and `systemctl --user enable --now zeptoclaw-fuzz.timer`.
 
-Targets (no NIM HTTP, no Baileys):
+Targets (no NIM HTTP):
 
 | Surface | Code |
 |---------|------|
-| Baileys JSON | `WhatsAppChannel.parseMessage` / `parseConnectionUpdate` |
+| Inbound JSON | `WhatsAppChannel.parseMessage` / `parseConnectionUpdate` |
 | Journal JID | `memory.lineBelongsToChat` |
 | pending-turns.jsonl | `pending.loadFrom` / enqueue |
 | Tool JSON | `hydrateToolCallsFromContent` |

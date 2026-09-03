@@ -198,9 +198,8 @@ pub const WhatsAppSession = struct {
         };
 
         // Symmetric DM wake: fromMe DMs are own messages; only allow when peer is allowlisted.
-        // Peer is inferred from chat_id (the 1:1 JID). Without from_me awareness the
-        // old baileys_wrapper unconditionally dropped fromMe; new wrapper only forwards
-        // fromMe when peer ∈ allowFrom. Here we double-guard: drop stray fromMe DMs.
+        // Peer is inferred from chat_id (the 1:1 JID). Drop stray fromMe DMs whose peer
+        // is not on allowFrom.
         if (msg.isDirect() and msg.from_me) {
             // LID self-chat ("Message yourself" on new WA clients): chat_id ends '@lid',
             // digits are NOT a phone number. fromMe + @lid = Baala talking to himself -> allow.

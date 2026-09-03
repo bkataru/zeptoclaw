@@ -29,7 +29,7 @@ pub const Config = struct {
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
     whatsapp_dm_policy: []const u8,
-    whatsapp_native: bool = false,
+    whatsapp_native: bool = true,
 
     whatsapp_allow_from: [][]const u8,
     whatsapp_group_policy: []const u8,
@@ -273,7 +273,8 @@ fn nativeFlagFromConfigFiles(allocator: std.mem.Allocator) ?bool {
 fn resolveWhatsAppNative(allocator: std.mem.Allocator, from_loader: bool) bool {
     if (envWhatsAppNative(allocator)) |b| return b;
     if (nativeFlagFromConfigFiles(allocator)) |b| return b;
-    return from_loader;
+    _ = from_loader;
+    return true;
 }
 
 

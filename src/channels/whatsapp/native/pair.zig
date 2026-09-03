@@ -5,7 +5,7 @@ const nc = @import("noise_crypto.zig");
 const curve_sigs = @import("curve_sigs.zig");
 
 /// Port of whatsmeow/{pair,qrchan,pair-code}.go — QR + pair-device IQ + pair-success HMAC.
-/// Live WhatsAppChannel still uses Baileys; this is the native pairing path.
+/// QR + pair-device IQ used by the native WhatsApp client.
 pub const server_jid: []const u8 = "s.whatsapp.net";
 
 pub const PairClientType = enum {
@@ -40,7 +40,7 @@ pub const PairClientType = enum {
     }
 };
 
-/// Matches DeviceProps.platform_type=CHROME (Baileys ubuntu/Chrome companion).
+/// Matches DeviceProps.platform_type=CHROME (WhatsApp web ubuntu/Chrome companion).
 pub const default_client_type: PairClientType = .chrome;
 
 pub const adv_account_sig_prefix: []const u8 = &[_]u8{ 6, 0 };
@@ -55,7 +55,7 @@ fn b64Std(out: []u8, data: []const u8) []const u8 {
 }
 
 /// WhatsApp Linked Devices camera comma-splits the QR payload, same as
-/// Baileys 6.7 / web.whatsapp.com: `ref,noiseB64,identityB64,advB64`.
+/// WhatsApp web 6.7 / web.whatsapp.com: `ref,noiseB64,identityB64,advB64`.
 /// A `wa.me` URL prefix makes the first field an invalid ref and the phone
 /// shows "couldn't link device". `client_type` is kept for API compatibility
 /// (whatsmeow's 5th field) but is not encoded — the in-app scanner ignores it.

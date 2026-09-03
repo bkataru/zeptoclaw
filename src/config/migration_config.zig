@@ -128,7 +128,7 @@ pub const OpenClawConfig = struct {
             dmPolicy: []const u8 = "allowlist",
             allowFrom: []const []const u8 = &.{},
             groupPolicy: []const u8 = "allowlist",
-            native: bool = false,
+            native: bool = true,
         };
     };
 
@@ -207,7 +207,7 @@ pub const ZeptoClawConfig = struct {
     source: ConfigSource,
     // WhatsApp configuration
     whatsapp_enabled: bool = false,
-    whatsapp_native: bool = false,
+    whatsapp_native: bool = true,
     whatsapp_auth_dir: []const u8,
     whatsapp_dm_policy: []const u8,
     whatsapp_allow_from: [][]const u8,
@@ -363,7 +363,7 @@ pub const ConfigLoader = struct {
 
         // Extract WhatsApp configuration
         const whatsapp_enabled = openclaw.channels.whatsapp != null;
-        const whatsapp_native = if (openclaw.channels.whatsapp) |wh| wh.native else false;
+        const whatsapp_native = if (openclaw.channels.whatsapp) |wh| wh.native else true;
         const whatsapp_auth_dir = try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp");
         const whatsapp_dm_policy = if (openclaw.channels.whatsapp) |wh|
             try self.allocator.dupe(u8, wh.dmPolicy)
@@ -402,7 +402,9 @@ pub const ConfigLoader = struct {
             .whatsapp_media_max_mb = 50,
             .whatsapp_debounce_ms = 0,
             .whatsapp_send_read_receipts = true,
-            .whatsapp_group_require_mention = true,
+            // Native stack does not parse mentionedJid yet, so a mention gate
+            // never passes. Wake-word gate still applies per allowlisted group.
+            .whatsapp_group_require_mention = false,
             .whatsapp_group_activation_commands = whatsapp_group_activation_commands,
         };
     }
@@ -510,7 +512,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = 4,
             .source = .env,
             .whatsapp_enabled = whatsapp_enabled,
-            .whatsapp_native = std.mem.eql(u8, compat.getEnvVarOwned(self.allocator, "WHATSAPP_NATIVE") catch "false", "true"),
+            .whatsapp_native = std.mem.eql(u8, compat.getEnvVarOwned(self.allocator, "WHATSAPP_NATIVE") catch "true", "true"),
             .whatsapp_auth_dir = whatsapp_auth_dir,
             .whatsapp_dm_policy = whatsapp_dm_policy,
             .whatsapp_allow_from = try whatsapp_allow_from.toOwnedSlice(self.allocator),
@@ -551,7 +553,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = 4,
             .source = .default,
             .whatsapp_enabled = false,
-            .whatsapp_native = false,
+            .whatsapp_native = true,
             .whatsapp_auth_dir = try compat.homeJoin(self.allocator, ".zeptoclaw/sessions/whatsapp"),
             .whatsapp_dm_policy = try self.allocator.dupe(u8, "pairing"),
             .whatsapp_allow_from = &.{},

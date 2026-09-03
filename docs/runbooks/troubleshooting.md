@@ -9,19 +9,17 @@
 ## Connected but no replies
 
 - Trigger word **barvis** missing (groups / unsubscribed chats).
-- Replay: same body in the same chat within 3 minutes, or same Baileys id in the ledger.
-- Reader thread died: look for `parseMessage failed` or missing `inbound` after Node `[zepto] emit`.
+- Replay: same body in the same chat within 3 minutes, or same wire id in the ledger.
+- Poll thread died: look for missing `inbound` after a native `connected` log.
 - Allowlist: group JID not in `allowFrom`; LID peer digits not matching.
 
-## `RpcTimeout` on send
+## Send hangs
 
-Zig waited ~30s for a JSON-RPC ACK to `sendMessage`. Causes: Baileys hang (LID), stderr pipe full (fixed by drain), RPC `id` type mismatch (string vs number). Node times out `sendMessage` at 20s. Check journal for `RpcTimeout waiting for rpc id=`.
+Check the journal for native encrypt/usync errors. A peer device that cannot decrypt will send `<receipt type=retry>`; the client resends up to 5 times, then that message id is dropped.
 
 ## WhatsApp `Bad MAC`
 
-Signal session desync. Usually recoverable; if persistent, re-pair (new `sessions/whatsapp` after backup).
-
-In native mode (`channels.whatsapp.native`), a Bad MAC or decrypt failure now usually self-heals through the automatic retry-receipt recovery in `sendText`. Re-pair only if it keeps failing past 5 auto-resends for the same message. This fix does not apply to Baileys mode.
+Signal session desync. Usually recoverable through retry-receipt recovery in `sendText`. Re-pair only if it keeps failing past 5 auto-resends for the same message (new `sessions/whatsapp` after backup).
 
 ## Logs
 

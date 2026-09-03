@@ -20,8 +20,7 @@ const ProcessResult = session.ProcessResult;
 ///   2. `fingerprints`: chat+fromMe+body content match within
 ///      `fingerprint_ttl_ms`, catching the same logical message arriving
 ///      under a *different* wire id (multi-device fanout/resend).
-/// Both persist to `{auth_dir}/gateway-inbound-ledger.json`, mirroring the
-/// Baileys wrapper's inbound-ledger.json. Without this, a crash-triggered
+/// Both persist to `{auth_dir}/gateway-inbound-ledger.json`. Without this, a crash-triggered
 /// restart during an unacknowledged inbound message reliably produced
 /// duplicate agent replies (observed live 2026-09-03: 12+ duplicate sends
 /// to self-chat across a restart storm).
@@ -292,26 +291,42 @@ pub const InboundProcessor = struct {
 
     /// Check if message mentions bot
     pub fn mentionsBot(msg: *const WhatsAppMessage, bot_e164: ?[]const u8) bool {
-        if (bot_e164 == null) return false;
-
-        for (msg.mentioned_jids.items) |jid| {
-            // Convert JID to E.164 for comparison
-            const e164 = jidToE164(jid);
-            if (std.mem.eql(u8, e164, bot_e164.?)) {
-                return true;
-            }
-        }
-
+        if (bot_e164) |e| return mentionsAny(msg, &.{e});
         return false;
     }
 
-    /// Convert JID to E.164
-    fn jidToE164(jid: []const u8) []const u8 {
-        if (std.mem.indexOf(u8, jid, "@s.whatsapp.net")) |idx| {
-            return jid[0..idx];
+    /// True if any mentioned JID matches a self identity (PN, LID, E.164, or device JID).
+    pub fn mentionsAny(msg: *const WhatsAppMessage, identities: []const []const u8) bool {
+        for (msg.mentioned_jids.items) |raw| {
+            if (jidMatchesIdentity(raw, identities)) return true;
         }
-        return jid;
+        return false;
     }
+
+    fn jidMatchesIdentity(jid: []const u8, identities: []const []const u8) bool {
+        const mention_user = jidUserPart(jid);
+        const mention_digits = digitsBeforeColon(mention_user);
+        for (identities) |id| {
+            if (id.len == 0) continue;
+            if (std.mem.eql(u8, jid, id)) return true;
+            const id_user = jidUserPart(id);
+            if (std.mem.eql(u8, mention_user, id_user)) return true;
+            const id_digits = digitsBeforeColon(id_user);
+            if (mention_digits.len > 0 and id_digits.len > 0 and std.mem.eql(u8, mention_digits, id_digits)) return true;
+        }
+        return false;
+    }
+
+    fn jidUserPart(s: []const u8) []const u8 {
+        if (std.mem.indexOfScalar(u8, s, '@')) |at| return s[0..at];
+        return s;
+    }
+
+    fn digitsBeforeColon(s: []const u8) []const u8 {
+        if (std.mem.indexOfScalar(u8, s, ':')) |c| return s[0..c];
+        return s;
+    }
+
 
 /// Memory: Caller owns returned slice; must free with allocator.free.
     /// Format message for agent
@@ -547,4 +562,20 @@ test "MessageDeduper basic" {
     try std.testing.expectEqual(false, deduper.isDuplicate(key));
     try deduper.markSeen(key);
     try std.testing.expectEqual(true, deduper.isDuplicate(key));
+}
+
+test "mentionsAny matches PN LID and device JID" {
+    const allocator = std.testing.allocator;
+    var msg = try WhatsAppMessage.init(allocator);
+    defer msg.deinit();
+    try msg.mentioned_jids.append(allocator, try allocator.dupe(u8, "216638251077681@lid"));
+    try std.testing.expect(InboundProcessor.mentionsAny(&msg, &.{ "216638251077681@lid" }));
+    try std.testing.expect(InboundProcessor.mentionsAny(&msg, &.{ "216638251077681" }));
+    try std.testing.expect(!InboundProcessor.mentionsAny(&msg, &.{ "917019895010" }));
+
+    var msg2 = try WhatsAppMessage.init(allocator);
+    defer msg2.deinit();
+    try msg2.mentioned_jids.append(allocator, try allocator.dupe(u8, "917019895010@s.whatsapp.net"));
+    try std.testing.expect(InboundProcessor.mentionsBot(&msg2, "917019895010"));
+    try std.testing.expect(InboundProcessor.mentionsAny(&msg2, &.{ "917019895010:58@s.whatsapp.net" }));
 }

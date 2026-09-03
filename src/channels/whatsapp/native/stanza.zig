@@ -149,7 +149,7 @@ pub fn encodeReceipt(
     return binary.marshal(allocator, rec);
 }
 
-/// Memory: caller frees. Baileys keepalive: `<iq to=s.whatsapp.net type=get xmlns=w:p id><ping/></iq>`.
+/// Memory: caller frees. Keepalive: `<iq to=s.whatsapp.net type=get xmlns=w:p id><ping/></iq>`.
 pub fn encodePingIq(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
     var ping = binary.Node.init(allocator, "ping");
     defer ping.deinit();
@@ -185,6 +185,46 @@ pub fn encodePassiveIq(allocator: std.mem.Allocator, id: []const u8, active: boo
     try iq.attrs.put("id", id);
     iq.content = .{ .nodes = (&child)[0..1] };
     return binary.marshal(allocator, iq);
+}
+
+/// Memory: caller frees. `<iq xmlns=w:m type=set to=s.whatsapp.net id><media_conn/></iq>`.
+pub fn encodeMediaConnIq(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
+    var child = binary.Node.init(allocator, "media_conn");
+    defer child.deinit();
+    var iq = binary.Node.init(allocator, "iq");
+    defer iq.deinit();
+    try iq.attrs.put("to", server_jid);
+    try iq.attrs.put("xmlns", "w:m");
+    try iq.attrs.put("type", "set");
+    try iq.attrs.put("id", id);
+    iq.content = .{ .nodes = (&child)[0..1] };
+    return binary.marshal(allocator, iq);
+}
+
+pub const MediaConn = struct {
+    auth: []const u8,
+    hostname: []const u8,
+    ttl: u32,
+};
+
+/// Slices alias `node` attrs. Looks for `<media_conn auth ttl>` with a `<host hostname>`.
+pub fn parseMediaConn(node: binary.Node) !MediaConn {
+    const mc = node.getChildByTag("media_conn") orelse {
+        if (std.mem.eql(u8, node.tag, "media_conn")) return parseMediaConnNode(node);
+        return error.NoMediaConn;
+    };
+    return parseMediaConnNode(mc.*);
+}
+
+fn parseMediaConnNode(mc: binary.Node) !MediaConn {
+    const auth = mc.getAttr("auth") orelse return error.NoMediaAuth;
+    var ttl: u32 = 600;
+    if (mc.getAttr("ttl")) |ts| ttl = std.fmt.parseInt(u32, ts, 10) catch 600;
+    var hostname: []const u8 = "mmg.whatsapp.net";
+    if (mc.getChildByTag("host")) |h| {
+        if (h.getAttr("hostname")) |hn| hostname = hn;
+    }
+    return .{ .auth = auth, .hostname = hostname, .ttl = ttl };
 }
 
 /// Memory: caller frees. `<presence type=… [name]/>`.
@@ -1264,4 +1304,32 @@ test "encodeRetryReceipt with keys" {
     try std.testing.expectEqualSlices(u8, &spk, skey.getChildByTag("value").?.contentBytes().?);
     try std.testing.expectEqualSlices(u8, &sig, skey.getChildByTag("signature").?.contentBytes().?);
     try std.testing.expectEqualStrings(di, kn.getChildByTag("device-identity").?.contentBytes().?);
+}
+
+test "encodeMediaConnIq and parseMediaConn" {
+    const alloc = std.testing.allocator;
+    const wire = try encodeMediaConnIq(alloc, "mc-1");
+    defer alloc.free(wire);
+    var node = try binary.decodeNode(alloc, wire);
+    defer node.deinit();
+    try std.testing.expectEqualStrings("iq", node.tag);
+    try std.testing.expectEqualStrings("w:m", node.getAttr("xmlns").?);
+    try std.testing.expectEqualStrings("set", node.getAttr("type").?);
+    try std.testing.expect(node.getChildByTag("media_conn") != null);
+
+    var result = binary.Node.init(alloc, "iq");
+    defer result.deinit();
+    var mc = binary.Node.init(alloc, "media_conn");
+    defer mc.deinit();
+    try mc.attrs.put("auth", "AUTHTOKEN");
+    try mc.attrs.put("ttl", "600");
+    var host = binary.Node.init(alloc, "host");
+    defer host.deinit();
+    try host.attrs.put("hostname", "mmg.whatsapp.net");
+    mc.content = .{ .nodes = (&host)[0..1] };
+    result.content = .{ .nodes = (&mc)[0..1] };
+    const parsed = try parseMediaConn(result);
+    try std.testing.expectEqualStrings("AUTHTOKEN", parsed.auth);
+    try std.testing.expectEqualStrings("mmg.whatsapp.net", parsed.hostname);
+    try std.testing.expectEqual(@as(u32, 600), parsed.ttl);
 }

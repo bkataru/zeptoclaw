@@ -2,7 +2,7 @@
 //!
 //! Prints a scannable QR in the terminal, pairs a linked device into its own
 //! sqlite auth dir, and stays connected printing inbound messages until
-//! Ctrl-C. The default auth dir is separate from the Baileys gateway's
+//! Ctrl-C. The default auth dir is separate from the live gateway's
 //! (`~/.zeptoclaw/sessions/whatsapp-native` vs `.../whatsapp`), so pairing
 //! here never touches the live gateway session.
 //!
@@ -86,7 +86,7 @@ pub fn main(init: std.process.Init) !void {
                 .idle => {},
                 .qr => |codes| {
                     if (codes.len == 0) continue;
-                    // Linked Devices camera must see exactly one live QR (Baileys
+                    // Linked Devices camera must see exactly one live QR (the server
                     // rotates refs; dumping all of them at once garbles the scan).
                     std.debug.print("QR ready ({d} refs, showing first — scan within ~60s)\n", .{codes.len});
                     printQr(allocator, codes[0]);

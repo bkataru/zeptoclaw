@@ -6,11 +6,11 @@
 
 ## Build Status
 
-**v0.2.0** (2026-09-03). `zig build test --summary all`: 419 tests (3 skip without `NVIDIA_API_KEY`). Zig 0.16.0.
+**Unreleased on v0.3.0** (2026-09-04). Native WhatsApp is the only transport. `zig build test --summary all`: 446 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
-- **Native WhatsApp client shipped** (opt-in, 2026-09-03): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. Baileys stays the default. It carries this deployment's live traffic: DM text and group text both send and receive, plus inbound media. Outbound media, presence, reactions, and polls are not ported yet
+- **Native WhatsApp client** (2026-09-03, sole transport): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. DM and group text, inbound/outbound media, presence, reactions, polls, and read receipts all go through it
 - **usync silent-drop fix**: the binary encoder wrote JID attributes as plain text instead of the `JIDPair`/`ADJID` binary tags the server needs. usync now resolves in about 300ms instead of timing out
 - **LID self-chat delivery fix**: WhatsApp delivers 1:1 chats on the recipient's LID, not the phone number. `sendText` now resolves phone-number/LID pairs from `lid_map` and sets `peer_recipient_pn`
 - **Automatic retry-receipt recovery**: on a `<receipt type=retry>`, the native client drops the stale session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 resends per message). `zeptoclaw-wa-send` forces a fresh handshake by hand
@@ -18,14 +18,14 @@
 - **`exec` gating**: the `exec` tool now runs only on an operator `fromMe` WhatsApp DM. A partner DM cannot invoke it
 - **Agent loop on WhatsApp** (2026-08-22): gateway inbound goes through `Agent.runTurn` (workspace markdown + tools + NIM), not `NIMClient.chat` once
 - **Memory**: daily journals `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (full `[in]`/`[out]`, no 2000-char clip). Tools `memory_get` / `memory_search` / `memory_append` / `memory_edit`. `zeptoclaw memory update` every 30 min (decide then synthesize). `zeptoclaw memory compact` every 2 h (densify MEMORY.md, does not dump journals)
-- **WhatsApp reliability**: inbound ledger (Baileys id + 3 min fingerprint), JSON-only RPC stdout, stderr drain, `RpcTimeout` on send ACK, LID/`fromMe` allowlist DMs, handler off the reader thread, Baileys auto-reconnect on `connection.close` (not `loggedOut`)
+- **WhatsApp reliability**: inbound ledger (wire id + 3 min fingerprint), LID/`fromMe` allowlist DMs, handler off the poll thread, auto-reconnect on disconnect (not `loggedOut`)
 - **Pending turns**: `pending-turns.jsonl` under `sessions/whatsapp/`. Enqueue before NIM, ack after send or silent `listen`/`leave`. Replay on `connection status=connected` after SIGKILL
 - **Burst coalesce**: while NIM is in flight for a chat, later messages on that JID merge into one follow-up turn (cap 16). First reply still answers the starter message
 - **Inbound images**: download to `sessions/whatsapp/media/`, last-image per JID, attach as NIM `image_url` on that chat's later turns (4MB cap)
 - **Same-chat journal hydrate**: `dailyContext` injects today's + yesterday's lines matching `] (chat_id):` so a restart still has thread
 - **Signature**: Zig `engagement.appendSignature` appends ⚡ (U+26A1) after sendable replies. Silent listen/leave stay unsigned
 - **Parser fuzz**: `zeptoclaw fuzz [iters]` (default 50000). Optional `zeptoclaw-fuzz.timer`. `zig build test --fuzz` is broken on Zig 0.16.0 (`test_runner` StackTrace). See `docs/fuzz.md`
-- **Live dirs**: `~/.zeptoclaw/{workspace,sessions,config.json}`. Baileys auth `~/.zeptoclaw/sessions/whatsapp/`
+- **Live dirs**: `~/.zeptoclaw/{workspace,sessions,config.json}`. WhatsApp session `~/.zeptoclaw/sessions/whatsapp/native.sqlite`
 - **Zig 0.16.0 Migration** (February 28, 2026): All 11 phases finalized with zero errors
 - **ArrayList API**: Fixed `toOwnedSlice()` across all 9 skill modules (nufast_physics, knowledge_base, semantic_search, local_llm, adhd_workflow, dirmacs_docs, planckeon_sites, discovery, memory_tree_search)
 - **Thread Safety**: Added mutex protection to WhatsApp channel shared state; eliminated global mutable state via per-execution skill instances
@@ -67,7 +67,7 @@ ZeptoClaw is a custom, from-scratch AI agent framework written in **Zig 0.16.0+*
 - Zero bloat, built from scratch
 - UTCP (Universal Tool Calling Protocol) support
 - Modular: providers, agents, channels, tools
-- WhatsApp channel integration: Baileys is the default live path. A native Zig client (`native/`) is a working, opt-in alternative; this deployment runs on it. DM and group text send/receive, plus inbound media, all work. Outbound media, presence, reactions, and polls are not ported yet
+- WhatsApp channel integration: native Zig multi-device client (`native/`). DM and group text, inbound/outbound media, presence, reactions, and polls
 - Agent loop: `read` / `write` / `edit` / `exec` / `web_search` / `see_image` / `listen` / `leave` / `skill` / `memory_*`
 - 21 skills ported from OpenClaw
 - Cloudflare Worker for resilient routing
@@ -85,7 +85,6 @@ zig build
 
 - **Zig 0.16.0+** - Install via [ziglang.org](https://ziglang.org/download/)
 - **NVIDIA NIM API Key** - Get yours from [NVIDIA NIM](https://build.nvidia.com/)
-- **Node.js 18+** - WhatsApp wrapper (`baileys_wrapper.js`); set `ZEPTO_NODE` if `node` is not on `PATH`
 
 ## Configuration
 
@@ -101,9 +100,6 @@ export NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 # Optional: HTTP gateway token (config gateway.auth.token also works)
 export GATEWAY_AUTH_TOKEN=your_token
 
-# Optional: Node binary for WhatsApp
-export ZEPTO_NODE=/usr/bin/node
-
 # Optional: heartbeat cron interval; 0 disables (keep 0 while chatting)
 export ZEPTO_CRON_SECS=0
 
@@ -115,7 +111,7 @@ export MOLTBOOK_API_KEY=your_key
 export MOLTBOOK_USER_ID=your_user_id
 ```
 
-WhatsApp allowlist is config (`channels.whatsapp.allowFrom`, `dmPolicy`). Keys in systemd or `chmod 600` env files. Baileys auth: `~/.zeptoclaw/sessions/whatsapp/`. Memory compact oneshot: `~/.config/zeptoclaw/nim.env`.
+WhatsApp allowlist is config (`channels.whatsapp.allowFrom`, `dmPolicy`). Keys in systemd or `chmod 600` env files. WhatsApp session store: `~/.zeptoclaw/sessions/whatsapp/native.sqlite`. Memory compact oneshot: `~/.config/zeptoclaw/nim.env`.
 
 ## Usage
 
@@ -184,7 +180,6 @@ src/
 │   ├── stream.zig              # Streaming utilities
 │   └── whatsapp/               # WhatsApp channel
 │       ├── whatsapp_channel.zig
-│       ├── baileys_wrapper.js  # Live Node transport
 │       ├── pending.zig         # pending-turns.jsonl
 │       ├── inbound_media.zig   # last-image per JID
 │       ├── engagement.zig      # language extra, ⚡, subscribe/leave
@@ -194,7 +189,7 @@ src/
 │       ├── config.zig
 │       ├── access_control.zig
 │       ├── types.zig
-│       └── native/             # opt-in multi-device client (text DMs; groups/media pending)
+│       └── native/             # multi-device client (Noise + Signal; live transport)
 ├── services/                   # HTTP services
 │   ├── gateway_server.zig      # Main gateway
 │   ├── webhook_server.zig      # Webhook handling
@@ -253,7 +248,7 @@ src/
 | `barvis-memory-update.timer` | `zeptoclaw memory compact` (every 2 h) | - |
 | `zeptoclaw-fuzz.timer` | Optional daily parser havoc | - |
 
-Repo templates have **no secrets**. Put `NVIDIA_API_KEY` and `GATEWAY_AUTH_TOKEN` on the local user unit (e.g. `~/.config/systemd/user/zeptoclaw-gateway.service`). If `systemctl --user restart` hangs: `systemctl --user kill` plus `pkill` the gateway and `baileys_wrapper`, then `start`.
+Repo templates have **no secrets**. Put `NVIDIA_API_KEY` and `GATEWAY_AUTH_TOKEN` on the local user unit (e.g. `~/.config/systemd/user/zeptoclaw-gateway.service`). If `systemctl --user restart` hangs: `systemctl --user kill` plus `pkill` the gateway, then `start`.
 
 ### Installation
 
@@ -326,7 +321,7 @@ cd scripts/migrate
 ./migrate-secrets.sh
 ```
 
-Live Baileys auth is `~/.zeptoclaw/sessions/whatsapp/` (not in the public repo). `barvis-sync` copies it into private barvis `zeptoclaw-state/`.
+Live WhatsApp session store is `~/.zeptoclaw/sessions/whatsapp/native.sqlite` (not in the public repo). `barvis-sync` copies it into private barvis `zeptoclaw-state/`.
 
 ### Skills Migration
 
@@ -358,9 +353,8 @@ Live Baileys auth is `~/.zeptoclaw/sessions/whatsapp/` (not in the public repo).
 
 ### WhatsApp Channel
 
-Fully implemented with Zig channel files plus the Node wrapper:
+Native multi-device client (Zig). Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
 
-- `baileys_wrapper.js` - Live Baileys transport (JSON-RPC on stdout, QR on stderr)
 - `access_control.zig` - Access control logic
 - `config.zig` - Configuration management
 - `inbound.zig` - Inbound message handling
@@ -372,7 +366,7 @@ Fully implemented with Zig channel files plus the Node wrapper:
 - `inbound_media.zig` - Last inbound image per JID
 - `engagement.zig` - Language extra, ⚡ signature, subscribe/leave
 
-Replay is **message id + fingerprint** (`chatId|fromMe|body`), with a 3-minute same-body skip - not a mute window after connect. Wake word is **barvis** except allowlisted DMs / LID self-chat. `leave` unsubscribes a chat until the next barvis. Native whatsmeow under `native/` is a working, opt-in path for text DMs; Baileys stays the live default.
+Replay is **message id + fingerprint** (`chatId|fromMe|body`), with a 3-minute same-body skip - not a mute window after connect. Wake word is **barvis** except allowlisted DMs / LID self-chat. `leave` unsubscribes a chat until the next barvis.
 
 Pending turns replay on WhatsApp `connected`. Burst messages while NIM is in flight merge into a follow-up. Same-JID inbound images attach as NIM vision. Journals hydrate same-chat history after restart.
 
@@ -517,7 +511,7 @@ The following changes were recently committed to complete the Zig 0.16.0 migrati
 5. **fix: Fix ArrayList.toOwnedSlice() in WhatsApp channel** - Ensures API compliance across channel files
 6. **fix: Update knowledge_base skill for Zig 0.16.0 compatibility** - Updates skill for latest Zig version
 
-Later work (August 2026) wired WhatsApp through `runTurn`, hardened Baileys RPC/ledger, added pending/burst/vision, and parser fuzz. History was rewritten to drop live tokens and junk blobs; clones should follow current `main`. In September 2026 a native WhatsApp client shipped as an opt-in alternative to Baileys; it fixed a usync silent-drop and a LID self-chat delivery bug, and added automatic retry-receipt recovery.
+Later work (August 2026) wired WhatsApp through `runTurn`, hardened the inbound ledger, added pending/burst/vision, and parser fuzz. History was rewritten to drop live tokens and junk blobs; clones should follow current `main`. In September 2026 the native WhatsApp client became the sole transport; it fixed a usync silent-drop and a LID self-chat delivery bug, and added automatic retry-receipt recovery.
 
 ---
 

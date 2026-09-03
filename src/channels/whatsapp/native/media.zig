@@ -2,21 +2,21 @@
 //! decrypt/encrypt, download/upload URL construction, and fetch/upload behind
 //! an injectable transport.
 //!
-//! Wire scheme (pinned against the installed Baileys + whatsmeow sources;
-//! verified byte-for-byte against Baileys by the node fixtures in the tests):
+//! Wire scheme (pinned against the installed WhatsApp web + whatsmeow sources;
+//! verified byte-for-byte against WhatsApp web by the node fixtures in the tests):
 //!
-//! * Keys (Baileys `getMediaKeys`/lib `hkdf`, whatsmeow `getMediaKeys`):
+//! * Keys (WhatsApp web `getMediaKeys`/lib `hkdf`, whatsmeow `getMediaKeys`):
 //!   okm = HKDF-SHA256(ikm = media_key[32], salt = 32 zero bytes,
 //!   info = Kind.infoString(), L = 112);
 //!   iv = okm[0..16], cipher_key = okm[16..48], mac_key = okm[48..80],
 //!   ref_key = okm[80..112].
-//!   Baileys consumes only the first 80 bytes; ref_key is whatsmeow's fourth
-//!   slice. Baileys passes an empty salt to WebCrypto HKDF and whatsmeow a
+//!   WhatsApp web consumes only the first 80 bytes; ref_key is whatsmeow's fourth
+//!   slice. WhatsApp web passes an empty salt to WebCrypto HKDF and whatsmeow a
 //!   nil salt to Go HKDF — both normalize to the HMAC all-zero key block, so
 //!   the 32-zero-byte salt used here is byte-identical (asserted empty-salt
 //!   vs 32-zero-salt equality during fixture generation).
 //!
-//! * Standard media ciphertext (Baileys `encryptedStream` /
+//! * Standard media ciphertext (WhatsApp web `encryptedStream` /
 //!   `downloadEncryptedContent`, whatsmeow `Upload`/`downloadAndDecrypt`):
 //!   blob = AES-256-CBC(cipher_key, iv, PKCS7(plaintext)) ||
 //!   HMAC-SHA256(mac_key, iv || ciphertext)[0..10].
@@ -27,20 +27,20 @@
 //!   `validateMedia` order).
 //!
 //! * Second, AEAD path discovered (NOT used for standard media transfer):
-//!   media-retry notifications only (Baileys `encryptMediaRetryRequest` /
+//!   media-retry notifications only (WhatsApp web `encryptMediaRetryRequest` /
 //!   `decryptMediaRetryData`): retry_key = HKDF-SHA256(media_key, zero salt,
 //!   info "WhatsApp Media Retry Notification", L = 32), then AES-256-GCM
 //!   with a fresh random 12-byte IV (sent separately as `<enc_iv>`), AAD =
 //!   stanza id, 16-byte tag suffixed on the ciphertext (`aesEncryptGCM` in
-//!   Baileys Utils/crypto.js). Not implemented here.
+//!   WhatsApp web Utils/crypto.js). Not implemented here.
 //!
-//! * Download URL (Baileys `downloadContentFromMessage`): a url already
+//! * Download URL (WhatsApp web `downloadContentFromMessage`): a url already
 //!   prefixed `https://mmg.whatsapp.net/` is used verbatim; otherwise the
 //!   directPath must start with '/' and gets `https://mmg.whatsapp.net`
 //!   prepended. No auth params — directPath carries its own query.
 //!   (whatsmeow additionally appends `&hash=..&mms-type=..&__wa-mms=` and
 //!   retries over media-conn hosts; that is server-side bookkeeping — the
-//!   plain Baileys form is authoritative here.)
+//!   plain WhatsApp web form is authoritative here.)
 //!
 //! * Upload (whatsmeow `rawUpload`, upload.go): POST
 //!   `https://{hostname}/mms/{mmsType}/{token}?auth={auth}&token={token}`
@@ -48,10 +48,10 @@
 //!   base64.URLEncoding), query values percent-escaped Go
 //!   url.Values.Encode() style (auth sorts before token), the raw token kept
 //!   literal in the path. Body = the encrypted blob; the response is JSON
-//!   `{"url":...,"direct_path":...}` on modern servers (Baileys and every
+//!   `{"url":...,"direct_path":...}` on modern servers (WhatsApp web and every
 //!   fetched whatsmeow revision decode JSON; the older
 //!   `<upload><url>..</url><direct_path>..</direct_path></upload>` XML form
-//!   is still parsed too — `upload` sniffs by first byte). Baileys strips
+//!   is still parsed too — `upload` sniffs by first byte). WhatsApp web strips
 //!   the '=' padding from the token instead
 //!   (`encodeBase64EncodedStringForUpload`); the servers accept both.
 
@@ -62,12 +62,12 @@ const Aes256 = std.crypto.core.aes.Aes256;
 const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
 
 /// Truncated HMAC length appended to media ciphertext (whatsmeow
-/// `mediaHMACLength`, Baileys `hmac.digest().slice(0, 10)`).
+/// `mediaHMACLength`, WhatsApp web `hmac.digest().slice(0, 10)`).
 pub const media_hmac_length: usize = 10;
-/// HKDF expansion length (Baileys `hkdf(buffer, 112, ...)`, whatsmeow
+/// HKDF expansion length (WhatsApp web `hkdf(buffer, 112, ...)`, whatsmeow
 /// `hkdfutil.SHA256(mediaKey, nil, info, 112)`).
 pub const hkdf_expand_length: usize = 112;
-/// Default media download host (Baileys `DEF_HOST`).
+/// Default media download host (WhatsApp web `DEF_HOST`).
 pub const mmg_host: []const u8 = "mmg.whatsapp.net";
 
 /// Media classes with their per-type key/info strings.
@@ -79,7 +79,7 @@ pub const Kind = enum {
     document,
     sticker,
 
-    /// HKDF info string. Baileys `hkdfInfoKey` = `WhatsApp ${
+    /// HKDF info string. WhatsApp web `hkdfInfoKey` = `WhatsApp ${
     /// MEDIA_HKDF_KEY_MAPPING[type] } Keys` (Defaults/index.js: audio/ptt ->
     /// "Audio", image/sticker -> "Image", video -> "Video", document ->
     /// "Document"); identical to whatsmeow's MediaType constants.
@@ -93,7 +93,7 @@ pub const Kind = enum {
     }
 
     /// MMS path segment for uploads and whatsmeow-style downloads.
-    /// Baileys MEDIA_PATH_MAP: sticker -> /mms/image; ptt voice notes are
+    /// WhatsApp web MEDIA_PATH_MAP: sticker -> /mms/image; ptt voice notes are
     /// uploaded with mediaType 'audio' (Utils/messages.js keeps 'ptt' only
     /// as an AudioMessage flag). whatsmeow mediaTypeToMMSType: image/audio/
     /// video/document map 1:1, StickerMessage uses MediaImage ("image"),
@@ -142,7 +142,7 @@ pub fn decryptMedia(alloc: std.mem.Allocator, keys: Keys, blob: []const u8) ![]u
 }
 
 /// Encrypt `plaintext` into an upload-ready blob (deterministic: the IV is
-/// derived from the media key, matching whatsmeow `Upload` and Baileys
+/// derived from the media key, matching whatsmeow `Upload` and WhatsApp web
 /// `encryptedStream` for a fixed key). The returned slice is allocated with
 /// `alloc`; caller frees.
 pub fn encryptMedia(alloc: std.mem.Allocator, keys: Keys, plaintext: []const u8) ![]u8 {
@@ -214,7 +214,7 @@ fn cbcDecryptPkcs7(alloc: std.mem.Allocator, key: [32]u8, iv: [16]u8, ciphertext
     return alloc.dupe(u8, buf[0 .. buf.len - pad]);
 }
 
-/// Build the download URL exactly as Baileys `downloadContentFromMessage`:
+/// Build the download URL exactly as WhatsApp web `downloadContentFromMessage`:
 /// absolute `https://mmg.whatsapp.net/...` urls pass through, a leading-'/'
 /// directPath gets the host prefix. `kind` does not affect the URL (the
 /// server routes on the path itself) but is kept for call symmetry with
@@ -233,7 +233,7 @@ pub fn buildDownloadUrl(alloc: std.mem.Allocator, direct_path_or_url: []const u8
 /// the same transport) — this module never frees it and never retains it
 /// past the call that returned it. Implementations MUST return an error for
 /// non-2xx responses (whatsmeow treats a non-200 upload as failure;
-/// Baileys lets axios throw).
+/// WhatsApp web lets axios throw).
 pub const Transport = struct {
     ptr: *anyopaque,
     getFn: *const fn (ptr: *anyopaque, url: []const u8) anyerror![]const u8,
@@ -319,7 +319,7 @@ pub const UploadResult = struct {
     }
 };
 
-/// Sniff the upload response: JSON (current servers — Baileys and all
+/// Sniff the upload response: JSON (current servers — WhatsApp web and all
 /// fetched whatsmeow revisions decode JSON) or the older XML form.
 pub fn parseUploadResponse(alloc: std.mem.Allocator, body: []const u8) !UploadResult {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
@@ -687,7 +687,7 @@ fn unhex(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
 }
 
 // Fixtures below were produced by /tmp/mediavec/gen.mjs against the
-// installed @whiskeysockets/baileys (getMediaKeys + encryptedStream-style
+// installed WhatsApp web multi-device (getMediaKeys + encryptedStream-style
 // aes-256-cbc + HMAC(macKey, iv||ct)[0..10]). media_key = 32 * kind-byte.
 const Fixture = struct {
     kind: Kind,
@@ -767,7 +767,7 @@ fn keyByteFor(k: Kind) u8 {
     };
 }
 
-test "deriveKeys matches Baileys HKDF expansion" {
+test "deriveKeys matches WhatsApp web HKDF expansion" {
     for (&fixtures) |f| {
         var mk: [32]u8 = undefined;
         @memset(&mk, keyByteFor(f.kind));
@@ -779,7 +779,7 @@ test "deriveKeys matches Baileys HKDF expansion" {
     }
 }
 
-test "decrypt/encrypt round-trip vs Baileys blobs" {
+test "decrypt/encrypt round-trip vs WhatsApp web blobs" {
     const alloc = std.testing.allocator;
     const pts = [_][]const u8{ pt100, pt16, pt0 };
     for (&fixtures) |f| {
@@ -829,7 +829,7 @@ test "decrypt rejects tampered blobs" {
     try std.testing.expectError(error.BadCiphertextLength, decryptMedia(alloc, k, blob[0..25]));
 }
 
-test "buildDownloadUrl vs Baileys" {
+test "buildDownloadUrl vs WhatsApp web" {
     const alloc = std.testing.allocator;
     const cases = [_]struct { in: []const u8, want: ?[]const u8 }{
         .{

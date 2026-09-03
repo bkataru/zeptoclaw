@@ -8,17 +8,17 @@ zig build
 ls zig-out/bin
 ```
 
-Zig **0.16.0**. WhatsApp needs Node on `PATH` or `ZEPTO_NODE`.
+Zig **0.16.0**. WhatsApp uses the native Zig client; pair with `zeptoclaw whatsapp pair`.
 
 ## Live directories
 
 | Path | What |
 |------|------|
 | `~/.zeptoclaw/workspace` | Persona, daily journals, `MEMORY.md` |
-| `~/.zeptoclaw/sessions/whatsapp` | Baileys auth |
+| `~/.zeptoclaw/sessions/whatsapp` | Native session store (`native.sqlite`) |
 | `~/.zeptoclaw/config.json` | Policy (allowlist, port, model). No live tokens in git |
 | `~/.config/zeptoclaw/nim.env` | NVIDIA key for memory oneshots (`chmod 600`) |
-| `~/.config/systemd/user/zeptoclaw-gateway.service` | Live unit: NVIDIA + `GATEWAY_AUTH_TOKEN` + `ZEPTO_NODE` |
+| `~/.config/systemd/user/zeptoclaw-gateway.service` | Live unit: NVIDIA + `GATEWAY_AUTH_TOKEN` |
 
 ## Environment
 
@@ -29,7 +29,6 @@ Keep secrets in systemd or `chmod 600` env files. Do not put live keys in git.
 | `NVIDIA_API_KEY` | yes | NIM (gateway and memory jobs) |
 | `NVIDIA_MODEL` | no | default `nvidia/nemotron-3-ultra-550b-a55b` |
 | `GATEWAY_AUTH_TOKEN` | recommended | HTTP auth; config `gateway.auth.token` also works |
-| `ZEPTO_NODE` | if `node` missing | absolute path to Node |
 | `ZEPTO_CRON_SECS` | no | `0` or unset = no heartbeat turns on the chat path |
 | `ZEPTO_MEMORY_SECS` | no | default 1800; `0` disables 30-min `memory update` child |
 | `ZEPTO_EXEC_APPROVE` | no | `1` allows all `exec` tools |
@@ -47,7 +46,7 @@ Copy templates and add env on the **local** unit, not in the repo file:
 mkdir -p ~/.config/systemd/user
 cp systemd/zeptoclaw-gateway.service ~/.config/systemd/user/
 cp contrib/systemd/barvis-memory-update.service contrib/systemd/barvis-memory-update.timer ~/.config/systemd/user/
-# edit Environment=NVIDIA_API_KEY=... GATEWAY_AUTH_TOKEN=... ZEPTO_NODE=... PATH=...
+# edit Environment=NVIDIA_API_KEY=... GATEWAY_AUTH_TOKEN=... PATH=...
 systemctl --user daemon-reload
 systemctl --user enable --now zeptoclaw-gateway.service
 systemctl --user enable --now barvis-memory-update.timer
@@ -59,7 +58,6 @@ If `systemctl --user restart` hangs, kill then start:
 ```bash
 systemctl --user kill zeptoclaw-gateway.service
 pkill -9 -f zeptoclaw-gateway
-pkill -9 -f baileys_wrapper
 systemctl --user start zeptoclaw-gateway.service
 ```
 
@@ -73,11 +71,11 @@ Expect `connection status=connected` then inbound logs. First connect after an e
 
 `zeptoclaw-webhook` (9000) and `zeptoclaw-shell2http` (9001) have templates in `systemd/`. Heartbeat/watchdog timers are optional. `whatsapp-responder.timer` is leftover; live replies come from the gateway.
 
-## Native WhatsApp mode (opt-in)
+## WhatsApp (native)
 
-Native mode is a Signal/whatsmeow-style client, separate from Baileys. Baileys stays the default; this deployment runs native mode and carries all live traffic on it. Turn on native mode with the `channels.whatsapp.native` config key, or set `ZEPTO_WA_NATIVE=1`. It sends and receives DM and group text. Outbound media, presence, reactions, and polls are not ported yet; the live gateway does not use them on either transport.
+The gateway uses a Signal/whatsmeow-style Zig client. Pair a device with `zeptoclaw-wa-pair` (terminal QR) or `zeptoclaw whatsapp pair`. Identity is `{auth_dir}/native.sqlite`.
 
-Pair a device with `zeptoclaw-wa-pair` (terminal QR) or the `zeptoclaw whatsapp pair` subcommand.
+Text DM and group send/receive, inbound media, outbound media, presence, reactions, polls, and read receipts all go through the native client.
 
 If a peer device's Signal session desyncs, force a fresh handshake with `zeptoclaw-wa-send`. Stop the gateway first: it holds an exclusive sqlite lock on the native session store.
 

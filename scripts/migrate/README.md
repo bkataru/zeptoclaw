@@ -7,4 +7,4 @@ Optional. Copies credentials, sessions, memory, and webhook secrets from `~/.ope
 ./migrate-all.sh
 ```
 
-Baileys auth used by the current gateway is `~/.zeptoclaw/sessions/whatsapp/`, not `~/.zeptoclaw/credentials/`.
+The current gateway session store is `~/.zeptoclaw/sessions/whatsapp/native.sqlite`, not `~/.zeptoclaw/credentials/`.

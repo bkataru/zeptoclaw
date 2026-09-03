@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### WhatsApp
+
+- Native Zig client is the only WhatsApp transport. Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
+- Inbound `ContextInfo.mentionedJid` is decoded and copied onto `WhatsAppMessage`. A group @mention of the bot's PN/LID/device JID triggers a turn in addition to the `barvis` wake word.
+- Native outbound: media upload, reactions, polls, presence, and read receipts. Group metadata IQ is used for group send and `getGroupMetadata`.
+- Removed the Node WhatsApp child, root `package.json`, and all remaining Node spawn/JSON-RPC paths.
+
+
 ## 0.3.0 - 2026-09-04
 
 ### Tests
@@ -31,14 +41,14 @@
 
 ### WhatsApp
 
-- Added a native WhatsApp client (`src/channels/whatsapp/native/`). It is a full Signal/whatsmeow-style multi-device port: handshake, pairing, the binary wire codec, Curve25519/Ed25519 signing, groups, sender-key encryption, media, QR pairing, and a sqlite device store. Turn it on with `channels.whatsapp.native` (or `ZEPTO_WA_NATIVE=1`). Baileys stays the default.
+- Added a native WhatsApp client (`src/channels/whatsapp/native/`). It is a full Signal/whatsmeow-style multi-device port: handshake, pairing, the binary wire codec, Curve25519/Ed25519 signing, groups, sender-key encryption, media, QR pairing, and a sqlite device store.
 - Fixed a usync silent-drop. The binary encoder wrote JID-shaped attributes as plain text, not the `JIDPair`/`ADJID` tags the server expects. The server accepted the frame but never answered, so every send timed out with `error.IqTimeout`. usync now resolves in about 300ms.
 - Fixed silent delivery drops on 1:1 DMs, including self-chat. WhatsApp now delivers those chats on the recipient's LID, not the phone number. The old envelope got a server ACK, but the LID-keyed device (the phone) dropped it. `sendText` now resolves PN and LID through the stored `lid_map` and sets `peer_recipient_pn` on the envelope.
 - Added `zeptoclaw-wa-send <db-path> <to-jid> <text>`. It is a standalone one-shot sender. Use it to force a fresh handshake when a peer device's session goes out of sync.
 - The native client now recovers from a `<receipt type=retry>` on its own. `sendText` caches the last 64 outbound DM plaintexts. On a retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. Automatic resends are capped at 5 per message. Group retries are not covered yet.
 - Added `POST /reload`. It re-reads `allowFrom`, `dmPolicy`, and `groupPolicy` from `~/.zeptoclaw/config.json` and applies them without a gateway restart.
 - `exec` now runs only on an operator `fromMe` DM. A partner DM cannot run shell commands.
-- Baileys reconnects after `connection.close`, with backoff from 2s up to 60s. A `loggedOut` session stays dead until the next QR scan. Pending turns still replay on the following `connected` event.
+- The WhatsApp client reconnects after a disconnect, with backoff from 2s up to 60s. A `loggedOut` session stays dead until the next QR scan. Pending turns still replay on the following `connected` event.
 - Inbound images download to `sessions/whatsapp/media`. The gateway keeps the last image per chat JID and attaches it as NIM vision on later turns in that same chat.
 - Burst coalesce: while a chat has a NIM turn in flight, later messages in that chat merge into one follow-up turn. The gateway releases its lock during the NIM call, so a burst does not queue behind a rate-limit sleep.
 - Added a pending-inbound queue (`pending-turns.jsonl`). The gateway enqueues an inbound message before NIM and acks it after send or listen. A `SIGKILL` mid-turn no longer drops the message; the gateway replays the queue on the next connect.
@@ -82,7 +92,7 @@ Tagged release of the live Barvis path.
 
 ### WhatsApp
 
-- Replay: Baileys id + 3-minute body fingerprint. No `connectedAtMs` mute.
+- Replay: wire id + 3-minute body fingerprint. No `connectedAtMs` mute.
 - JSON-only RPC stdout, stderr drain, `RpcTimeout` on send ACK, handler off the reader thread.
 - Allowlisted DMs and LID self-chat; groups need the group JID in `allowFrom`.
 

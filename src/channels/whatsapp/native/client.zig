@@ -29,8 +29,8 @@ const recent_out_cap: usize = 64;
 const max_auto_retries: u32 = 5;
 
 /// Port of whatsmeow/client.go connection lifecycle (Connect + doHandshake).
-/// Live WhatsAppChannel still uses Baileys; this is the native path behind
-/// `use_native`. Pairing QR / Signal decrypt remain separate.
+/// Native WhatsApp multi-device client (Noise + Signal). Pairing QR and
+/// inbound decrypt share this connection lifecycle.
 const PeerSession = struct {
     session: signal.Session,
     pending_prekey: ?signal.PreKeyHeader = null,
@@ -66,6 +66,7 @@ pub const InboundMessage = struct {
     from_me: bool,
     timestamp: i64,
     is_group: bool,
+    mentioned_jids: [][]u8 = &.{},
 
     pub const MediaAttachment = struct {
         kind: media.Kind,
@@ -88,6 +89,8 @@ pub const InboundMessage = struct {
         if (self.push_name) |s| self.allocator.free(s);
         if (self.media) |*m| m.deinit(self.allocator);
         self.allocator.free(self.text);
+        for (self.mentioned_jids) |m| self.allocator.free(m);
+        if (self.mentioned_jids.len > 0) self.allocator.free(self.mentioned_jids);
     }
 };
 
@@ -148,6 +151,9 @@ pub const Client = struct {
     prekey_upload_up_to: u32 = 0,
     /// Marshaled ADVSignedDeviceIdentity for `<device-identity>` (owned).
     adv_account: ?[]u8 = null,
+    media_conn_auth: ?[]u8 = null,
+    media_conn_host: ?[]u8 = null,
+    media_conn_until_ms: i64 = 0,
     /// Raw ADV parts + pairing metadata as stored in `whatsmeow_device` (owned slices).
     adv_details: ?[]u8 = null,
     adv_account_sig: [64]u8 = [_]u8{0} ** 64,
@@ -203,6 +209,8 @@ pub const Client = struct {
         if (self.paired_jid) |s| self.allocator.free(s);
         if (self.paired_lid) |s| self.allocator.free(s);
         if (self.adv_account) |s| self.allocator.free(s);
+        if (self.media_conn_auth) |s| self.allocator.free(s);
+        if (self.media_conn_host) |s| self.allocator.free(s);
         if (self.adv_details) |s| self.allocator.free(s);
         if (self.platform) |s| self.allocator.free(s);
         if (self.business_name) |s| self.allocator.free(s);
@@ -425,7 +433,7 @@ pub const Client = struct {
     }
 
     /// Unpaired chrome-like companion ClientPayload (devicePairingData=19):
-    /// passive=false pull=false + buildHash + deviceProps (Baileys generateRegistrationNode).
+    /// passive=false pull=false + buildHash + deviceProps (WhatsApp web generateRegistrationNode).
     /// Memory: caller frees with allocator.
     pub fn unpairedPayload(self: *const Client, allocator: std.mem.Allocator) ![]u8 {
         var e_regid: [4]u8 = undefined;
@@ -458,7 +466,7 @@ pub const Client = struct {
     }
 
     /// Paired companion login ClientPayload: username=PN user, device=id,
-    /// passive=false pull=true (Baileys generateLoginNode).
+    /// passive=false pull=true (WhatsApp web generateLoginNode).
     /// Memory: caller frees with allocator.
     pub fn loginPayload(self: *const Client, allocator: std.mem.Allocator) ![]u8 {
         const own = self.paired_jid orelse return error.NotPaired;
@@ -700,7 +708,7 @@ pub const Client = struct {
             return .{ .disconnected = .{ .code = 0, .logged_out = false } };
         }
         if (std.mem.eql(u8, tag, "ib")) {
-            // whatsmeow/Baileys: `<ib><offline_preview count=N/></ib>` announces a queued
+            // whatsmeow: `<ib><offline_preview count=N/></ib>` announces a queued
             // backlog; the server will not actually push it until we reply with
             // `<ib><offline_batch count=N/></ib>` requesting delivery. Skipping this leaves
             // the socket connected but permanently deaf to anything queued while offline.
@@ -791,7 +799,7 @@ pub const Client = struct {
         self.writeFrame(ack) catch {};
     }
 
-    /// whatsmeow/Baileys `sendPassiveIq('active')`: tell the server this companion is
+    /// whatsmeow `sendPassiveIq('active')`: tell the server this companion is
     /// live so it routes new messages here (not just the offline/history backlog).
     /// Skipping this leaves the socket connected but silently deaf to real-time traffic.
     fn sendActive(self: *Client) void {
@@ -802,7 +810,7 @@ pub const Client = struct {
         self.writeFrame(frame) catch {};
     }
 
-    /// whatsmeow/Baileys reply to `<ib><offline_preview/></ib>`: request the server
+    /// whatsmeow reply to `<ib><offline_preview/></ib>`: request the server
     /// actually push the queued backlog instead of just announcing it exists.
     fn requestOfflineBatch(self: *Client) void {
         var child = binary.Node.init(self.allocator, "offline_batch");
@@ -1170,7 +1178,7 @@ pub const Client = struct {
     }
 
     /// Group-decrypt an `<enc type=skmsg>` body; returns unpadded plaintext.
-    /// Baileys persists the ratchet only after a successful decrypt.
+    /// WhatsApp web persists the ratchet only after a successful decrypt.
     fn decryptGroup(self: *Client, chat: []const u8, sender: []const u8, skm: []const u8, version: u32) ![]u8 {
         const io = ioOf();
         try self.state_mu.lock(io);
@@ -1200,6 +1208,11 @@ pub const Client = struct {
         var text: ?[]u8 = null;
         var chat_override: ?[]u8 = null;
         defer if (chat_override) |c| self.allocator.free(c);
+        var mentions: std.ArrayList([]u8) = .empty;
+        defer {
+            for (mentions.items) |m| self.allocator.free(m);
+            mentions.deinit(self.allocator);
+        }
         var media_ref: ?InboundMessage.MediaAttachment = null;
         var decrypted_any = false;
         var real_failure = false;
@@ -1241,9 +1254,11 @@ pub const Client = struct {
                 };
             }
             captureMedia(self.allocator, &media_ref, msg.media) catch {};
+            try takeMentions(self.allocator, msg, &mentions);
             if (msg.device_sent) |ds| {
                 const inner = proto.Message.decode(ds.message) catch continue;
                 captureMedia(self.allocator, &media_ref, inner.media) catch {};
+                try takeMentions(self.allocator, inner, &mentions);
                 if (inner.text()) |t| {
                     if (text) |old| self.allocator.free(old);
                     text = try self.allocator.dupe(u8, t);
@@ -1300,6 +1315,7 @@ pub const Client = struct {
             .push_name = if (info.push_name) |p| try self.allocator.dupe(u8, p) else null,
             .text = body,
             .media = media_ref,
+            .mentioned_jids = try mentions.toOwnedSlice(self.allocator),
 
             .from_me = info.from_me,
             .timestamp = info.timestamp,
@@ -1505,11 +1521,23 @@ pub const Client = struct {
     /// for our own devices), one `<message>` with `<participants>`.
     /// Thread-safe (not from the poll thread). Memory: caller frees the message id.
     pub fn sendText(self: *Client, to: []const u8, text: []const u8) ![]u8 {
+        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        defer self.allocator.free(msg_plain);
+        return self.sendPlaintext(to, msg_plain);
+    }
+
+    /// Encrypt and send a pre-encoded protobuf Message to a DM or group JID.
+    /// Memory: caller frees the message id.
+    pub fn sendPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
         if (!self.isConnected()) return error.NotConnected;
+        if (std.mem.eql(u8, jid.server(to), "g.us")) return self.sendGroupPlaintext(to, msg_plain);
+        return self.sendDmPlaintext(to, msg_plain);
+    }
+
+    fn sendDmPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
         const own = self.paired_jid orelse return error.NotPaired;
         const own_lid = self.paired_lid;
         const alloc = self.allocator;
-        if (std.mem.eql(u8, jid.server(to), "g.us")) return self.sendGroupText(to, text);
 
         const dm = try self.lidDmDestination(to);
         defer dm.deinit(alloc);
@@ -1564,8 +1592,6 @@ pub const Client = struct {
         for (devices.items) |dj| std.log.info("[whatsapp-native][diag] sendText target device={s}", .{dj});
 
         // 2. plaintexts
-        const msg_plain = try proto.Message.encodeText(alloc, text);
-        defer alloc.free(msg_plain);
         const dsm_plain = try proto.Message.encodeDeviceSent(alloc, dest, msg_plain);
         defer alloc.free(dsm_plain);
 
@@ -1629,6 +1655,12 @@ pub const Client = struct {
     /// are skipped for sessions/encryption (whatsmeow fanout) but counted in phash.
     /// Memory: caller frees both fields.
     pub fn buildGroupText(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, text: []const u8) !GroupSend {
+        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        defer self.allocator.free(msg_plain);
+        return self.buildGroupPayload(to, addressing_mode, device_jids, msg_plain);
+    }
+
+    pub fn buildGroupPayload(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, msg_plain: []const u8) !GroupSend {
         const alloc = self.allocator;
         const io = ioOf();
         const own = self.paired_jid orelse return error.NotPaired;
@@ -1687,8 +1719,6 @@ pub const Client = struct {
         }
 
         // Group-encrypt the padded marshalled message (whatsmeow padMessage(marshal)).
-        const msg_plain = try proto.Message.encodeText(alloc, text);
-        defer alloc.free(msg_plain);
         const padded = try proto.padMessageRandom(alloc, msg_plain, io);
         defer alloc.free(padded);
         const skmsg = blk: {
@@ -1726,6 +1756,12 @@ pub const Client = struct {
     /// usync → buildGroupText → write. Thread-safe (not from the poll thread).
     /// Memory: caller frees the message id.
     pub fn sendGroupText(self: *Client, to: []const u8, text: []const u8) ![]u8 {
+        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        defer self.allocator.free(msg_plain);
+        return self.sendGroupPlaintext(to, msg_plain);
+    }
+
+    fn sendGroupPlaintext(self: *Client, to: []const u8, msg_plain: []const u8) ![]u8 {
         if (!self.isConnected()) return error.NotConnected;
         if (!std.mem.eql(u8, jid.server(to), "g.us")) return error.NotGroupJid;
         const alloc = self.allocator;
@@ -1819,7 +1855,7 @@ pub const Client = struct {
         try all_devices.append(alloc, own_dev);
         for (devices.items) |d| try all_devices.append(alloc, d);
 
-        const send = try self.buildGroupText(to, if (std.mem.eql(u8, info.addressing_mode, "lid")) "lid" else "", all_devices.items, text);
+        const send = try self.buildGroupPayload(to, if (std.mem.eql(u8, info.addressing_mode, "lid")) "lid" else "", all_devices.items, msg_plain);
         defer alloc.free(send.frame);
         defer alloc.free(send.id);
         try self.writeFrame(send.frame);
@@ -1939,6 +1975,78 @@ pub const Client = struct {
         const msg = try proto.Message.decode(plain);
         return self.allocator.dupe(u8, msg.text() orelse "");
     }
+
+    pub fn sendPresence(self: *Client, presence: []const u8, name: ?[]const u8) !void {
+        if (!self.isConnected()) return error.NotConnected;
+        const ptype = if (presence.len == 0) "available" else presence;
+        const frame = try stanza.encodePresence(self.allocator, ptype, name);
+        defer self.allocator.free(frame);
+        try self.writeFrame(frame);
+    }
+
+    pub fn markRead(self: *Client, chat: []const u8, id: []const u8, participant: ?[]const u8) !void {
+        if (!self.isConnected()) return error.NotConnected;
+        const ts: i64 = @divTrunc(nowMs(), 1000);
+        const frame = try stanza.encodeReceipt(self.allocator, chat, id, "read", participant, ts);
+        defer self.allocator.free(frame);
+        try self.writeFrame(frame);
+    }
+
+    pub fn fetchGroupInfo(self: *Client, group_jid: []const u8) !groups_mod.GroupInfo {
+        if (!self.isConnected()) return error.NotConnected;
+        var id_buf: [24]u8 = undefined;
+        const iq_id = self.nextId(&id_buf);
+        var giq = try groups_mod.buildGroupInfoQuery(self.allocator, group_jid, iq_id);
+        defer giq.deinit();
+        const iq_frame = try binary.marshal(self.allocator, giq);
+        defer self.allocator.free(iq_frame);
+        const resp = try self.sendIqWait(iq_id, iq_frame, iq_timeout_ms);
+        defer self.allocator.free(resp);
+        var rnode = try binary.decodeNode(self.allocator, resp);
+        defer rnode.deinit();
+        return groups_mod.parseGroupInfo(self.allocator, rnode);
+    }
+
+    pub fn sendReaction(self: *Client, chat_jid: []const u8, message_id: []const u8, emoji: []const u8, participant: ?[]const u8) ![]u8 {
+        const proto_bytes = try proto.Message.encodeReaction(self.allocator, chat_jid, false, message_id, participant, emoji);
+        defer self.allocator.free(proto_bytes);
+        return self.sendPlaintext(chat_jid, proto_bytes);
+    }
+
+    pub fn sendPoll(self: *Client, to: []const u8, name: []const u8, options: []const []const u8, selectable: u32) ![]u8 {
+        var key: [32]u8 = undefined;
+        ioOf().random(&key);
+        const proto_bytes = try proto.Message.encodePoll(self.allocator, name, options, selectable, &key);
+        defer self.allocator.free(proto_bytes);
+        return self.sendPlaintext(to, proto_bytes);
+    }
+
+    pub fn ensureMediaConn(self: *Client) !stanza.MediaConn {
+        if (!self.isConnected()) return error.NotConnected;
+        if (self.media_conn_auth) |auth| {
+            if (self.media_conn_host) |host| {
+                if (nowMs() < self.media_conn_until_ms) {
+                    return .{ .auth = auth, .hostname = host, .ttl = 0 };
+                }
+            }
+        }
+        var id_buf: [24]u8 = undefined;
+        const iq_id = self.nextId(&id_buf);
+        const frame = try stanza.encodeMediaConnIq(self.allocator, iq_id);
+        defer self.allocator.free(frame);
+        const resp = try self.sendIqWait(iq_id, frame, iq_timeout_ms);
+        defer self.allocator.free(resp);
+        var node = try binary.decodeNode(self.allocator, resp);
+        defer node.deinit();
+        const parsed = try stanza.parseMediaConn(node);
+        if (self.media_conn_auth) |old| self.allocator.free(old);
+        if (self.media_conn_host) |old| self.allocator.free(old);
+        self.media_conn_auth = try self.allocator.dupe(u8, parsed.auth);
+        self.media_conn_host = try self.allocator.dupe(u8, parsed.hostname);
+        const ttl_ms: i64 = @as(i64, parsed.ttl) * 1000;
+        self.media_conn_until_ms = nowMs() + @max(ttl_ms - 15_000, 5_000);
+        return .{ .auth = self.media_conn_auth.?, .hostname = self.media_conn_host.?, .ttl = parsed.ttl };
+    }
 };
 
 /// whatsmeow `unpadMessage`: v>=3 is unpadded; v2 last-byte pad; on v2
@@ -1947,6 +2055,13 @@ fn unpadEnc(alloc: std.mem.Allocator, padded: []const u8, version: u32) ![]u8 {
     const ver = if (version == 0) 2 else version;
     const slice = proto.unpadMessage(padded, ver) catch padded;
     return alloc.dupe(u8, slice);
+}
+
+fn takeMentions(alloc: std.mem.Allocator, msg: proto.Message, list: *std.ArrayList([]u8)) !void {
+    var i: u8 = 0;
+    while (i < msg.mentioned_jid_count) : (i += 1) {
+        try list.append(alloc, try alloc.dupe(u8, msg.mentioned_jids[i]));
+    }
 }
 
 /// Keep the first decryptable media attachment (kind + direct path + key).
@@ -2271,7 +2386,7 @@ test "client unpaired payload has pairing data" {
     try std.testing.expect(!std.mem.allEqual(u8, &cli.signed_pre_key_sig, 0));
 }
 
-test "client pair-device stores QR codes in Baileys comma format" {
+test "client pair-device stores QR codes in comma-separated format" {
     const alloc = std.testing.allocator;
     var cli = Client.init(alloc);
     defer cli.deinit();

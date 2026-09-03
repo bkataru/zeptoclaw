@@ -135,6 +135,9 @@ pub const WhatsAppMessage = struct {
         m.chat_type = self.chat_type;
         m.timestamp = self.timestamp;
         m.from_me = self.from_me;
+        for (self.mentioned_jids.items) |jid| {
+            try m.mentioned_jids.append(self.allocator, try self.allocator.dupe(u8, jid));
+        }
         return m;
     }
 
@@ -222,7 +225,7 @@ pub const WhatsAppConfig = struct {
     debounce_ms: u32,
     send_read_receipts: bool,
     group_require_mention: bool,
-    native: bool = false,
+    native: bool = true,
 
     group_activation_commands: std.ArrayList([]const u8),
     pub fn init(allocator: std.mem.Allocator) !WhatsAppConfig {
@@ -230,7 +233,7 @@ pub const WhatsAppConfig = struct {
             .allocator = allocator,
             .enabled = false,
             .auth_dir = "",
-            .native = false,
+            .native = true,
 
             .dm_policy = .pairing,
             .allow_from = try std.ArrayList([]const u8).initCapacity(allocator, 0),

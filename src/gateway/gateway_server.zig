@@ -381,7 +381,26 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         }
     }
 
-    const is_main_target = std.ascii.indexOfIgnoreCase(body_copy, "barvis") != null;
+    var ident_buf: [3][]const u8 = undefined;
+    var ident_n: usize = 0;
+    if (g_whatsapp_channel) |ch| {
+        if (ch.self_e164) |e| {
+            ident_buf[ident_n] = e;
+            ident_n += 1;
+        }
+        if (ch.self_jid) |j| {
+            ident_buf[ident_n] = j;
+            ident_n += 1;
+        }
+        if (ch.native_client) |cli| {
+            if (cli.selfLid()) |lid| {
+                ident_buf[ident_n] = lid;
+                ident_n += 1;
+            }
+        }
+    }
+    const mentioned_self = InboundProcessor.mentionsAny(eff_msg, ident_buf[0..ident_n]);
+    const is_main_target = std.ascii.indexOfIgnoreCase(body_copy, "barvis") != null or mentioned_self;
     const media_dm = eff_msg.chat_type == .direct and eff_msg.message_type != .text;
     const is_dm = eff_msg.chat_type == .direct;
     core_tools.setExecEnabled(is_dm and eff_msg.from_me);
@@ -807,7 +826,7 @@ pub fn main() !void {
     autonomous_agent.* = AutonomousAgent.init(allocator, &autonomous_state_store, &moltbook_client, &rate_limiter);
     defer allocator.destroy(autonomous_agent);
 
-    // WhatsApp wiring (Baileys via Node) — non-blocking, gateway stays HTTP even if WA fails
+    // WhatsApp wiring (native client) — non-blocking, gateway stays HTTP even if WA fails
     var wa_channel: ?WhatsAppChannel = null;
     var wa_session: ?WhatsAppSession = null;
     var wa_inbound: ?InboundProcessor = null;
@@ -878,7 +897,7 @@ pub fn main() !void {
                 wa_channel = c.*;
                 wa_channel_ptr = c;
                 g_whatsapp_channel = c;
-                // connect (spawns node baileys_wrapper.js)
+                // connect (native WhatsApp client)
                 c.connect() catch |err| {
                     std.log.err("[whatsapp] channel connect failed: {} — running HTTP only", .{err});
                 };

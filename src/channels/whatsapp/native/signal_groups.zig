@@ -1,5 +1,5 @@
-//! Signal sender-key (group) cipher — port of Baileys' local libsignal Group
-//! implementation (`node_modules/@whiskeysockets/baileys/lib/Signal/Group/*.js`) on top of the
+//! Signal sender-key (group) cipher — port of the libsignal Group implementation
+//! (`lib/Signal/Group/*.js`) on top of the
 //! libsignal `SenderKeyRecordStructure` protobuf.
 //!
 //! Wire formats pinned against the JS (where the JS and a spec disagree, the JS wins):
@@ -18,9 +18,9 @@
 //!   message seed = HMAC-SHA256(chainKey, 0x01), next chain = HMAC-SHA256(chainKey, 0x02),
 //!   HKDF-SHA256(ikm=seed, salt=32 zero bytes, info="WhisperGroup", 48 bytes)
 //!   -> iv = out[0..16], cipher key = out[16..48].
-//! `GroupCipher.getSenderKey` semantics — including Baileys asking for `iteration + 1` on every
+//! `GroupCipher.getSenderKey` semantics — including the JS asking for `iteration + 1` on every
 //! encrypt after the first, which stages the key it skips — are reproduced exactly so both
-//! directions interoperate with a Baileys/phone peer (cross-checked in the tests below).
+//! directions interoperate with a web/phone peer (cross-checked in the tests below).
 //!
 //! Failure vocabulary (functions carry inferred error sets, as elsewhere in the native port):
 //! `InvalidMessage`, `InvalidChainKey`, `InvalidSigningKey` for malformed input;
@@ -193,7 +193,7 @@ pub const SenderKeyState = struct {
 // Record (sender-key-record.js over libsignal's SenderKeyRecordStructure)
 // --------------------------------------------------------------------------------------------
 
-/// SenderKeyRecord: up to `max_states` states, newest first (Baileys appends and reads the last
+/// SenderKeyRecord: up to `max_states` states, newest first (the JS appends and reads the last
 /// element — same state, and this blob is only ever read back by this module).
 pub const SenderKeyRecord = struct {
     allocator: std.mem.Allocator,
@@ -310,7 +310,7 @@ pub const SenderKeyRecord = struct {
 fn encodeStateStructure(allocator: std.mem.Allocator, state: *const SenderKeyState) ![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
     errdefer buf.deinit(allocator);
-    // senderKeyId = 1 — protobufjs emits it whenever the property exists, which Baileys'
+    // senderKeyId = 1 — protobufjs emits it whenever the property exists, which the JS
     // structures always do (`senderKeyId: id || 0`), zero included.
     try proto.writeVarintField(&buf, allocator, 1, state.key_id);
     // senderChainKey = 2 { iteration = 1, seed = 2 }
@@ -662,7 +662,7 @@ pub fn generateSenderSigningKey(io: std.Io) nc.KeyPair {
 }
 
 /// GroupSessionBuilder.process: adopt a peer's distributed sender key into `record`. The caller
-/// persists the record afterwards (Baileys does the same through its `storeSenderKey`).
+/// persists the record afterwards (the JS does the same through its `storeSenderKey`).
 pub fn processDistribution(record: *SenderKeyRecord, skdm: []const u8) !void {
     const msg = try SenderKeyDistributionMessage.parse(skdm);
     try record.addSenderKeyState(msg.id, msg.iteration, msg.chain_key, msg.signing_key);
@@ -767,7 +767,7 @@ pub fn encryptWithSignatureRandom(
 /// AES-256-CBC. Returns the padded plaintext — unpad with `proto.unpadMessage`.
 /// Fails with `UnknownSenderKeyId`, `BadSignature`, `OldCounter` (replay), `TooManySkipped`,
 /// `InvalidMessage` or `DecryptFailed`. A failure can still leave the record ratcheted (keys
-/// staged, chain advanced): persist it only after success, which is where Baileys calls
+/// staged, chain advanced): persist it only after success, which is where the JS calls
 /// `storeSenderKey`, so a re-delivered ciphertext gets the same treatment as the JS.
 /// Memory: caller frees.
 pub fn decrypt(
@@ -901,7 +901,7 @@ test "out of order sender key messages decrypt from staged keys" {
     defer pair.sender.deinit();
     defer pair.receiver.deinit();
 
-    // Baileys asks for iteration + 1 after the first message, so these carry 0, 2, 4, 6.
+    // The JS asks for iteration + 1 after the first message, so these carry 0, 2, 4, 6.
     var messages: [4][]u8 = undefined;
     const texts = [_][]const u8{ "m1", "m2", "m3", "m4" };
     for (texts, 0..) |text, i| {
@@ -1154,11 +1154,11 @@ test "sender key helpers use fresh randomness" {
 }
 
 // --------------------------------------------------------------------------------------------
-// Wire-format cross-check against the Baileys JS port (the oracle)
+// Wire-format cross-check against the WhatsApp web JS port (the oracle)
 //
-// Fixtures come from /tmp/groupvec/gen.mjs, which drives Baileys' own Group classes and
+// Fixtures come from /tmp/groupvec/gen.mjs, which drives the JS Group classes and
 // serialises the SenderKeyRecordStructure with the bundled protobufjs definitions.
-// /tmp/groupvec/verify_zig.mjs is the reverse leg: Baileys decrypting what this file emits.
+// /tmp/groupvec/verify_zig.mjs is the reverse leg: JS decrypting what this file emits.
 // Both legs skip themselves when the oracle checkout is absent.
 // --------------------------------------------------------------------------------------------
 
@@ -1262,7 +1262,7 @@ test "group message seam: wa-v2 padding plus the proto SKDM wrapper round-trip" 
     defer allocator.free(skdm);
     try processDistribution(&receiver, skdm);
 
-    // Outbound pads like Baileys/whatsmeow; inbound unpads with the stanza version.
+    // Outbound pads like whatsmeow; inbound unpads with the stanza version.
     const padded = try proto.padMessageRandom(allocator, "ping", testIo());
     defer allocator.free(padded);
     const message = try encrypt(allocator, &sender, padded, testIo());
@@ -1293,7 +1293,7 @@ test "group message seam: wa-v2 padding plus the proto SKDM wrapper round-trip" 
     try std.testing.expectEqualStrings("ping", try proto.unpadMessage(later_plain, 2));
 }
 
-test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig" {
+test "cross-check node -> zig: JS SKDM, messages and record decrypt in Zig" {
     if (!fixtureExists("skdm.hex")) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var owned = FixtureOwner{ .allocator = allocator };
@@ -1310,7 +1310,7 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
         messages[i] = owned.own(try readHexFixture(allocator, std.fmt.bufPrint(&label, "m{d}.hex", .{i + 1}) catch return error.FormatFailed));
     }
 
-    // The SKDM Baileys produced parses here and re-encodes to the very same bytes.
+    // The SKDM the JS produced parses here and re-encodes to the very same bytes.
     const distributed = try SenderKeyDistributionMessage.parse(skdm);
     try std.testing.expectEqual(version_byte, distributed.version);
     try std.testing.expectEqual(@as(u32, 0), distributed.iteration);
@@ -1328,7 +1328,7 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
     try std.testing.expectEqual(@as(u32, 0), first.iteration);
     try first.verifySignature(distributed.signing_key);
 
-    // Sequential decrypts, ending on exactly the record state Baileys recorded.
+    // Sequential decrypts, ending on exactly the record state the JS recorded.
     var sequential = SenderKeyRecord.init(allocator);
     defer sequential.deinit();
     try processDistribution(&sequential, skdm);
@@ -1342,7 +1342,7 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
     defer allocator.free(seq_mine);
     try std.testing.expectEqualSlices(u8, seq_want, seq_mine);
 
-    // Out-of-order path: m3 (iteration 4) first, then m1, m2 — the record has to match Baileys
+    // Out-of-order path: m3 (iteration 4) first, then m1, m2 — the record has to match the JS
     // mid-flight, again after m4, and finally after m5.
     var receiver = SenderKeyRecord.init(allocator);
     defer receiver.deinit();
@@ -1372,7 +1372,7 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
     defer allocator.free(m5_mine);
     try std.testing.expectEqualSlices(u8, seq_want, m5_mine);
 
-    // Baileys' own sender record (chain 9, keys 1/3/5/7 staged, private signing key) loads here.
+    // The JS sender record (chain 9, keys 1/3/5/7 staged, private signing key) loads here.
     const sender_want = owned.own(try readHexFixture(allocator, "record_sender.hex"));
     var sender = try SenderKeyRecord.deserialize(allocator, sender_want);
     defer sender.deinit();
@@ -1384,18 +1384,18 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
     const sender_mine = try sender.serialize(allocator);
     defer allocator.free(sender_mine);
     try std.testing.expectEqualSlices(u8, sender_want, sender_mine);
-    // Continuing that chain yields Baileys' iteration 10 (chain + 1, staging 9).
+    // Continuing that chain yields JS iteration 10 (chain + 1, staging 9).
     const onward = try encryptWithSignatureRandom(allocator, &sender, "sixth from zig", [_]u8{0} ** 64);
     defer allocator.free(onward);
     const onward_view = try SenderKeyMessage.parse(onward);
     try std.testing.expectEqual(@as(u32, 10), onward_view.iteration);
 
-    // Negatives Baileys also rejects.
+    // Negatives the JS also rejects.
     const other_id = owned.own(try readHexFixture(allocator, "m_other_id.hex"));
     try std.testing.expectError(error.UnknownSenderKeyId, decrypt(allocator, &receiver, other_id));
     const sig_tamper = owned.own(try readHexFixture(allocator, "m5_tampered_sig.hex"));
     try std.testing.expectError(error.BadSignature, decrypt(allocator, &receiver, sig_tamper));
-    // Payload tamper (Baileys rejects it the same way): the ciphertext sits inside the signed
+    // Payload tamper (the JS rejects it the same way): the ciphertext sits inside the signed
     // protobuf, so this can only be a signature failure.
     const ct_tamper = owned.own(try readHexFixture(allocator, "m5_tampered_ct.hex"));
     try std.testing.expectError(error.BadSignature, decrypt(allocator, &receiver, ct_tamper));
@@ -1405,7 +1405,7 @@ test "cross-check node -> zig: Baileys SKDM, messages and record decrypt in Zig"
     try std.testing.expectError(error.InvalidMessage, decrypt(allocator, &receiver, len_tamper));
 }
 
-test "cross-check zig -> node: Baileys decrypts what this file emits" {
+test "cross-check zig -> node: JS decrypts what this file emits" {
     if (!fixtureExists("skdm.hex") or !fixtureExists("verify_zig.mjs") or !fixtureExists("run_node.sh")) {
         return error.SkipZigTest;
     }
@@ -1425,7 +1425,7 @@ test "cross-check zig -> node: Baileys decrypts what this file emits" {
         try std.testing.expectEqual(@as(u32, @intCast(i * 2)), view.iteration);
     }
 
-    // Snapshot after three messages: Baileys' receiver should be at the same point once it has
+    // Snapshot after three messages: the JS receiver should be at the same point once it has
     // consumed m1, m3, m2 in that order. m4 is sent afterwards to prove the chains agree.
     const record_bytes = try sender.serialize(allocator);
     defer allocator.free(record_bytes);
@@ -1463,7 +1463,7 @@ test "cross-check zig -> node: Baileys decrypts what this file emits" {
 
     // `std.Io.Threaded.global_single_threaded` cannot spawn (its processSpawn always fails),
     // so build a real one. Its environment is empty by design: run_node.sh locates node
-    // without PATH, and the verifier imports Baileys through absolute paths.
+    // without PATH, and the verifier imports the JS oracle through absolute paths.
     const gpa = std.heap.page_allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
