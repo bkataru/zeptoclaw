@@ -58,6 +58,38 @@ pub fn isSubscribed(chat_id: []const u8) bool {
     return false;
 }
 
+const jid = @import("native/jid.zig");
+
+fn identityUser(id: []const u8) []const u8 {
+    var s = id;
+    if (s.len > 0 and s[0] == '+') s = s[1..];
+    return jid.user(s);
+}
+
+/// True when `chat_id` is the operator talking to their own account (self-chat).
+pub fn isSelfChat(chat_id: []const u8, identities: []const []const u8) bool {
+    const chat_user = identityUser(chat_id);
+    if (chat_user.len == 0) return false;
+    for (identities) |id| {
+        const u = identityUser(id);
+        if (u.len > 0 and std.mem.eql(u8, u, chat_user)) return true;
+    }
+    return false;
+}
+
+pub const TurnGate = enum { skip_peer_from_me, listening, run };
+
+/// fromMe in a 1:1 with someone else is the operator talking to that person, not to Barvis.
+/// Group fromMe only runs on an explicit wake/mention, not leftover subscription.
+pub fn decideTurn(is_dm: bool, from_me: bool, is_self_chat: bool, triggered: bool, subscribed: bool) TurnGate {
+    if (is_dm and from_me and !is_self_chat) return .skip_peer_from_me;
+    if (from_me and !is_dm) {
+        return if (triggered) .run else .listening;
+    }
+    if (triggered or subscribed) return .run;
+    return .listening;
+}
+
 pub const PRESENCE_INSTRUCTIONS =
     \\Presence (WhatsApp): You are in a live thread. History is recorded whether you talk or not.
     \\- To talk to the user, write a normal assistant message (no listen/leave tools).
@@ -129,4 +161,28 @@ test "subscribe long id is truncated not overflow" {
     try std.testing.expect(isSubscribed(long[0..128]));
     unsubscribe(long[0..128]);
     try std.testing.expect(!isSubscribed(long[0..128]));
+}
+
+test "isSelfChat matches own LID PN and E164" {
+    try std.testing.expect(isSelfChat("216638251077681@lid", &.{
+        "917019895010",
+        "917019895010:58@s.whatsapp.net",
+        "216638251077681@lid",
+    }));
+    try std.testing.expect(isSelfChat("917019895010@s.whatsapp.net", &.{ "+917019895010" }));
+    try std.testing.expect(!isSelfChat("19082673946862@lid", &.{
+        "917019895010",
+        "216638251077681@lid",
+    }));
+}
+
+test "decideTurn skips fromMe peer DMs even when subscribed or wake word" {
+    try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, true, true));
+    try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, false, true));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, true, true, false));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(true, false, false, false, true));
+    try std.testing.expectEqual(TurnGate.listening, decideTurn(true, false, false, false, false));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(false, true, false, true, false));
+    try std.testing.expectEqual(TurnGate.listening, decideTurn(false, true, false, false, true));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(false, false, false, false, true));
 }

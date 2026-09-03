@@ -67,6 +67,13 @@ pub const InboundMessage = struct {
     timestamp: i64,
     is_group: bool,
     mentioned_jids: [][]u8 = &.{},
+    quoted_stanza_id: ?[]u8 = null,
+    quoted_participant: ?[]u8 = null,
+    quoted_text: ?[]u8 = null,
+    location: ?proto.Geo = null,
+    kind: Kind = .text,
+
+    pub const Kind = enum { text, reaction, poll, location };
 
     pub const MediaAttachment = struct {
         kind: media.Kind,
@@ -91,6 +98,9 @@ pub const InboundMessage = struct {
         self.allocator.free(self.text);
         for (self.mentioned_jids) |m| self.allocator.free(m);
         if (self.mentioned_jids.len > 0) self.allocator.free(self.mentioned_jids);
+        if (self.quoted_stanza_id) |s| self.allocator.free(s);
+        if (self.quoted_participant) |s| self.allocator.free(s);
+        if (self.quoted_text) |s| self.allocator.free(s);
     }
 };
 
@@ -1044,26 +1054,27 @@ pub const Client = struct {
     /// fetch, and resends to that one device with the same message id
     /// (whatsmeow handleRetryReceipt). Must not run on the poll thread itself:
     /// the prekey fetch blocks on `sendIqWait`, whose response only `poll`
-    /// (this very call stack) can deliver. DM-only; group retries (carrying a
-    /// `participant` attr) are not handled.
+    /// (this very call stack) can deliver. Group retries use the `participant`
+    /// attr as the target device.
     fn handleRetryReceipt(self: *Client, node: binary.Node) !void {
         const from = node.getAttr("from") orelse return error.MissingFrom;
-        if (node.getAttr("participant") != null) return;
+        const participant = node.getAttr("participant");
+        const retry_device = participant orelse from;
         const msg_id = node.getAttr("id") orelse return error.MissingId;
         if (node.getChildByTag("retry") == null) return error.MissingRetryChild;
 
         const cached = self.takeRecentOutboundForRetry(msg_id) catch |err| {
-            std.log.warn("[whatsapp-native] dropping retry for {s} from {s}: {}", .{ msg_id, from, err });
+            std.log.warn("[whatsapp-native] dropping retry for {s} from {s}: {}", .{ msg_id, retry_device, err });
             return;
         } orelse {
-            std.log.warn("[whatsapp-native] retry receipt for unknown/expired message id={s} from={s}", .{ msg_id, from });
+            std.log.warn("[whatsapp-native] retry receipt for unknown/expired message id={s} from={s}", .{ msg_id, retry_device });
             return;
         };
 
         const work = try self.allocator.create(RetryWork);
         work.* = .{
             .client = self,
-            .from_device = try self.allocator.dupe(u8, from),
+            .from_device = try self.allocator.dupe(u8, retry_device),
             .msg_id = try self.allocator.dupe(u8, msg_id),
             .dest = cached.dest,
             .plaintext = cached.plaintext,
@@ -1071,7 +1082,7 @@ pub const Client = struct {
         _ = self.retry_workers_active.fetchAdd(1, .monotonic);
         const t = std.Thread.spawn(.{}, retryWorkerEntry, .{work}) catch |err| {
             _ = self.retry_workers_active.fetchSub(1, .monotonic);
-            std.log.warn("[whatsapp-native] spawn retry worker for {s} failed: {}", .{ from, err });
+            std.log.warn("[whatsapp-native] spawn retry worker for {s} failed: {}", .{ retry_device, err });
             work.deinit(self.allocator);
             self.allocator.destroy(work);
             return;
@@ -1213,6 +1224,16 @@ pub const Client = struct {
             for (mentions.items) |m| self.allocator.free(m);
             mentions.deinit(self.allocator);
         }
+        var quoted_stanza_id: ?[]u8 = null;
+        var quoted_participant: ?[]u8 = null;
+        var quoted_text: ?[]u8 = null;
+        defer {
+            if (quoted_stanza_id) |s| self.allocator.free(s);
+            if (quoted_participant) |s| self.allocator.free(s);
+            if (quoted_text) |s| self.allocator.free(s);
+        }
+        var location: ?proto.Geo = null;
+        var kind: InboundMessage.Kind = .text;
         var media_ref: ?InboundMessage.MediaAttachment = null;
         var decrypted_any = false;
         var real_failure = false;
@@ -1255,15 +1276,37 @@ pub const Client = struct {
             }
             captureMedia(self.allocator, &media_ref, msg.media) catch {};
             try takeMentions(self.allocator, msg, &mentions);
+            try takeQuote(self.allocator, msg, &quoted_stanza_id, &quoted_participant, &quoted_text);
+            applyKind(msg, &kind);
+            if (msg.location) |loc| location = loc;
             if (msg.device_sent) |ds| {
                 const inner = proto.Message.decode(ds.message) catch continue;
                 captureMedia(self.allocator, &media_ref, inner.media) catch {};
                 try takeMentions(self.allocator, inner, &mentions);
+                try takeQuote(self.allocator, inner, &quoted_stanza_id, &quoted_participant, &quoted_text);
+                applyKind(inner, &kind);
+                if (inner.location) |loc| location = loc;
+                if (inner.reaction) |rxn| {
+                    if (rxn.text.len > 0) {
+                        if (text) |old| self.allocator.free(old);
+                        text = try self.allocator.dupe(u8, rxn.text);
+                    }
+                    if (chat_override) |old| self.allocator.free(old);
+                    chat_override = try self.allocator.dupe(u8, ds.destination_jid);
+                    continue;
+                }
                 if (inner.text()) |t| {
                     if (text) |old| self.allocator.free(old);
                     text = try self.allocator.dupe(u8, t);
                     if (chat_override) |old| self.allocator.free(old);
                     chat_override = try self.allocator.dupe(u8, ds.destination_jid);
+                }
+                continue;
+            }
+            if (msg.reaction) |rxn| {
+                if (rxn.text.len > 0) {
+                    if (text) |old| self.allocator.free(old);
+                    text = try self.allocator.dupe(u8, rxn.text);
                 }
                 continue;
             }
@@ -1291,10 +1334,16 @@ pub const Client = struct {
         self.sendMessageReceipt(node, info);
         const body = text orelse try self.allocator.dupe(u8, "");
         errdefer self.allocator.free(body);
-        if (media_ref == null and body.len == 0) {
+        if (media_ref == null and body.len == 0 and location == null) {
             self.allocator.free(body);
             return .idle;
         }
+        const owned_qid = quoted_stanza_id;
+        const owned_qp = quoted_participant;
+        const owned_qt = quoted_text;
+        quoted_stanza_id = null;
+        quoted_participant = null;
+        quoted_text = null;
         const chat_src = chat_override orelse info.chat;
         const sender_pn: ?[]u8 = blk: {
             if (jid.isPn(info.sender)) break :blk try self.allocator.dupe(u8, jid.user(info.sender));
@@ -1316,7 +1365,11 @@ pub const Client = struct {
             .text = body,
             .media = media_ref,
             .mentioned_jids = try mentions.toOwnedSlice(self.allocator),
-
+            .quoted_stanza_id = owned_qid,
+            .quoted_participant = owned_qp,
+            .quoted_text = owned_qt,
+            .location = location,
+            .kind = kind,
             .from_me = info.from_me,
             .timestamp = info.timestamp,
             .is_group = info.is_group,
@@ -1521,7 +1574,11 @@ pub const Client = struct {
     /// for our own devices), one `<message>` with `<participants>`.
     /// Thread-safe (not from the poll thread). Memory: caller frees the message id.
     pub fn sendText(self: *Client, to: []const u8, text: []const u8) ![]u8 {
-        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        return self.sendTextWith(to, text, .{});
+    }
+
+    pub fn sendTextWith(self: *Client, to: []const u8, text: []const u8, opts: proto.Message.TextOpts) ![]u8 {
+        const msg_plain = try proto.Message.encodeTextWith(self.allocator, text, opts);
         defer self.allocator.free(msg_plain);
         return self.sendPlaintext(to, msg_plain);
     }
@@ -1655,7 +1712,7 @@ pub const Client = struct {
     /// are skipped for sessions/encryption (whatsmeow fanout) but counted in phash.
     /// Memory: caller frees both fields.
     pub fn buildGroupText(self: *Client, to: []const u8, addressing_mode: []const u8, device_jids: []const []const u8, text: []const u8) !GroupSend {
-        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        const msg_plain = try proto.Message.encodeTextWith(self.allocator, text, .{});
         defer self.allocator.free(msg_plain);
         return self.buildGroupPayload(to, addressing_mode, device_jids, msg_plain);
     }
@@ -1756,7 +1813,7 @@ pub const Client = struct {
     /// usync → buildGroupText → write. Thread-safe (not from the poll thread).
     /// Memory: caller frees the message id.
     pub fn sendGroupText(self: *Client, to: []const u8, text: []const u8) ![]u8 {
-        const msg_plain = try proto.Message.encodeText(self.allocator, text);
+        const msg_plain = try proto.Message.encodeTextWith(self.allocator, text, .{});
         defer self.allocator.free(msg_plain);
         return self.sendGroupPlaintext(to, msg_plain);
     }
@@ -1984,6 +2041,19 @@ pub const Client = struct {
         try self.writeFrame(frame);
     }
 
+    pub fn sendChatState(self: *Client, to: []const u8, state: []const u8) !void {
+        if (!self.isConnected()) return error.NotConnected;
+        const frame = try stanza.encodeChatState(self.allocator, to, state);
+        defer self.allocator.free(frame);
+        try self.writeFrame(frame);
+    }
+
+    pub fn sendLocation(self: *Client, to: []const u8, lat: f64, lon: f64) ![]u8 {
+        const proto_bytes = try proto.Message.encodeLocation(self.allocator, lat, lon);
+        defer self.allocator.free(proto_bytes);
+        return self.sendPlaintext(to, proto_bytes);
+    }
+
     pub fn markRead(self: *Client, chat: []const u8, id: []const u8, participant: ?[]const u8) !void {
         if (!self.isConnected()) return error.NotConnected;
         const ts: i64 = @divTrunc(nowMs(), 1000);
@@ -2061,6 +2131,34 @@ fn takeMentions(alloc: std.mem.Allocator, msg: proto.Message, list: *std.ArrayLi
     var i: u8 = 0;
     while (i < msg.mentioned_jid_count) : (i += 1) {
         try list.append(alloc, try alloc.dupe(u8, msg.mentioned_jids[i]));
+    }
+}
+
+fn takeQuote(
+    alloc: std.mem.Allocator,
+    msg: proto.Message,
+    qid: *?[]u8,
+    qp: *?[]u8,
+    qt: *?[]u8,
+) !void {
+    if (msg.quoted_stanza_id) |id| if (id.len > 0 and qid.* == null) {
+        qid.* = try alloc.dupe(u8, id);
+    };
+    if (msg.quoted_participant) |p| if (p.len > 0 and qp.* == null) {
+        qp.* = try alloc.dupe(u8, p);
+    };
+    if (msg.quoted_text) |t| if (t.len > 0 and qt.* == null) {
+        qt.* = try alloc.dupe(u8, t);
+    };
+}
+
+fn applyKind(msg: proto.Message, kind: *InboundMessage.Kind) void {
+    if (msg.reaction != null) {
+        kind.* = .reaction;
+    } else if (msg.poll_name != null) {
+        kind.* = .poll;
+    } else if (msg.location != null and kind.* == .text) {
+        kind.* = .location;
     }
 }
 

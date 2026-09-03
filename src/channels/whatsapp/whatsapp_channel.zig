@@ -85,7 +85,9 @@ pub const WhatsAppChannel = struct {
     }
 
     pub fn heal(self: *WhatsAppChannel) !void {
-        _ = self;
+        std.log.warn("[whatsapp] heal reconnect", .{});
+        self.last_restart_ms = 0;
+        try self.restartChild();
     }
 
     pub fn healthSnapshot(self: *WhatsAppChannel, jid_buf: []u8) struct { connected: bool, jid_len: usize } {
@@ -157,8 +159,12 @@ pub const WhatsAppChannel = struct {
     /// Memory: Caller owns returned messageId slice; must free with allocator.free (allocator.dupe).
     /// Send a text message
     pub fn sendMessage(self: *WhatsAppChannel, to: []const u8, text: []const u8) ![]const u8 {
+        return self.sendMessageWith(to, text, .{});
+    }
+
+    pub fn sendMessageWith(self: *WhatsAppChannel, to: []const u8, text: []const u8, opts: proto_mod.Message.TextOpts) ![]const u8 {
         const cli = self.native_client orelse return error.NotConnected;
-        return cli.sendText(to, text);
+        return cli.sendTextWith(to, text, opts);
     }
 
     /// Memory: Caller owns returned messageId slice; must free with allocator.free.
@@ -250,11 +256,14 @@ pub const WhatsAppChannel = struct {
         }
     }
 
-    /// Send presence update
+    /// Send presence update. `to_jid` set means chatstate (composing/paused).
     pub fn sendPresence(self: *WhatsAppChannel, presence: []const u8, to_jid: ?[]const u8) !void {
-        _ = to_jid;
         const cli = self.native_client orelse return error.NotConnected;
-        try cli.sendPresence(presence, null);
+        if (to_jid) |to| {
+            try cli.sendChatState(to, presence);
+        } else {
+            try cli.sendPresence(presence, null);
+        }
     }
 
     /// Memory: Caller owns returned jid dupe inside struct; must free with allocator.free.
@@ -270,8 +279,7 @@ pub const WhatsAppChannel = struct {
         };
     }
 
-    /// Memory: Caller owns returned subject dupe; must free with allocator.free. Participants slice is static empty in this stub.
-    /// Get group metadata
+    /// Memory: caller owns `subject` and every `participants[i].id` / `.admin`.
     pub fn getGroupMetadata(self: *WhatsAppChannel, jid: []const u8) !struct {
         subject: []const u8,
         participants: []struct {
@@ -282,12 +290,33 @@ pub const WhatsAppChannel = struct {
         const cli = self.native_client orelse return error.NotConnected;
         var info = try cli.fetchGroupInfo(jid);
         defer info.deinit(self.allocator);
+        const Part = struct { id: []const u8, admin: ?[]const u8 };
+        const parts = try self.allocator.alloc(Part, info.participants.len);
+        var filled: usize = 0;
+        errdefer {
+            for (parts[0..filled]) |part| {
+                self.allocator.free(part.id);
+                if (part.admin) |a| self.allocator.free(a);
+            }
+            self.allocator.free(parts);
+        }
+        for (info.participants, 0..) |src, i| {
+            const role: ?[]const u8 = if (src.super_admin)
+                try self.allocator.dupe(u8, "superadmin")
+            else if (src.admin)
+                try self.allocator.dupe(u8, "admin")
+            else
+                null;
+            errdefer if (role) |r| self.allocator.free(r);
+            parts[i] = .{
+                .id = try self.allocator.dupe(u8, src.jid),
+                .admin = role,
+            };
+            filled += 1;
+        }
         return .{
             .subject = try self.allocator.dupe(u8, info.subject),
-            .participants = &[_]struct {
-                id: []const u8,
-                admin: ?[]const u8,
-            }{},
+            .participants = parts,
         };
     }
 
@@ -928,7 +957,12 @@ pub fn inboundToWhatsAppMessage(
     msg.chat_type = if (inbound.is_group) .group else .direct;
     msg.from_me = inbound.from_me;
     msg.timestamp = inbound.timestamp;
-    msg.message_type = .text;
+    msg.message_type = switch (inbound.kind) {
+        .text => .text,
+        .reaction => .reaction,
+        .poll => .poll,
+        .location => .location,
+    };
     try replaceOwned(allocator, &msg.body, inbound.text);
 
     if (inbound.is_group) {
@@ -968,6 +1002,17 @@ pub fn inboundToWhatsAppMessage(
     }
     for (inbound.mentioned_jids) |m| {
         try msg.mentioned_jids.append(allocator, try allocator.dupe(u8, m));
+    }
+    if (inbound.quoted_stanza_id) |qid| if (qid.len > 0) {
+        msg.reply_context = .{
+            .message_id = try allocator.dupe(u8, qid),
+            .participant = if (inbound.quoted_participant) |qp| try allocator.dupe(u8, qp) else null,
+            .quoted_message = if (inbound.quoted_text) |qt| try allocator.dupe(u8, qt) else null,
+        };
+    };
+    if (inbound.location) |loc| {
+        msg.location = .{ .latitude = loc.lat, .longitude = loc.lon };
+        if (msg.body.len == 0 and msg.message_type == .text) msg.message_type = .location;
     }
     return msg;
 }
@@ -1125,6 +1170,28 @@ test "inboundToWhatsAppMessage fromMe self-chat LID and peer PN DM" {
     defer mention_msg.deinit();
     try std.testing.expectEqual(@as(usize, 1), mention_msg.mentioned_jids.items.len);
     try std.testing.expectEqualStrings("216638251077681@lid", mention_msg.mentioned_jids.items[0]);
+
+    peer.quoted_stanza_id = try allocator.dupe(u8, "MSGID");
+    peer.quoted_participant = try allocator.dupe(u8, "p@lid");
+    peer.quoted_text = try allocator.dupe(u8, "hello");
+    peer.location = .{ .lat = 12.5, .lon = 77.25 };
+    peer.kind = .location;
+    var quote_msg = try inboundToWhatsAppMessage(allocator, peer, own_jid, own_e164);
+    defer quote_msg.deinit();
+    try std.testing.expect(quote_msg.reply_context != null);
+    try std.testing.expectEqualStrings("MSGID", quote_msg.reply_context.?.message_id);
+    try std.testing.expectEqualStrings("p@lid", quote_msg.reply_context.?.participant.?);
+    try std.testing.expectEqualStrings("hello", quote_msg.reply_context.?.quoted_message.?);
+    try std.testing.expect(quote_msg.location != null);
+    try std.testing.expectEqual(types.MessageType.location, quote_msg.message_type);
+
+    peer.kind = .reaction;
+    allocator.free(peer.text);
+    peer.text = try allocator.dupe(u8, "👍");
+    var rxn_msg = try inboundToWhatsAppMessage(allocator, peer, own_jid, own_e164);
+    defer rxn_msg.deinit();
+    try std.testing.expectEqual(types.MessageType.reaction, rxn_msg.message_type);
+    try std.testing.expectEqualStrings("👍", rxn_msg.body);
 }
 
 fn fuzzParseInbound(_: void, smith: *std.testing.Smith) !void {

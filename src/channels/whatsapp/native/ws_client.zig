@@ -210,9 +210,40 @@ pub fn connectTls(
     _ = allocator;
     // DNS + TCP connect via Io.net.HostName path.
     const hn = try std.Io.net.HostName.init(host);
-    // Use HostName.connect which races happy-eyeballs.
-    const stream = try hn.connect(io, port, .{ .mode = .stream, .protocol = .tcp });
-    return stream;
+    // IPv6 SYN to WhatsApp from this host stalls forever; Zig 0.16 connect
+    // timeout panics (`netConnectIpPosix`). Look up A records and connect IPv4.
+    var name_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+    var lookup_buf: [16]std.Io.net.HostName.LookupResult = undefined;
+    var lookup_q: std.Io.Queue(std.Io.net.HostName.LookupResult) = .init(&lookup_buf);
+    var lookup_fut = io.async(std.Io.net.HostName.lookup, .{
+        hn,
+        io,
+        &lookup_q,
+        std.Io.net.HostName.LookupOptions{
+            .port = port,
+            .canonical_name_buffer = &name_buf,
+            .family = .ip4,
+        },
+    });
+    defer lookup_fut.cancel(io) catch {};
+    var last_err: anyerror = error.UnknownHostName;
+    while (lookup_q.getOne(io)) |dns_result| {
+        switch (dns_result) {
+            .address => |address| {
+                if (address.connect(io, .{ .mode = .stream, .protocol = .tcp })) |stream| {
+                    return stream;
+                } else |err| {
+                    last_err = err;
+                }
+            },
+            .canonical_name => {},
+        }
+    } else |err| switch (err) {
+        error.Canceled => return err,
+        error.Closed => {},
+    }
+    lookup_fut.await(io) catch |err| return err;
+    return last_err;
 }
 
 /// Compute Sec-WebSocket-Accept per RFC6455 §4.2.2.

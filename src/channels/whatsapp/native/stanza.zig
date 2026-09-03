@@ -236,6 +236,22 @@ pub fn encodePresence(allocator: std.mem.Allocator, presence_type: []const u8, n
     return binary.marshal(allocator, p);
 }
 
+/// Memory: caller frees. `<chatstate to=jid><composing|paused/></chatstate>`.
+pub fn encodeChatState(allocator: std.mem.Allocator, to: []const u8, state: []const u8) ![]u8 {
+    const tag = if (std.mem.eql(u8, state, "composing") or std.mem.eql(u8, state, "recording"))
+        "composing"
+    else
+        "paused";
+    var child = binary.Node.init(allocator, tag);
+    defer child.deinit();
+    if (std.mem.eql(u8, state, "recording")) try child.attrs.put("media", "audio");
+    var cs = binary.Node.init(allocator, "chatstate");
+    defer cs.deinit();
+    try cs.attrs.put("to", to);
+    cs.content = .{ .nodes = (&child)[0..1] };
+    return binary.marshal(allocator, cs);
+}
+
 pub const PreKeyPub = struct { id: u32, pub_key: [32]u8 };
 
 /// Memory: caller frees. whatsmeow uploadPreKeys: registration 4B BE, type 0x05, identity 32B raw, list of key, skey.
@@ -1332,4 +1348,21 @@ test "encodeMediaConnIq and parseMediaConn" {
     try std.testing.expectEqualStrings("AUTHTOKEN", parsed.auth);
     try std.testing.expectEqualStrings("mmg.whatsapp.net", parsed.hostname);
     try std.testing.expectEqual(@as(u32, 600), parsed.ttl);
+}
+
+test "encodeChatState composing and paused" {
+    const alloc = std.testing.allocator;
+    const composing = try encodeChatState(alloc, "1555@s.whatsapp.net", "composing");
+    defer alloc.free(composing);
+    var n1 = try binary.decodeNode(alloc, composing);
+    defer n1.deinit();
+    try std.testing.expectEqualStrings("chatstate", n1.tag);
+    try std.testing.expectEqualStrings("1555@s.whatsapp.net", n1.getAttr("to").?);
+    try std.testing.expect(n1.getChildByTag("composing") != null);
+
+    const paused = try encodeChatState(alloc, "1555@s.whatsapp.net", "paused");
+    defer alloc.free(paused);
+    var n2 = try binary.decodeNode(alloc, paused);
+    defer n2.deinit();
+    try std.testing.expect(n2.getChildByTag("paused") != null);
 }

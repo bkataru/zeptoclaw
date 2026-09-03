@@ -402,8 +402,8 @@ pub const ConfigLoader = struct {
             .whatsapp_media_max_mb = 50,
             .whatsapp_debounce_ms = 0,
             .whatsapp_send_read_receipts = true,
-            // Native stack does not parse mentionedJid yet, so a mention gate
-            // never passes. Wake-word gate still applies per allowlisted group.
+            // Wake word or @mention both trigger in allowlisted groups. Requiring
+            // mention-only would drop "yo barvis" (no ContextInfo) which Dirmacs uses.
             .whatsapp_group_require_mention = false,
             .whatsapp_group_activation_commands = whatsapp_group_activation_commands,
         };

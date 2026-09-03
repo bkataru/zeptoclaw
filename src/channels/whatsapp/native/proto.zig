@@ -36,6 +36,20 @@ pub fn writeSfixed32(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, fiel
     try buf.appendSlice(allocator, &bytes);
 }
 
+pub fn writeDouble(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, field: u32, v: f64) !void {
+    try writeTag(buf, allocator, field, 1);
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bytes, @bitCast(v), .little);
+    try buf.appendSlice(allocator, &bytes);
+}
+
+fn readDouble(data: []const u8, idx: *usize) !f64 {
+    if (idx.* + 8 > data.len) return error.EndOfStream;
+    const bits = std.mem.readInt(u64, data[idx.*..][0..8], .little);
+    idx.* += 8;
+    return @bitCast(bits);
+}
+
 pub fn readVarint(data: []const u8, idx: *usize) !u64 {
     var res: u64 = 0;
     var shift: u6 = 0;
@@ -744,23 +758,51 @@ fn nestedVarintField(data: []const u8, field: u32) ?u32 {
     return null;
 }
 
-/// ContextInfo.mentionedJid is field 15 (repeated string). ContextInfo sits
-/// at field 17 on ExtendedText / Image / Video / Audio / Document / Sticker.
-fn collectContextMentions(inner: []const u8, out: *Message) void {
+pub const Geo = struct { lat: f64, lon: f64 };
+
+/// ContextInfo sits at field 17 on ExtendedText / Image / Video / Audio / Document / Sticker.
+/// stanzaId=1, participant=2, quotedMessage=3, mentionedJid=15.
+fn collectContextInfo(inner: []const u8, out: *Message) void {
     const ctx = nestedStringField(inner, 17) orelse return;
     var idx: usize = 0;
     while (idx < ctx.len) {
-        const t = nextTag(ctx, &idx) catch break;
-        if (t.field == 15 and t.wire == 2) {
+        const tag = nextTag(ctx, &idx) catch break;
+        if (tag.field == 1 and tag.wire == 2) {
+            out.quoted_stanza_id = readBytes(ctx, &idx) catch break;
+        } else if (tag.field == 2 and tag.wire == 2) {
+            out.quoted_participant = readBytes(ctx, &idx) catch break;
+        } else if (tag.field == 3 and tag.wire == 2) {
+            const quoted = readBytes(ctx, &idx) catch break;
+            const qm = Message.decode(quoted) catch continue;
+            out.quoted_text = qm.text();
+        } else if (tag.field == 15 and tag.wire == 2) {
             const jid = readBytes(ctx, &idx) catch break;
             if (out.mentioned_jid_count < out.mentioned_jids.len) {
                 out.mentioned_jids[out.mentioned_jid_count] = jid;
                 out.mentioned_jid_count += 1;
             }
         } else {
-            skipField(ctx, &idx, t.wire) catch break;
+            skipField(ctx, &idx, tag.wire) catch break;
         }
     }
+}
+
+fn parseLocation(inner: []const u8) ?Geo {
+    var lat: ?f64 = null;
+    var lon: ?f64 = null;
+    var idx: usize = 0;
+    while (idx < inner.len) {
+        const tag = nextTag(inner, &idx) catch break;
+        if (tag.field == 1 and tag.wire == 1) {
+            lat = readDouble(inner, &idx) catch break;
+        } else if (tag.field == 2 and tag.wire == 1) {
+            lon = readDouble(inner, &idx) catch break;
+        } else {
+            skipField(inner, &idx, tag.wire) catch break;
+        }
+    }
+    if (lat == null or lon == null) return null;
+    return .{ .lat = lat.?, .lon = lon.? };
 }
 
 fn overlayMessage(dst: *Message, src: Message) void {
@@ -777,6 +819,11 @@ fn overlayMessage(dst: *Message, src: Message) void {
         dst.mentioned_jids = src.mentioned_jids;
         dst.mentioned_jid_count = src.mentioned_jid_count;
     }
+    if (dst.quoted_stanza_id == null) dst.quoted_stanza_id = src.quoted_stanza_id;
+    if (dst.quoted_participant == null) dst.quoted_participant = src.quoted_participant;
+    if (dst.quoted_text == null) dst.quoted_text = src.quoted_text;
+    if (dst.location == null) dst.location = src.location;
+    if (dst.poll_name == null) dst.poll_name = src.poll_name;
 }
 
 /// Per-kind field numbers verified against whatsmeow WAWebProtobufsE2E.proto
@@ -1085,6 +1132,11 @@ pub const Message = struct {
     reaction: ?struct { key: MessageKey, text: []const u8 } = null,
     mentioned_jids: [16][]const u8 = [_][]const u8{&[_]u8{}} ** 16,
     mentioned_jid_count: u8 = 0,
+    quoted_stanza_id: ?[]const u8 = null,
+    quoted_participant: ?[]const u8 = null,
+    quoted_text: ?[]const u8 = null,
+    location: ?Geo = null,
+    poll_name: ?[]const u8 = null,
 
     fn decodeFields(data: []const u8, unwrap: bool) !Message {
         var out = Message{};
@@ -1120,7 +1172,16 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.image, inner);
                     if (nestedStringField(inner, 3)) |c| out.caption = c;
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
+                },
+                5 => {
+                    if (t.wire != 2) {
+                        try skipField(data, &idx, t.wire);
+                        continue;
+                    }
+                    const inner = try readBytes(data, &idx);
+                    out.location = parseLocation(inner);
+                    collectContextInfo(inner, &out);
                 },
                 6 => {
                     if (t.wire != 2) {
@@ -1129,7 +1190,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.extended_text = nestedStringField(inner, 1);
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
                 },
                 7 => {
                     if (t.wire != 2) {
@@ -1139,7 +1200,7 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.document, inner);
                     if (nestedStringField(inner, 20)) |c| out.caption = c;
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
                 },
                 8 => {
                     if (t.wire != 2) {
@@ -1148,7 +1209,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.audio, inner);
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
                 },
                 9 => {
                     if (t.wire != 2) {
@@ -1158,7 +1219,7 @@ pub const Message = struct {
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.video, inner);
                     if (nestedStringField(inner, 7)) |c| out.caption = c;
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
                 },
                 12 => {
                     if (t.wire != 2) {
@@ -1175,7 +1236,7 @@ pub const Message = struct {
                     }
                     const inner = try readBytes(data, &idx);
                     out.media = parseMediaInner(.sticker, inner);
-                    collectContextMentions(inner, &out);
+                    collectContextInfo(inner, &out);
                 },
                 31 => {
                     if (t.wire != 2) {
@@ -1218,6 +1279,15 @@ pub const Message = struct {
                     }
                     out.reaction = .{ .key = key, .text = rxn_text };
                 },
+                51 => {
+                    if (t.wire != 2) {
+                        try skipField(data, &idx, t.wire);
+                        continue;
+                    }
+                    const inner = try readBytes(data, &idx);
+                    out.poll_name = nestedStringField(inner, 2);
+                    collectContextInfo(inner, &out);
+                },
                 else => try skipField(data, &idx, t.wire),
             }
         }
@@ -1239,7 +1309,7 @@ pub const Message = struct {
     }
 
     pub fn text(self: Message) ?[]const u8 {
-        return self.conversation orelse self.extended_text orelse self.caption;
+        return self.conversation orelse self.extended_text orelse self.caption orelse self.poll_name;
     }
 
     /// Memory: caller frees. Message{conversation=1}.
@@ -1247,6 +1317,59 @@ pub const Message = struct {
         var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
         errdefer buf.deinit(allocator);
         try writeBytes(&buf, allocator, 1, text_val);
+        return buf.toOwnedSlice(allocator);
+    }
+
+    pub const TextOpts = struct {
+        mentions: []const []const u8 = &.{},
+        quoted_stanza_id: ?[]const u8 = null,
+        quoted_participant: ?[]const u8 = null,
+        quoted_text: ?[]const u8 = null,
+    };
+
+    /// conversation=1 when there is no context; otherwise extendedTextMessage=6
+    /// with ContextInfo (stanzaId=1, participant=2, quotedMessage=3, mentionedJid=15).
+    /// Memory: caller frees.
+    pub fn encodeTextWith(allocator: std.mem.Allocator, text_val: []const u8, opts: TextOpts) ![]u8 {
+        const has_quote = if (opts.quoted_stanza_id) |id| id.len > 0 else false;
+        if (opts.mentions.len == 0 and !has_quote) return encodeText(allocator, text_val);
+
+        var ctx = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer ctx.deinit(allocator);
+        if (has_quote) {
+            try writeBytes(&ctx, allocator, 1, opts.quoted_stanza_id.?);
+            if (opts.quoted_participant) |part| if (part.len > 0) try writeBytes(&ctx, allocator, 2, part);
+            if (opts.quoted_text) |qt| if (qt.len > 0) {
+                var qmsg = try std.ArrayList(u8).initCapacity(allocator, 0);
+                defer qmsg.deinit(allocator);
+                try writeBytes(&qmsg, allocator, 1, qt);
+                try writeBytes(&ctx, allocator, 3, qmsg.items);
+            };
+        }
+        for (opts.mentions) |mjid| {
+            if (mjid.len > 0) try writeBytes(&ctx, allocator, 15, mjid);
+        }
+
+        var inner = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer inner.deinit(allocator);
+        try writeBytes(&inner, allocator, 1, text_val);
+        if (ctx.items.len > 0) try writeBytes(&inner, allocator, 17, ctx.items);
+
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 6, inner.items);
+        return buf.toOwnedSlice(allocator);
+    }
+
+    /// Memory: caller frees. Message{locationMessage=5{degreesLatitude=1, degreesLongitude=2}}.
+    pub fn encodeLocation(allocator: std.mem.Allocator, lat: f64, lon: f64) ![]u8 {
+        var inner = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer inner.deinit(allocator);
+        try writeDouble(&inner, allocator, 1, lat);
+        try writeDouble(&inner, allocator, 2, lon);
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        errdefer buf.deinit(allocator);
+        try writeBytes(&buf, allocator, 5, inner.items);
         return buf.toOwnedSlice(allocator);
     }
 
@@ -1319,6 +1442,7 @@ pub const Message = struct {
         file_len: u64,
         media_key_timestamp: i64,
         file_name: ?[]const u8 = null,
+        ptt: bool = false,
     };
 
     /// Memory: caller frees. Image/video/audio/document/sticker Message.
@@ -1354,6 +1478,7 @@ pub const Message = struct {
                 try writeBytes(&inner, allocator, 2, m.mimetype);
                 try writeBytes(&inner, allocator, 3, m.file_sha256);
                 try writeVarintField(&inner, allocator, 4, m.file_len);
+                if (m.ptt) try writeBoolField(&inner, allocator, 6, true);
                 try writeBytes(&inner, allocator, 7, m.media_key);
                 try writeBytes(&inner, allocator, 8, m.file_enc_sha256);
                 try writeBytes(&inner, allocator, 9, m.direct_path);
@@ -1539,6 +1664,50 @@ test "Message decode extendedText mentionedJid" {
     try std.testing.expectEqual(@as(u8, 2), msg.mentioned_jid_count);
     try std.testing.expectEqualStrings("216638251077681@lid", msg.mentioned_jids[0]);
     try std.testing.expectEqualStrings("917019895010@s.whatsapp.net", msg.mentioned_jids[1]);
+}
+
+test "Message encodeTextWith mentions and quote roundtrip" {
+    const alloc = std.testing.allocator;
+    const mentions = [_][]const u8{ "216638251077681@lid", "917019895010@s.whatsapp.net" };
+    const blob = try Message.encodeTextWith(alloc, "@barvis yo?", .{
+        .mentions = &mentions,
+        .quoted_stanza_id = "MSGID",
+        .quoted_participant = "p@lid",
+        .quoted_text = "hello",
+    });
+    defer alloc.free(blob);
+    const msg = try Message.decode(blob);
+    try std.testing.expectEqualStrings("@barvis yo?", msg.extended_text.?);
+    try std.testing.expectEqual(@as(u8, 2), msg.mentioned_jid_count);
+    try std.testing.expectEqualStrings("216638251077681@lid", msg.mentioned_jids[0]);
+    try std.testing.expectEqualStrings("MSGID", msg.quoted_stanza_id.?);
+    try std.testing.expectEqualStrings("p@lid", msg.quoted_participant.?);
+    try std.testing.expectEqualStrings("hello", msg.quoted_text.?);
+}
+
+test "Message decode location" {
+    const alloc = std.testing.allocator;
+    var inner = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer inner.deinit(alloc);
+    try writeDouble(&inner, alloc, 1, 12.5);
+    try writeDouble(&inner, alloc, 2, 77.25);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 5, inner.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expect(msg.location != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 12.5), msg.location.?.lat, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 77.25), msg.location.?.lon, 1e-9);
+}
+
+test "Message encodeLocation roundtrip" {
+    const alloc = std.testing.allocator;
+    const enc = try Message.encodeLocation(alloc, 12.5, 77.25);
+    defer alloc.free(enc);
+    const msg = try Message.decode(enc);
+    try std.testing.expect(msg.location != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 12.5), msg.location.?.lat, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 77.25), msg.location.?.lon, 1e-9);
 }
 
 test "Message encodeReaction roundtrip" {

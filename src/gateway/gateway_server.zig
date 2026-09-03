@@ -401,17 +401,35 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     }
     const mentioned_self = InboundProcessor.mentionsAny(eff_msg, ident_buf[0..ident_n]);
     const is_main_target = std.ascii.indexOfIgnoreCase(body_copy, "barvis") != null or mentioned_self;
-    const media_dm = eff_msg.chat_type == .direct and eff_msg.message_type != .text;
     const is_dm = eff_msg.chat_type == .direct;
-    core_tools.setExecEnabled(is_dm and eff_msg.from_me);
+    const media_dm = is_dm and eff_msg.hasMedia();
+    const is_self_chat = zeptoclaw.channels.whatsapp.engagement.isSelfChat(chat_id_copy, ident_buf[0..ident_n]);
+    core_tools.setExecEnabled(is_dm and eff_msg.from_me and is_self_chat);
     defer core_tools.setExecEnabled(true);
     const triggered = is_main_target or media_dm;
-    if (triggered) zeptoclaw.channels.whatsapp.engagement.subscribe(chat_id_copy);
-    // No trigger and not subscribed: keep journal only (still listening, no NIM).
-    if (!triggered and !zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy)) {
-        std.log.info("[whatsapp] listening only (unsubscribed) chat={s}", .{chat_id_copy});
-        g_whatsapp_mu.unlock(compat.getIo());
-        return;
+    const event_only = eff_msg.message_type == .reaction or eff_msg.message_type == .poll;
+    const gate = zeptoclaw.channels.whatsapp.engagement.decideTurn(
+        is_dm,
+        eff_msg.from_me,
+        is_self_chat,
+        triggered,
+        zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy) and !event_only,
+    );
+    switch (gate) {
+        .skip_peer_from_me => {
+            zeptoclaw.channels.whatsapp.engagement.unsubscribe(chat_id_copy);
+            std.log.info("[whatsapp] skip fromMe peer DM chat={s}", .{chat_id_copy});
+            g_whatsapp_mu.unlock(compat.getIo());
+            return;
+        },
+        .listening => {
+            std.log.info("[whatsapp] listening only (unsubscribed) chat={s}", .{chat_id_copy});
+            g_whatsapp_mu.unlock(compat.getIo());
+            return;
+        },
+        .run => {
+            if (triggered) zeptoclaw.channels.whatsapp.engagement.subscribe(chat_id_copy);
+        },
     }
 
     const slot = burstSlot(chat_id_copy);
