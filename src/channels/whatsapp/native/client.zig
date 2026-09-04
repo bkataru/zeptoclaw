@@ -1992,6 +1992,20 @@ pub const Client = struct {
         return self.sendGroupPlaintext(to, msg_plain, null);
     }
 
+    /// In LID-addressed groups every SKDM target must use LID form: phones drop
+    /// PN-addressed `to` nodes in LID groups, so our own phone never decrypts
+    /// group replies. Peers already arrive as LID (usync queries their LID in
+    /// lid mode); only self comes back as PN, so mirror self to own_lid.
+    /// Caller owns `devices` strings; rewritten entries are replaced in place.
+    fn mirrorSelfToLid(alloc: std.mem.Allocator, devices: *std.ArrayList([]u8), own_pn_user: []const u8, own_lid: []const u8) !void {
+        for (devices.items, 0..) |d, i| {
+            if (jid.isLid(d)) continue;
+            if (!std.mem.eql(u8, jid.user(d), own_pn_user)) continue;
+            const lid_j = try jid.format(alloc, jid.user(own_lid), jid.device(d), jid.server(own_lid));
+            alloc.free(d);
+            devices.items[i] = lid_j;
+        }
+    }
     fn sendGroupPlaintext(self: *Client, to: []const u8, msg_plain: []const u8, edit: ?[]const u8) ![]u8 {
         if (!self.isConnected()) return error.NotConnected;
         if (!std.mem.eql(u8, jid.server(to), "g.us")) return error.NotGroupJid;
@@ -2088,7 +2102,10 @@ pub const Client = struct {
             const dj = try jid.format(alloc, jid.user(e.user_jid), e.device, jid.server(e.user_jid));
             try devices.append(alloc, dj);
         }
+
         if (devices.items.len == 0) return error.NoDevices;
+        if (own_lid != null and std.mem.eql(u8, info.addressing_mode, "lid"))
+            try mirrorSelfToLid(alloc, &devices, jid.user(own), own_lid.?);
         std.log.info("[whatsapp-native] group send to={s} mode={s} parts={d} usync={d} devices={d}", .{ to, info.addressing_mode, info.participants.len, entries.len, devices.items.len });
         for (devices.items) |d| std.log.info("[whatsapp-native] group send device {s}", .{d});
 
@@ -2790,6 +2807,22 @@ test "group SKDM targets own phone but not the sending device" {
     }
     try std.testing.expect(saw_phone);
     try std.testing.expect(saw_peer);
+}
+
+test "mirrorSelfToLid rewrites only self PN devices, keeps device numbers" {
+    const alloc = std.testing.allocator;
+    var devices: std.ArrayList([]u8) = .empty;
+    defer {
+        for (devices.items) |d| alloc.free(d);
+        devices.deinit(alloc);
+    }
+    try devices.append(alloc, try alloc.dupe(u8, "917019895010@s.whatsapp.net"));
+    try devices.append(alloc, try alloc.dupe(u8, "917019895010:56@s.whatsapp.net"));
+    try devices.append(alloc, try alloc.dupe(u8, "19082673946862:65@lid"));
+    try Client.mirrorSelfToLid(alloc, &devices, "917019895010", "216638251077681:59@lid");
+    try std.testing.expectEqualStrings("216638251077681@lid", devices.items[0]);
+    try std.testing.expectEqualStrings("216638251077681:56@lid", devices.items[1]);
+    try std.testing.expectEqualStrings("19082673946862:65@lid", devices.items[2]);
 }
 
 test "client unpaired payload has pairing data" {
