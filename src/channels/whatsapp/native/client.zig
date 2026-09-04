@@ -1903,9 +1903,14 @@ pub const Client = struct {
             try self.state_mu.lock(io);
             defer self.state_mu.unlock(io);
             for (device_jids) |dj| {
-                const own_dev = std.mem.eql(u8, jid.user(dj), jid.user(own)) or
-                    (own_lid != null and std.mem.eql(u8, jid.user(dj), jid.user(own_lid.?)));
-                if (own_dev) continue;
+                // Skip only the sending device itself. Own-user *other* devices
+                // (phone :0, companions) must still get the SKDM or they can
+                // never decrypt our group messages — the old user-wide skip
+                // made our own group replies invisible on our own phone.
+                // PN and LID are different namespaces; match per namespace.
+                const self_pn = jid.isPn(dj) and std.mem.eql(u8, jid.user(dj), jid.user(own)) and jid.device(dj) == jid.device(own);
+                const self_lid = jid.isLid(dj) and own_lid != null and std.mem.eql(u8, jid.user(dj), jid.user(own_lid.?)) and jid.device(dj) == jid.device(own_lid.?);
+                if (self_pn or self_lid) continue;
                 const ej = try self.encryptionJid(dj, null);
                 try targets.append(alloc, ej);
                 const s = try jid.signalId(alloc, ej);
@@ -2733,6 +2738,43 @@ test "dispatch: group skmsg with SKDM becomes a group message event" {
     defer n3.deinit();
     try stampGroupEcho(&n3, group, "111:0@s.whatsapp.net");
     try std.testing.expect((try bob.dispatch(n3, send.frame)) == .idle);
+}
+
+test "group SKDM targets own phone but not the sending device" {
+    const alloc = std.testing.allocator;
+    var alice = Client.init(alloc);
+    defer alice.deinit();
+    var phone = Client.init(alloc);
+    defer phone.deinit();
+    var bob = Client.init(alloc);
+    defer bob.deinit();
+    try alice.setOwnJid("111:58@s.whatsapp.net");
+    try phone.setOwnJid("111:0@s.whatsapp.net");
+    try bob.setOwnJid("222:7@s.whatsapp.net");
+    try alice.processPreKeyBundle("111:0@s.whatsapp.net", phone.preKeyBundle());
+    try alice.processPreKeyBundle("222:7@s.whatsapp.net", bob.preKeyBundle());
+    const devices = [_][]const u8{
+        "111:0@s.whatsapp.net",
+        "111:58@s.whatsapp.net",
+        "222:7@s.whatsapp.net",
+    };
+    const send = try alice.buildGroupText("120363421845733873@g.us", "", &devices, "hi group");
+    defer alloc.free(send.frame);
+    defer alloc.free(send.id);
+    var node = try binary.decodeNode(alloc, send.frame);
+    defer node.deinit();
+    const participants = node.getChildByTag("participants") orelse return error.TestUnexpectedResult;
+    var saw_phone = false;
+    var saw_peer = false;
+    for (participants.children()) |*to| {
+        const j = to.getAttr("jid") orelse continue;
+        // Device 0 normalizes to bare user form on the wire.
+        if (std.mem.eql(u8, j, "111@s.whatsapp.net") or std.mem.eql(u8, j, "111:0@s.whatsapp.net")) saw_phone = true;
+        if (std.mem.eql(u8, j, "222:7@s.whatsapp.net")) saw_peer = true;
+        try std.testing.expect(!std.mem.eql(u8, j, "111:58@s.whatsapp.net"));
+    }
+    try std.testing.expect(saw_phone);
+    try std.testing.expect(saw_peer);
 }
 
 test "client unpaired payload has pairing data" {
