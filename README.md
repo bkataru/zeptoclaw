@@ -6,16 +6,19 @@
 
 ## Build Status
 
-**Unreleased on v0.3.0** (2026-09-04). Native WhatsApp is the only transport. `zig build test --summary all`: 446 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.4.0** (2026-09-04). Native WhatsApp is the only transport. `zig build test --summary all`: 468 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
-- **Native WhatsApp client** (2026-09-03, sole transport): a multi-device Signal/whatsmeow-style port under `channels/whatsapp/native/`. DM and group text, inbound/outbound media, presence, reactions, polls, and read receipts all go through it
-- **usync silent-drop fix**: the binary encoder wrote JID attributes as plain text instead of the `JIDPair`/`ADJID` binary tags the server needs. usync now resolves in about 300ms instead of timing out
-- **LID self-chat delivery fix**: WhatsApp delivers 1:1 chats on the recipient's LID, not the phone number. `sendText` now resolves phone-number/LID pairs from `lid_map` and sets `peer_recipient_pn`
-- **Automatic retry-receipt recovery**: on a `<receipt type=retry>`, the native client drops the stale session, fetches a fresh prekey bundle, and resends with the same message id (capped at 5 resends per message). `zeptoclaw-wa-send` forces a fresh handshake by hand
+- **Native-only WhatsApp** (0.4.0): the Node child, root `package.json`, and all Node spawn/JSON-RPC paths are gone. Pair with `zeptoclaw whatsapp pair`, which now works without `NVIDIA_API_KEY`
+- **Group replies reach your phone** (0.4.0): group sends query usync for own devices and include them in the SKDM fanout. A group @mention of the bot also triggers a turn
+- **Outbound edits and revokes** (0.4.0): the stanza carries `edit` (`1` / `7` / `8`); inbound edits decode. A group retry receipt resends SKDM plus skmsg (cap 5 per message)
+- **Self-heal re-pair** (0.4.0): a 401 logout starts QR re-pair instead of leaving a dead session
+- **usync fix**: the binary encoder wrote JID attributes as plain text instead of the `JIDPair`/`ADJID` tags the server needs. usync now resolves in about 300ms instead of timing out
+- **LID self-chat fix**: 1:1 chats arrive on the recipient LID, not the phone number. `sendText` resolves PN/LID pairs from `lid_map` and sets `peer_recipient_pn`
+- **Automatic retry-receipt recovery**: on a `<receipt type=retry>`, the client drops the stale session, fetches a fresh prekey bundle, and resends with the same message id (cap 5 per message). `zeptoclaw-wa-send` forces a fresh handshake by hand
 - **`POST /reload`**: hot-reloads `allowFrom`, `dmPolicy`, and `groupPolicy` without restarting the gateway
-- **`exec` gating**: the `exec` tool now runs only on an operator `fromMe` WhatsApp DM. A partner DM cannot invoke it
+- **`exec` gating**: the `exec` tool runs only on an operator `fromMe` DM. A partner DM cannot invoke it
 - **Agent loop on WhatsApp** (2026-08-22): gateway inbound goes through `Agent.runTurn` (workspace markdown + tools + NIM), not `NIMClient.chat` once
 - **Memory**: daily journals `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (full `[in]`/`[out]`, no 2000-char clip). Tools `memory_get` / `memory_search` / `memory_append` / `memory_edit`. `zeptoclaw memory update` every 30 min (decide then synthesize). `zeptoclaw memory compact` every 2 h (densify MEMORY.md, does not dump journals)
 - **WhatsApp reliability**: inbound ledger (wire id + 3 min fingerprint), LID/`fromMe` allowlist DMs, handler off the poll thread, auto-reconnect on disconnect (not `loggedOut`)
@@ -41,9 +44,9 @@
 | Metric | Value |
 |--------|-------|
 | **Zig source files** | 119 |
-| **Lines of code** | ~44.7k in `src/` |
+| **Lines of code** | ~46.6k in `src/` |
 | **Build errors** | 0 |
-| **Tests** | 419 |
+| **Tests** | 471 (468 pass, 3 skip) |
 | **Binaries** | 6 |
 | **Skills ported** | 21 |
 
@@ -226,27 +229,19 @@ src/
 | **Providers** | LLM provider abstraction (NVIDIA NIM) |
 | **Channels** | I/O abstraction (CLI, WhatsApp, etc.) |
 | **Tools** | UTCP registry + core_tools (`read`/`write`/`edit`/`exec`/`memory_*`) |
-| **Memory** | Journals on disk; ingest `memory update`; compact `memory compact` |
-| **Skills** | 21 ported skills from OpenClaw |
-
-## Systemd Services
-
-10 systemd service and timer files are provided for automated operation:
+Unit templates live in `systemd/` and `contrib/systemd/` (no secrets):
 
 | Service | Description | Port |
 |---------|-------------|------|
 | `zeptoclaw-gateway.service` | Main gateway server | 18789 |
 | `zeptoclaw-webhook.service` | Webhook server | 9000 |
-| `zeptoclaw-shell2http.service` | Shell2HTTP server | 9001 |
-| `gateway-watchdog.service` | Gateway health monitor | - |
-| `whatsapp-responder.service` | WhatsApp message handler | - |
-| `moltbook-heartbeat.service` | Moltbook heartbeat | - |
-| `gateway-watchdog.timer` | Monitor gateway (every 2 min) | - |
-| `whatsapp-responder.timer` | Process messages (every 15 min) | - |
-| `moltbook-heartbeat.timer` | Heartbeat (every 30 min) | - |
+| `zeptoclaw-shell2http.service` | Shell-over-HTTP server | 9001 |
+| `gateway-watchdog.service` + timer | Gateway health monitor (every 2 min) | - |
+| `whatsapp-responder.service` + timer | Leftover; live replies come from the gateway | - |
+| `moltbook-heartbeat.service` + timer | Moltbook heartbeat (every 30 min) | - |
 | `workspace-sync.timer` | Workspace sync (every 30 min) | - |
-| `barvis-memory-update.timer` | `zeptoclaw memory compact` (every 2 h) | - |
-| `zeptoclaw-fuzz.timer` | Optional daily parser havoc | - |
+| `barvis-memory-update.service` + timer | `zeptoclaw memory compact` (every 2 h; in `contrib/`) | - |
+| `zeptoclaw-fuzz.timer` | Optional daily parser havoc (in `contrib/`) | - |
 
 Repo templates have **no secrets**. Put `NVIDIA_API_KEY` and `GATEWAY_AUTH_TOKEN` on the local user unit (e.g. `~/.config/systemd/user/zeptoclaw-gateway.service`). If `systemctl --user restart` hangs: `systemctl --user kill` plus `pkill` the gateway, then `start`.
 
@@ -500,21 +495,12 @@ MIT - Same as the rest of the Claw family.
 
 ---
 
-## Recent Commits
+## History
 
-The following changes were recently committed to complete the Zig 0.16.0 migration:
-
-1. **fix: Implement Config.deinit() to free allocated fields** - Prevents memory leaks by freeing all allocated Config fields
-2. **fix: Correct fallback_models allocation in migration config** - Fixes static slice allocation issues
-3. **fix: Resolve memory leaks in provider test fixtures** - Adds proper cleanup in tests
-4. **fix: Correct ArrayList API usage in provider modules** - Fixes append() and toOwnedSlice() calls
-5. **fix: Fix ArrayList.toOwnedSlice() in WhatsApp channel** - Ensures API compliance across channel files
-6. **fix: Update knowledge_base skill for Zig 0.16.0 compatibility** - Updates skill for latest Zig version
-
-Later work (August 2026) wired WhatsApp through `runTurn`, hardened the inbound ledger, added pending/burst/vision, and parser fuzz. History was rewritten to drop live tokens and junk blobs; clones should follow current `main`. In September 2026 the native WhatsApp client became the sole transport; it fixed a usync silent-drop and a LID self-chat delivery bug, and added automatic retry-receipt recovery.
+August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
 
 ---
 
-**Status:** v0.3.0 tagged. WhatsApp `runTurn` + journals + memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
+**Status:** v0.4.0 tagged. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair. WhatsApp `runTurn` plus journals plus memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

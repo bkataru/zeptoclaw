@@ -19,6 +19,6 @@ Important fields:
 }
 ```
 
-Prefer env for secrets (`NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`). Memory oneshots also read `~/.config/zeptoclaw/nim.env`. Restart the gateway after edits. Do not store live tokens in the git tree.
+Prefer env for secrets (`NVIDIA_API_KEY`, `GATEWAY_AUTH_TOKEN`). Memory oneshots also read `~/.config/zeptoclaw/nim.env`. `allowFrom`, `dmPolicy`, and `groupPolicy` edits apply through `POST /reload` with no restart. Other edits need a gateway restart. Do not store live tokens in the git tree.
 
 Persona and journals: `~/.zeptoclaw/workspace`. See `docs/memory.md`.

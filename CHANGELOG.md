@@ -2,14 +2,16 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-09-04
+
 ### WhatsApp
 
-- Native Zig client is the only WhatsApp transport. Pair with `zeptoclaw whatsapp pair`. Session store: `{auth_dir}/native.sqlite`.
-- Inbound `ContextInfo.mentionedJid` is decoded and copied onto `WhatsAppMessage`. A group @mention of the bot's PN/LID/device JID triggers a turn in addition to the `barvis` wake word.
-- Native outbound: media upload, reactions, revokes, edits, polls, location, presence, and read receipts. Group metadata IQ is used for group send and `getGroupMetadata`.
-- Inbound edits decode `ProtocolMessage.editedMessage` at field 14 (WAProto) and unwrap `Message.editedMessage` (field 58). Caption-less media no longer fingerprint-collides.
-- Group `<receipt type=retry>` resends as SKDM+skmsg. Outbound edits/revokes set the stanza `edit` attr (`1` / `7` / `8`).
-- Removed the Node WhatsApp child, root `package.json`, and all remaining Node spawn/JSON-RPC paths.
+- Native Zig client is the only transport. The Node child, root `package.json`, and all Node spawn/JSON-RPC paths are gone. Pair with `zeptoclaw whatsapp pair`, which now works without `NVIDIA_API_KEY`. Session store: `{auth_dir}/native.sqlite`.
+- A group @mention of the bot's PN/LID/device JID triggers a turn, in addition to the `barvis` wake word. Inbound `ContextInfo.mentionedJid` is decoded onto `WhatsAppMessage`.
+- Outbound edits and revokes set the stanza `edit` attr (`1` / `7` / `8`). Inbound edits decode `ProtocolMessage.editedMessage` at field 14 and unwrap `Message.editedMessage` at field 58. Caption-less media no longer fingerprint-collides.
+- Group `<receipt type=retry>` resends SKDM plus skmsg. Group sends now query usync for own devices and include them in the SKDM fanout, so the sender's own phone decrypts group replies.
+- A 401 logout triggers self-healing QR re-pair instead of leaving a dead session.
+- Outbound media upload, reactions, polls, location, presence, and read receipts all use the native client. Group metadata IQ backs group send and `getGroupMetadata`.
 
 
 ## 0.3.0 - 2026-09-04

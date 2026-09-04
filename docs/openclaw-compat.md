@@ -29,7 +29,7 @@ id = "70a3dbb693e246d48a0fbdc7b32c7317"
 
 Both bindings point at the **same KV id** - old gateways writing `BARVIS_STATE` remain visible to new gateways reading `ZEPTOCLAW_STATE` (and vice versa). State key is `state` (BarvisState: `replied_comments`, `seen_posts`, `last_heartbeat`, `heartbeat_history`, etc.). Cron trigger `*/30 * * * *` preserved.
 
-> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev` (Version 6a24e46a-*), health `1/1` `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` @ `https://integrate.api.nvidia.com/v1/chat/completions` (superseded `thinkingmachines/inkling`, EOL 2026-08-25). Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`. Alias `barvis-router` 182dc8e2 remains until route cutover.
+> Deploy is live at `https://zeptoclaw-router.bkataru.workers.dev`. Routing is single-model `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` at `https://integrate.api.nvidia.com/v1/chat/completions` (`thinkingmachines/inkling` died with EOL 2026-08-25). Both `BARVIS_STATE`/`ZEPTOCLAW_STATE` share `70a3dbb693e246d48a0fbdc7b32c7317`.
 
 ## 3. Config Paths & Priority
 
@@ -261,6 +261,6 @@ curl -s http://localhost:18789/gateway/health; echo
 
 ## 12. Notes
 
-- Do **not** add `openclaw` to `package.json` or `build.zig.zon`.
+- Do **not** add `openclaw` to `build.zig.zon`. The old root `package.json` is gone with the Node transport; nothing npm remains.
 - Keep legacy aliases (`/gateway/*`, `openclaw-gateway.service`, `~/.openclaw/**`) - cheap, prevents breakage for old scripts/crons/workers.
 - Removing the fallback is a breaking change; gate behind a major version.

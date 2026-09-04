@@ -73,7 +73,7 @@ Expect `connection status=connected` then inbound logs. First connect after an e
 
 ## WhatsApp (native)
 
-The gateway uses a Signal/whatsmeow-style Zig client. Pair a device with `zeptoclaw-wa-pair` (terminal QR) or `zeptoclaw whatsapp pair`. Identity is `{auth_dir}/native.sqlite`.
+The gateway uses a Signal/whatsmeow-style Zig client. Pair a device with `zeptoclaw-wa-pair` (terminal QR) or `zeptoclaw whatsapp pair`. Pairing needs no `NVIDIA_API_KEY`. Identity is `{auth_dir}/native.sqlite`.
 
 Text DM and group send/receive, inbound media, outbound media, presence, reactions, polls, and read receipts all go through the native client.
 

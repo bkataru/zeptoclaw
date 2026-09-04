@@ -31,13 +31,15 @@ Pair with `zeptoclaw whatsapp pair` — it prints a terminal QR (half-block glyp
 
 Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media downloads and decrypts. Outbound media, presence, reactions, revokes, edits, polls, location, and read receipts use the same native client.
 
-Native mode had a usync silent-drop bug: every outbound send failed with `error.IqTimeout`. The binary encoder wrote JID-shaped attributes as plain text instead of the `JIDPair`/`ADJID` binary tags WhatsApp's server requires, so the server never answered. This is fixed. Usync now resolves in about 300ms.
+## Past fixes
 
-Native mode also had a delivery bug on 1:1 DMs, including self-chat. WhatsApp now addresses those chats to the recipient's LID, not the phone number. The old envelope got a server ACK, but the phone (a LID-keyed device) silently dropped it. `sendText` now resolves the phone number and LID through the stored `lid_map`, and sets `peer_recipient_pn` on the envelope so the fanout reaches the phone.
+- usync silent-drop: the encoder wrote JID attributes as plain text, not the `JIDPair`/`ADJID` tags the server needs, so the server never answered. Fixed; usync resolves in about 300ms.
+- 1:1 delivery: those chats arrive on the recipient LID, not the phone number. `sendText` resolves PN/LID through the stored `lid_map` and sets `peer_recipient_pn`.
+- Group own-phone delivery: group sends query usync for own devices and include them in the SKDM fanout, so the sender phone decrypts group replies.
+- Retry recovery: `sendText` caches the last 64 outbound plaintexts. A 1:1 retry drops the stale session, fetches a fresh prekey bundle, and resends with the same id. A group retry fans out SKDM plus skmsg. Cap: 5 resends per message.
+- 401 logout: the client starts QR re-pair instead of leaving a dead session.
 
-Native mode now recovers automatically from `<receipt type=retry>`. If a fanned-out device could not decrypt a message, the old fix required deleting that device's session row by hand and resending. Now `sendText` caches the last 64 outbound plaintexts. On a 1:1 retry, the client drops that device's stale session, fetches a fresh prekey bundle, and resends with the same message id. On a group retry it fans out a sender-key distribution plus an `skmsg` of the cached plaintext. This caps at 5 resends per message.
-
-`zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender. Use it to force a fresh handshake by hand, outside the automatic path — for example, for a first-contact or self-chat probe, or when the automatic retry cap is hit. Stop the gateway first, so `wa-send` gets exclusive access to the sqlite session store.
+`zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender. Use it to force a fresh handshake by hand, outside the automatic path, for example for a first-contact or self-chat probe, or when the automatic retry cap is hit. Stop the gateway first, so `wa-send` gets exclusive access to the sqlite session store.
 
 ## Signature
 
