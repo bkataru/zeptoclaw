@@ -34,7 +34,7 @@ Keep secrets in systemd or `chmod 600` env files. Do not put live keys in git.
 | `ZEPTO_EXEC_APPROVE` | no | `1` allows all `exec` tools |
 | `WHATSAPP_AUTH_DIR` | no | default `~/.zeptoclaw/sessions/whatsapp` |
 
-`exec` only runs on an operator `fromMe` WhatsApp DM. A partner DM cannot invoke it.
+`exec` only runs on operator `fromMe` messages in self-chat. Wake-word turns in a peer DM run without `exec`.
 
 WhatsApp allowlist is config, not env: `channels.whatsapp.allowFrom` and `dmPolicy` (`allowlist` recommended).
 

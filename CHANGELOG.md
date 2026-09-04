@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-09-04
+
+### WhatsApp
+
+- The `barvis` wake word now triggers a reply to the operator's own messages in peer DMs. Untriggered own messages in someone else's DM stay skipped, and those turns run without `exec`. Saying the wake word also subscribes the chat, so the peer's follow-ups get answered.
+
 ## 0.5.0 - 2026-09-04
 
 ### WhatsApp
