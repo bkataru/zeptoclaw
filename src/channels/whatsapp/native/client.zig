@@ -2022,6 +2022,19 @@ pub const Client = struct {
         {
             const own_user = try jid.format(alloc, jid.user(own), 0, jid.server(own));
             try users.append(alloc, own_user);
+            // Own LID namespace too: usync then returns every own device
+            // (phone, web, companions) so each gets the SKDM and can decrypt
+            // our group sends. Without this the sender's own phone never
+            // receives the key and our group replies stay invisible there.
+            if (own_lid) |ol| {
+                const own_lid_user = try jid.format(alloc, jid.user(ol), 0, jid.server(ol));
+                var have = false;
+                for (users.items) |u| if (std.mem.eql(u8, u, own_lid_user)) {
+                    have = true;
+                    break;
+                };
+                if (have) alloc.free(own_lid_user) else try users.append(alloc, own_lid_user);
+            }
         }
         for (info.participants) |part| {
             const addr = if (std.mem.eql(u8, info.addressing_mode, "lid"))
