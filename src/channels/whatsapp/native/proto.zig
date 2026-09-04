@@ -1218,6 +1218,17 @@ pub const Message = struct {
                     out.location = parseLocation(inner);
                     collectContextInfo(inner, &out);
                 },
+                // liveLocationMessage=18: same degreesLatitude=1/degreesLongitude=2
+                // doubles up front; extra live fields are skipped by parseLocation.
+                18 => {
+                    if (t.wire != 2) {
+                        try skipField(data, &idx, t.wire);
+                        continue;
+                    }
+                    const inner = try readBytes(data, &idx);
+                    out.location = parseLocation(inner);
+                    collectContextInfo(inner, &out);
+                },
                 6 => {
                     if (t.wire != 2) {
                         try skipField(data, &idx, t.wire);
@@ -1811,6 +1822,22 @@ test "Message decode location" {
     var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
     defer buf.deinit(alloc);
     try writeBytes(&buf, alloc, 5, inner.items);
+    const msg = try Message.decode(buf.items);
+    try std.testing.expect(msg.location != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 12.5), msg.location.?.lat, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 77.25), msg.location.?.lon, 1e-9);
+}
+
+test "Message decode live location field 18" {
+    const alloc = std.testing.allocator;
+    var inner = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer inner.deinit(alloc);
+    try writeDouble(&inner, alloc, 1, 12.5);
+    try writeDouble(&inner, alloc, 2, 77.25);
+    try writeVarintField(&inner, alloc, 3, 60);
+    var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+    defer buf.deinit(alloc);
+    try writeBytes(&buf, alloc, 18, inner.items);
     const msg = try Message.decode(buf.items);
     try std.testing.expect(msg.location != null);
     try std.testing.expectApproxEqAbs(@as(f64, 12.5), msg.location.?.lat, 1e-9);

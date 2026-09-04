@@ -380,6 +380,11 @@ pub const WhatsAppChannel = struct {
 
     fn nativeLoop(self: *WhatsAppChannel) void {
         var backoff_ms: u64 = 2000;
+        // Consecutive logout verdicts (401/403/device-removed). A single one right
+        // after a network flap can be a stale-server false positive, so reconnect
+        // twice before accepting it; a genuine logout fails all three. Matches
+        // Baileys/whatsmeow stop-on-logout semantics without dying on one bad stanza.
+        var logout_strikes: u8 = 0;
         while (!self.native_stop.load(.seq_cst)) {
             const cli = self.native_client orelse return;
             cli.connect("") catch |err| {
@@ -407,14 +412,24 @@ pub const WhatsAppChannel = struct {
                         std.log.info("[whatsapp] paired jid={s} lid={s}", .{ p.jid, p.lid });
                         immediate = true;
                     },
-                    .connected => |c| self.handleNativeConnected(c.jid),
+                    .connected => |c| {
+                        self.handleNativeConnected(c.jid);
+                        logout_strikes = 0;
+                    },
                     .message => |msg| self.handleNativeMessage(msg),
                     .disconnected => |d| {
                         self.emitDisconnected();
                         if (d.logged_out) {
-                            std.log.warn("[whatsapp] logged out; unpair and re-pair (native)", .{});
-                            return;
+                            logout_strikes += 1;
+                            std.log.err("[whatsapp] logout verdict {d}/3; unpair and re-pair if it sticks (native)", .{logout_strikes});
+                            if (logout_strikes >= 3) {
+                                std.log.err("[whatsapp] logged out 3x; stopping reconnect (native)", .{});
+                                return;
+                            }
+                            immediate = true;
+                            break :inner;
                         }
+                        logout_strikes = 0;
                         if (d.code == 515) immediate = true;
                         break :inner;
                     },

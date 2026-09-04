@@ -729,10 +729,24 @@ pub const Client = struct {
             if (code == 0) {
                 if (node.getAttr("reason")) |r| code = std.fmt.parseInt(u32, r, 10) catch 0;
             }
+            // Forensics: a bare `failure` with no code tells us nothing after the
+            // fact. Log attrs + child tags so the next logout verdict is diagnosable.
+            var attr_it = node.attrs.iterator();
+            while (attr_it.next()) |e| {
+                std.log.err("[whatsapp-native] failure attr {s}={s}", .{ e.key_ptr.*, e.value_ptr.* });
+            }
+            for (node.children()) |*ch| {
+                std.log.err("[whatsapp-native] failure child tag={s}", .{ch.tag});
+                var ch_it = ch.attrs.iterator();
+                while (ch_it.next()) |e| {
+                    std.log.err("[whatsapp-native] failure child {s} attr {s}={s}", .{ ch.tag, e.key_ptr.*, e.value_ptr.* });
+                }
+            }
             self.logged_in = false;
             self.failPendingIqs();
             const conflict = node.getChildByTag("conflict");
             const removed = conflict != null and conflict.?.getAttr("type") != null and std.mem.eql(u8, conflict.?.getAttr("type").?, "device_removed");
+            std.log.err("[whatsapp-native] stream failure code={d} removed={} logged_out={}", .{ code, removed, code == 401 or code == 403 or removed });
             return .{ .disconnected = .{ .code = code, .logged_out = code == 401 or code == 403 or removed } };
         }
         if (std.mem.eql(u8, tag, "xmlstreamend")) {
