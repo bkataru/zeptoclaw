@@ -79,19 +79,76 @@ pub fn isSelfChat(chat_id: []const u8, identities: []const []const u8) bool {
 
 pub const TurnGate = enum { skip_peer_from_me, listening, run };
 
-/// fromMe in a 1:1 with someone else is the operator talking to that person, not to Barvis.
-/// Exception: the wake word addresses Barvis directly, and an active subscription
-/// (from an earlier invocation by any participant) keeps the conversation open
-/// until leave/unsubscribe. Untriggered, unsubscribed peer fromMe stays skipped.
-/// Group fromMe only runs on an explicit wake/mention, not leftover subscription.
-pub fn decideTurn(is_dm: bool, from_me: bool, is_self_chat: bool, triggered: bool, subscribed: bool) TurnGate {
+/// Presence lifecycle, one per chat. States: `idle` (unsubscribed) and
+/// `active` (subscribed). Events: `wake` (barvis/mention/media-DM), `leave`
+/// (leave tool, thanks/bye drift, peer-DM skip), and any inbound message.
+/// The table below is the whole machine: `nextGate` maps (chat kind, speaker,
+/// trigger, presence) to a gate, and `applyGate` owns the presence side
+/// effects, so callers cannot subscribe in one place and forget to
+/// unsubscribe in another.
+pub const ChatKind = enum { dm_self, dm_peer, group };
+
+pub const TurnInput = struct {
+    kind: ChatKind,
+    /// True for the operator's own messages (fromMe).
+    from_me: bool = false,
+    /// Wake word, @mention, or media DM.
+    triggered: bool = false,
+    /// Raw presence bit; `event_only` reactions/polls/revokes mask it.
+    subscribed: bool = false,
+    event_only: bool = false,
+};
+
+/// Pure transition function. Rules, pinned by tests:
+/// - wake always runs, from anyone, in any chat;
+/// - an active presence keeps DMs (either side) and group peer messages open;
+/// - group own messages need an explicit wake, never leftover presence;
+/// - untriggered, idle peer-DM own messages stay skipped (operator talking to
+///   a person, not to Barvis).
+pub fn nextGate(in: TurnInput) TurnGate {
+    const active = in.subscribed and !in.event_only;
+    switch (in.kind) {
+        .dm_self => return if (in.triggered or active) .run else .listening,
+        .dm_peer => {
+            if (in.triggered or active) return .run;
+            return if (in.from_me) .skip_peer_from_me else .listening;
+        },
+        .group => {
+            if (in.from_me) return if (in.triggered) .run else .listening;
+            return if (in.triggered or active) .run else .listening;
+        },
+    }
+}
+
+/// Presence side effects owned by the table: wake subscribes, peer-DM skip
+/// unsubscribes, everything else leaves presence alone.
+pub fn applyGate(chat_id: []const u8, gate: TurnGate, triggered: bool) void {
+    switch (gate) {
+        .run => if (triggered) subscribe(chat_id),
+        .skip_peer_from_me => unsubscribe(chat_id),
+        .listening => {},
+    }
+}
+
+/// Current presence state for logs and debugging.
+pub const Presence = enum { idle, active };
+pub fn presenceOf(chat_id: []const u8) Presence {
+    return if (isSubscribed(chat_id)) .active else .idle;
+}
+
+/// Legacy boolean-soup entry point; delegates to `nextGate`. `subscribed`
+/// here is the effective bit (callers masked event_only themselves).
+ pub fn decideTurn(is_dm: bool, from_me: bool, is_self_chat: bool, triggered: bool, subscribed: bool) TurnGate {
+    // This wrapper predates event_only masking inside the table, so it
+    // cannot reconstruct kind perfectly for groups; preserve exact legacy
+    // behavior per branch instead of re-deriving.
     if (is_dm and from_me and !is_self_chat) return if (triggered or subscribed) .run else .skip_peer_from_me;
     if (from_me and !is_dm) {
         return if (triggered) .run else .listening;
     }
     if (triggered or subscribed) return .run;
     return .listening;
-}
+ }
 
 pub const PRESENCE_INSTRUCTIONS =
     \\Presence (WhatsApp): You are in a live thread. History is recorded whether you talk or not.
@@ -190,4 +247,37 @@ test "decideTurn runs peer-DM fromMe on wake or subscription" {
     try std.testing.expectEqual(TurnGate.run, decideTurn(false, true, false, true, false));
     try std.testing.expectEqual(TurnGate.listening, decideTurn(false, true, false, false, true));
     try std.testing.expectEqual(TurnGate.run, decideTurn(false, false, false, false, true));
+}
+test "nextGate presence table" {
+    // Wake always runs.
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_peer, .from_me = true, .triggered = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .group, .from_me = true, .triggered = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_self, .triggered = true }));
+    // Active presence keeps DMs and group peer messages open.
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_peer, .from_me = true, .subscribed = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_peer, .subscribed = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .group, .subscribed = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_self, .subscribed = true }));
+    // Group own messages need a wake, never leftover presence.
+    try std.testing.expectEqual(TurnGate.listening, nextGate(.{ .kind = .group, .from_me = true, .subscribed = true }));
+    // Idle peer-DM own messages stay skipped.
+    try std.testing.expectEqual(TurnGate.skip_peer_from_me, nextGate(.{ .kind = .dm_peer, .from_me = true }));
+    try std.testing.expectEqual(TurnGate.listening, nextGate(.{ .kind = .dm_peer }));
+    try std.testing.expectEqual(TurnGate.listening, nextGate(.{ .kind = .dm_self }));
+    // Reactions/polls/revokes mask presence.
+    try std.testing.expectEqual(TurnGate.listening, nextGate(.{ .kind = .dm_peer, .subscribed = true, .event_only = true }));
+    try std.testing.expectEqual(TurnGate.run, nextGate(.{ .kind = .dm_peer, .triggered = true, .subscribed = true, .event_only = true }));
+}
+
+test "applyGate owns presence side effects" {
+    const id = "fsm-test-chat";
+    unsubscribe(id);
+    applyGate(id, .run, true);
+    try std.testing.expect(isSubscribed(id));
+    applyGate(id, .run, false);
+    try std.testing.expect(isSubscribed(id));
+    applyGate(id, .listening, false);
+    try std.testing.expect(isSubscribed(id));
+    applyGate(id, .skip_peer_from_me, false);
+    try std.testing.expect(!isSubscribed(id));
 }

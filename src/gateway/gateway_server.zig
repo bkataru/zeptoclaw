@@ -438,16 +438,16 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     defer core_tools.setExecEnabled(true);
     const triggered = is_main_target or media_dm;
     const event_only = eff_msg.message_type == .reaction or eff_msg.message_type == .poll or eff_msg.message_type == .revoke;
-    const gate = zeptoclaw.channels.whatsapp.engagement.decideTurn(
-        is_dm,
-        eff_msg.from_me,
-        is_self_chat,
-        triggered,
-        zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy) and !event_only,
-    );
+    const gate = zeptoclaw.channels.whatsapp.engagement.nextGate(.{
+        .kind = if (!is_dm) .group else if (is_self_chat) .dm_self else .dm_peer,
+        .from_me = eff_msg.from_me,
+        .triggered = triggered,
+        .subscribed = zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy),
+        .event_only = event_only,
+    });
+    zeptoclaw.channels.whatsapp.engagement.applyGate(chat_id_copy, gate, triggered);
     switch (gate) {
         .skip_peer_from_me => {
-            zeptoclaw.channels.whatsapp.engagement.unsubscribe(chat_id_copy);
             std.log.info("[whatsapp] skip fromMe peer DM chat={s}", .{chat_id_copy});
             g_whatsapp_mu.unlock(compat.getIo());
             return;
@@ -457,9 +457,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             g_whatsapp_mu.unlock(compat.getIo());
             return;
         },
-        .run => {
-            if (triggered) zeptoclaw.channels.whatsapp.engagement.subscribe(chat_id_copy);
-        },
+        .run => {},
     }
 
     const slot = burstSlot(chat_id_copy);

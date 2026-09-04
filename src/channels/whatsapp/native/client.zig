@@ -1027,6 +1027,30 @@ pub const Client = struct {
     }
 
     // ---- retry receipts (whatsmeow retry.go: addRecentMessage / handleRetryReceipt) --
+    //
+    // Pipeline states: received (poll thread) -> validated (from/id/retry
+    // child present) -> cache check (hit/unknown/capped) -> spawned (detached
+    // worker drops the stale session, fetches prekeys, resends same id) or
+    // dropped with a reason. `decideRetryReceipt` is the pure kernel of the
+    // middle step; the worker spawn and resend are effects owned by
+    const RetryCacheOutcome = enum { hit, unknown, capped };
+    const RetryDecision = enum { resend, drop_invalid, drop_unknown, drop_capped };
+    const RetryReceiptInput = struct {
+        valid: bool = false,
+        cache: RetryCacheOutcome = .unknown,
+    };
+    /// Pure decision kernel: parse validity + cache outcome -> next step.
+    /// Cap (`max_auto_retries`) outranks everything but validity so a
+    /// persistently broken device session cannot loop forever.
+    fn decideRetryReceipt(in: RetryReceiptInput) RetryDecision {
+        if (!in.valid) return .drop_invalid;
+        return switch (in.cache) {
+            .hit => .resend,
+            .unknown => .drop_unknown,
+            .capped => .drop_capped,
+        };
+    }
+
 
     /// Cache `plaintext` (the raw, pre-DSM-wrap conversation proto) for `msg_id`
     /// so a later `<receipt type=retry>` from any fanned-out device can trigger
@@ -1138,21 +1162,37 @@ pub const Client = struct {
         const msg_id = node.getAttr("id") orelse return error.MissingId;
         if (node.getChildByTag("retry") == null) return error.MissingRetryChild;
 
-        const cached = self.takeRecentOutboundForRetry(msg_id) catch |err| {
-            std.log.warn("[whatsapp-native] dropping retry for {s} from {s}: {}", .{ msg_id, retry_device, err });
-            return;
-        } orelse {
-            std.log.warn("[whatsapp-native] retry receipt for unknown/expired message id={s} from={s}", .{ msg_id, retry_device });
-            return;
+        // Cache outcome feeds the pure decision kernel; every drop path keeps
+        // its historical warn text. Any take failure (cap or OOM) drops like
+        // the old catch-all did. `take` bumps the retry counter exactly once,
+        // so the copy is captured alongside the outcome here, not re-queried.
+        var cached: ?RecentOutCopy = null;
+        const outcome: RetryCacheOutcome = blk: {
+            const t = self.takeRecentOutboundForRetry(msg_id) catch break :blk .capped;
+            cached = t;
+            break :blk if (t != null) .hit else .unknown;
         };
+        switch (decideRetryReceipt(.{ .valid = true, .cache = outcome })) {
+            .resend => {},
+            .drop_capped => {
+                std.log.warn("[whatsapp-native] dropping retry for {s} from {s}: capped", .{ msg_id, retry_device });
+                return;
+            },
+            .drop_unknown => {
+                std.log.warn("[whatsapp-native] retry receipt for unknown/expired message id={s} from={s}", .{ msg_id, retry_device });
+                return;
+            },
+            .drop_invalid => unreachable,
+        }
+        const copy = cached orelse unreachable;
 
         const work = try self.allocator.create(RetryWork);
         work.* = .{
             .client = self,
             .from_device = try self.allocator.dupe(u8, retry_device),
             .msg_id = try self.allocator.dupe(u8, msg_id),
-            .dest = cached.dest,
-            .plaintext = cached.plaintext,
+            .dest = copy.dest,
+            .plaintext = copy.plaintext,
         };
         _ = self.retry_workers_active.fetchAdd(1, .monotonic);
         const t = std.Thread.spawn(.{}, retryWorkerEntry, .{work}) catch |err| {
@@ -2892,6 +2932,16 @@ test "lidDmDestination rewrites PN to LID with peer_recipient_pn" {
     defer unknown.deinit(alloc);
     try std.testing.expectEqualStrings("15555550101@s.whatsapp.net", unknown.dest);
     try std.testing.expect(unknown.pn_owned == null);
+}
+
+test "decideRetryReceipt drop policy" {
+    // Invalid receipts never reach the cache.
+    try std.testing.expectEqual(Client.RetryDecision.drop_invalid, Client.decideRetryReceipt(.{ .valid = false, .cache = .hit }));
+    try std.testing.expectEqual(Client.RetryDecision.drop_invalid, Client.decideRetryReceipt(.{}));
+    // Cache outcomes map one-to-one to resend or a named drop.
+    try std.testing.expectEqual(Client.RetryDecision.resend, Client.decideRetryReceipt(.{ .valid = true, .cache = .hit }));
+    try std.testing.expectEqual(Client.RetryDecision.drop_unknown, Client.decideRetryReceipt(.{ .valid = true, .cache = .unknown }));
+    try std.testing.expectEqual(Client.RetryDecision.drop_capped, Client.decideRetryReceipt(.{ .valid = true, .cache = .capped }));
 }
 
 test "rememberOutbound and takeRecentOutboundForRetry cache + cap retries" {

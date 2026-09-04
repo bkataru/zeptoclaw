@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Presence lifecycle is now an explicit transition table (`nextGate` + `applyGate` own the subscribe/unsubscribe side effects, so the gateway cannot drift from the table). Retry-receipt drop policy is a pure tested kernel (`decideRetryReceipt`). No behavior change.
+
 ## 0.5.2 - 2026-09-04
 
 ### WhatsApp
