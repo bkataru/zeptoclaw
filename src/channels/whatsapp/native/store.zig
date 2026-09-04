@@ -74,6 +74,10 @@ pub const Store = struct {
         return (try self.require()).deleteSession(our_jid, their_id);
     }
 
+    pub fn deleteDevice(self: *Store, jid: []const u8) !void {
+        return (try self.require()).deleteDevice(jid);
+    }
+
     pub fn putSenderKey(self: *Store, our_jid: []const u8, chat_id: []const u8, sender_id: []const u8, record: []const u8) !void {
         return (try self.require()).putSenderKey(our_jid, chat_id, sender_id, record);
     }

@@ -569,6 +569,10 @@ pub const WhatsAppChannel = struct {
         };
 
         var seen_paired = cli.selfJid() != null;
+        // Re-pair passes after a 401: wipe the dead device and restart as a
+        // brand-new device so the server issues a QR instead of 401ing a
+        // login with revoked creds. Cap restarts; a persistent 401 is real.
+        var repairs: u8 = 0;
         while (true) {
             cli.connect("") catch |err| {
                 std.debug.print("native connect failed: {}\n", .{err});
@@ -595,7 +599,15 @@ pub const WhatsAppChannel = struct {
                         return jid;
                     },
                     .disconnected => |d| {
-                        if (d.logged_out) return error.LoggedOut;
+                        if (d.logged_out) {
+                            repairs += 1;
+                            if (repairs > 3) return error.LoggedOut;
+                            std.debug.print("stored session rejected (401); restarting pair as new device ({d}/3)\n", .{repairs});
+                            cli.disconnect();
+                            try cli.resetForRepair();
+                            seen_paired = false;
+                            break :poll;
+                        }
                         if (d.code == 515) reconnect_now = true;
                         break :poll;
                     },

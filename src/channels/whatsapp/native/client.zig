@@ -365,6 +365,43 @@ pub const Client = struct {
         try self.setOwnedStr(&self.business_name, dev.business_name);
     }
 
+    /// Drop dead pairing state and restart as a brand-new device.
+    /// QR re-pair after a 401: fresh keys, no jid, dead sqlite device row
+    /// gone so getAnyDevice can't resurrect it. Pair-success repopulates.
+    pub fn resetForRepair(self: *Client) !void {
+        const io = ioOf();
+        if (self.paired_jid) |dead| {
+            if (self.store) |*s| s.deleteDevice(dead) catch |err| storeWarn("delete dead device", err);
+            self.allocator.free(dead);
+            self.paired_jid = null;
+        }
+        if (self.paired_lid) |s| {
+            self.allocator.free(s);
+            self.paired_lid = null;
+        }
+        self.paired = false;
+        self.noise = nc.KeyPair.generate(io);
+        self.identity = nc.KeyPair.generate(io);
+        self.signed_pre_key = nc.KeyPair.generate(io);
+        self.signSignedPreKey(io);
+        var rid_buf: [4]u8 = undefined;
+        io.random(&rid_buf);
+        self.registration_id = std.mem.readInt(u32, &rid_buf, .little);
+        if (self.registration_id == 0) self.registration_id = 1;
+        io.random(&self.adv_secret);
+        if (self.adv_account) |s| {
+            self.allocator.free(s);
+            self.adv_account = null;
+        }
+        if (self.adv_details) |s| {
+            self.allocator.free(s);
+            self.adv_details = null;
+        }
+        self.adv_account_sig = [_]u8{0} ** 64;
+        self.adv_account_sig_key = [_]u8{0} ** 32;
+        self.adv_device_sig = [_]u8{0} ** 64;
+    }
+
     fn setOwnedStr(self: *Client, slot: *?[]u8, value: []const u8) !void {
         const copy = if (value.len == 0) null else try self.allocator.dupe(u8, value);
         if (slot.*) |old| self.allocator.free(old);
@@ -2812,6 +2849,22 @@ test "rememberOutbound evicts oldest past recent_out_cap" {
     try std.testing.expect((try cli.takeRecentOutboundForRetry("id0")) == null);
     const still_there = (try cli.takeRecentOutboundForRetry("id64")) orelse return error.TestUnexpectedResult;
     still_there.deinit(alloc);
+}
+
+test "resetForRepair wipes dead device row and unpairs" {
+    const alloc = std.testing.allocator;
+    var cli = Client.init(alloc);
+    defer cli.deinit();
+    try cli.openStore(":memory:");
+    try cli.setOwnJid("111:0@s.whatsapp.net");
+    try cli.persistDevice();
+    const old_noise = cli.noise.pub_key;
+    try cli.resetForRepair();
+    try std.testing.expect(cli.selfJid() == null);
+    try std.testing.expect(!cli.paired);
+    try std.testing.expect(!std.mem.eql(u8, &old_noise, &cli.noise.pub_key));
+    // Dead row gone: same store no longer loads anything paired.
+    try std.testing.expectError(error.NotPaired, cli.loadFromStore());
 }
 
 test "dropSession removes memory and store session" {

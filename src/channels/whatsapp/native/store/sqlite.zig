@@ -248,6 +248,15 @@ pub const Container = struct {
         try bindText(stmt, 2, their_id);
         try stepDone(self.db, stmt);
     }
+    /// Delete a device row; FK cascade drops its sessions/keys. Checkpoint so
+    /// a kill/restart can't resurrect the dead device via getAnyDevice.
+    pub fn deleteDevice(self: *Container, jid: []const u8) Error!void {
+        const stmt = try self.prepare(sql_delete_device);
+        defer _ = c.sqlite3_finalize(stmt);
+        try bindText(stmt, 1, jid);
+        try stepDone(self.db, stmt);
+        self.checkpoint();
+    }
 
     pub fn putSenderKey(self: *Container, our_jid: []const u8, chat_id: []const u8, sender_id: []const u8, record: []const u8) Error!void {
         const stmt = try self.prepare(sql_put_sender_key);
@@ -479,6 +488,9 @@ const sql_get_session: [:0]const u8 =
 
 const sql_delete_session: [:0]const u8 =
     \\DELETE FROM whatsmeow_sessions WHERE our_jid=?1 AND their_id=?2
+;
+const sql_delete_device: [:0]const u8 =
+    \\DELETE FROM whatsmeow_device WHERE jid=?1
 ;
 const sql_put_sender_key: [:0]const u8 =
     \\INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) VALUES (?1, ?2, ?3, ?4)
