@@ -80,10 +80,12 @@ pub fn isSelfChat(chat_id: []const u8, identities: []const []const u8) bool {
 pub const TurnGate = enum { skip_peer_from_me, listening, run };
 
 /// fromMe in a 1:1 with someone else is the operator talking to that person, not to Barvis.
-/// Exception: the wake word addresses Barvis directly, so a triggered peer fromMe runs.
+/// Exception: the wake word addresses Barvis directly, and an active subscription
+/// (from an earlier invocation by any participant) keeps the conversation open
+/// until leave/unsubscribe. Untriggered, unsubscribed peer fromMe stays skipped.
 /// Group fromMe only runs on an explicit wake/mention, not leftover subscription.
 pub fn decideTurn(is_dm: bool, from_me: bool, is_self_chat: bool, triggered: bool, subscribed: bool) TurnGate {
-    if (is_dm and from_me and !is_self_chat) return if (triggered) .run else .skip_peer_from_me;
+    if (is_dm and from_me and !is_self_chat) return if (triggered or subscribed) .run else .skip_peer_from_me;
     if (from_me and !is_dm) {
         return if (triggered) .run else .listening;
     }
@@ -177,10 +179,11 @@ test "isSelfChat matches own LID PN and E164" {
     }));
 }
 
-test "decideTurn runs triggered fromMe peer DMs, skips the rest" {
+test "decideTurn runs peer-DM fromMe on wake or subscription" {
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, false, true, true));
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, false, true, false));
-    try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, false, true));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, false, false, true));
+    try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, false, false));
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, true, true, false));
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, false, false, false, true));
     try std.testing.expectEqual(TurnGate.listening, decideTurn(true, false, false, false, false));
