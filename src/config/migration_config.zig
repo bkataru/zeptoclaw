@@ -263,39 +263,13 @@ pub const ConfigLoader = struct {
     /// Load configuration from all sources with priority: CLI > env > file > defaults
     pub fn load(self: *ConfigLoader, cli_args: ?CliArgs) !ZeptoClawConfig {
         // Try to load from config file first
-        // Try to load from config file first
         var file_config: ?ZeptoClawConfig = null;
         if (cli_args) |args| {
             if (args.config_file) |config_path| {
                 file_config = try self.loadFromFile(config_path);
             }
         } else {
-            // Try default config paths — zeptoclaw primary, openclaw legacy fallback
-            const home_rels = [_][]const u8{
-                ".zeptoclaw/config.json",
-                ".openclaw/openclaw.json",
-                ".openclaw/workspace/openclaw.json",
-            };
-            const cwd_rels = [_][]const u8{ "./zeptoclaw.json", "./config.json" };
-            const _cwd_probe = compat.cwd();
-            blk: {
-                for (home_rels) |rel| {
-                    const path = compat.homeJoin(self.allocator, rel) catch continue;
-                    defer self.allocator.free(path);
-                    if (_cwd_probe.openFile(path, .{})) |file| {
-                        file.close(_cwd_probe.io);
-                        file_config = self.loadFromFile(path) catch continue;
-                        break :blk;
-                    } else |_| continue;
-                }
-                for (cwd_rels) |path| {
-                    if (_cwd_probe.openFile(path, .{})) |file| {
-                        file.close(_cwd_probe.io);
-                        file_config = self.loadFromFile(path) catch continue;
-                        break :blk;
-                    } else |_| continue;
-                }
-            }
+            file_config = self.loadFileDefault();
         }
         errdefer if (file_config) |*fc| fc.deinit();
 
@@ -313,6 +287,48 @@ pub const ConfigLoader = struct {
         env_config.deinit();
         return result;
     }
+
+    /// Probe default config paths — zeptoclaw primary, openclaw legacy fallback.
+    /// Null when no file exists. Caller owns the config. Shared by load/loadForPairing.
+    fn loadFileDefault(self: *ConfigLoader) ?ZeptoClawConfig {
+        const home_rels = [_][]const u8{
+            ".zeptoclaw/config.json",
+            ".openclaw/openclaw.json",
+            ".openclaw/workspace/openclaw.json",
+        };
+        const cwd_rels = [_][]const u8{ "./zeptoclaw.json", "./config.json" };
+        const _cwd_probe = compat.cwd();
+        for (home_rels) |rel| {
+            const path = compat.homeJoin(self.allocator, rel) catch continue;
+            defer self.allocator.free(path);
+            if (_cwd_probe.openFile(path, .{})) |file| {
+                file.close(_cwd_probe.io);
+                return self.loadFromFile(path) catch continue;
+            } else |_| continue;
+        }
+        for (cwd_rels) |path| {
+            if (_cwd_probe.openFile(path, .{})) |file| {
+                file.close(_cwd_probe.io);
+                return self.loadFromFile(path) catch continue;
+            } else |_| continue;
+        }
+        return null;
+    }
+
+    /// File-or-defaults config with no env and no API-key validation.
+    /// Pairing only needs whatsapp_auth_dir / whatsapp_allow_from; requiring
+    /// NVIDIA_API_KEY here blocks QR re-pair from shells without the key.
+    pub fn loadForPairing(self: *ConfigLoader) !ZeptoClawConfig {
+        var file_config: ?ZeptoClawConfig = self.loadFileDefault();
+        errdefer if (file_config) |*fc| fc.deinit();
+        var result = try self.mergeConfigs(file_config, null, null);
+        errdefer result.deinit();
+        if (file_config) |*fc| {
+            fc.deinit();
+        }
+        return result;
+    }
+
 
     /// Load configuration from OpenClaw-compatible JSON file
     fn loadFromFile(self: *ConfigLoader, path: []const u8) !ZeptoClawConfig {
@@ -733,6 +749,15 @@ test "ConfigLoader mergeConfigs with defaults" {
     try std.testing.expectEqualStrings("nvidia/nemotron-3-ultra-550b-a55b", result.primary_model);
     try std.testing.expectEqualStrings("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", result.fallback_models[0]);
     try std.testing.expectEqual(@as(u32, 18789), result.gateway_port);
+}
+
+test "ConfigLoader loadForPairing needs no API key" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+    // Must succeed whether or not NVIDIA_API_KEY is set; pairing is keyless.
+    var cfg = try loader.loadForPairing();
+    defer cfg.deinit();
+    try std.testing.expect(cfg.whatsapp_auth_dir.len > 0);
 }
 
 test "validateConfig rejects invalid gateway port" {

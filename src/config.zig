@@ -78,6 +78,45 @@ pub const Config = struct {
         };
     }
 
+    /// File-or-defaults config with no env and no API-key validation.
+    /// Pairing needs only WhatsApp fields; never block QR pair on NVIDIA_API_KEY.
+    pub fn loadForPairing(allocator: std.mem.Allocator) !Config {
+        var loader = migration_config.ConfigLoader.init(allocator);
+        const zepto_config = try loader.loadForPairing();
+
+        return .{
+            .allocator = allocator,
+            .nim_api_key = zepto_config.api_key,
+            .nim_model = zepto_config.primary_model,
+            .max_iterations = zepto_config.max_iterations,
+            .temperature = zepto_config.temperature,
+            .max_tokens = zepto_config.max_tokens,
+            .nim_timeout_ms = zepto_config.nim_timeout_ms,
+            .fallback_models = zepto_config.fallback_models,
+            .image_model = zepto_config.image_model,
+            .gateway_port = zepto_config.gateway_port,
+            .gateway_mode = zepto_config.gateway_mode,
+            .gateway_bind = zepto_config.gateway_bind,
+            .gateway_auth_token = zepto_config.gateway_auth_token,
+            .gateway_control_ui_enabled = zepto_config.gateway_control_ui_enabled,
+            .gateway_allow_insecure_auth = zepto_config.gateway_allow_insecure_auth,
+            .workspace = zepto_config.workspace,
+            .max_concurrent = zepto_config.max_concurrent,
+            .source = zepto_config.source,
+            .whatsapp_enabled = zepto_config.whatsapp_enabled,
+            .whatsapp_auth_dir = zepto_config.whatsapp_auth_dir,
+            .whatsapp_dm_policy = zepto_config.whatsapp_dm_policy,
+            .whatsapp_native = resolveWhatsAppNative(allocator, zepto_config.whatsapp_native),
+            .whatsapp_allow_from = zepto_config.whatsapp_allow_from,
+            .whatsapp_group_policy = zepto_config.whatsapp_group_policy,
+            .whatsapp_media_max_mb = zepto_config.whatsapp_media_max_mb,
+            .whatsapp_debounce_ms = zepto_config.whatsapp_debounce_ms,
+            .whatsapp_send_read_receipts = zepto_config.whatsapp_send_read_receipts,
+            .whatsapp_group_require_mention = zepto_config.whatsapp_group_require_mention,
+            .whatsapp_group_activation_commands = zepto_config.whatsapp_group_activation_commands,
+        };
+    }
+
     /// Load configuration with CLI arguments
     pub fn loadWithArgs(allocator: std.mem.Allocator, args: struct {
         api_key: ?[]const u8 = null,

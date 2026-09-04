@@ -3,7 +3,8 @@ const Config = @import("zeptoclaw").config.Config;
 const WhatsAppChannel = @import("zeptoclaw").channels.whatsapp.WhatsAppChannel;
 
 pub fn runPairing(allocator: std.mem.Allocator) !void {
-    var cfg = Config.load(allocator) catch |err| {
+    // Pairing needs only WhatsApp fields; never require NVIDIA_API_KEY here.
+    var cfg = Config.loadForPairing(allocator) catch |err| {
         std.debug.print("Configuration error: {s}\n", .{@errorName(err)});
         return err;
     };
