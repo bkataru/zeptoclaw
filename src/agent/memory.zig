@@ -88,7 +88,7 @@ fn writeFile(path: []const u8, body: []const u8) void {
     w.interface.writeAll(body) catch return;
 }
 
-pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []const u8, text: []const u8) void {
+pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []const u8, text: []const u8, who: ?[]const u8) void {
     const ws = openclaw.resolveWorkspaceDir(allocator) catch return;
     defer allocator.free(ws);
     const path = dailyPath(allocator, ws, civilNowIst(), 0) catch return;
@@ -97,7 +97,10 @@ pub fn journalAppend(allocator: std.mem.Allocator, kind: []const u8, chat_id: []
     const existing = readFileCapped(allocator, path, 8 * 1024 * 1024) orelse "";
     defer if (existing.len > 0) allocator.free(existing);
     const clock = clockIst();
-    const line = std.fmt.allocPrint(allocator, "\n- {d:0>2}:{d:0>2} IST [{s}] ({s}): {s}\n", .{
+    // Sender tag sits after the chat marker so `] (chat):` keeps matching.
+    const line = if (who) |w| std.fmt.allocPrint(allocator, "\n- {d:0>2}:{d:0>2} IST [{s}] ({s}): [{s}] {s}\n", .{
+        clock.h, clock.m, kind, chat_id, w, text,
+    }) catch return else std.fmt.allocPrint(allocator, "\n- {d:0>2}:{d:0>2} IST [{s}] ({s}): {s}\n", .{
         clock.h, clock.m, kind, chat_id, text,
     }) catch return;
     defer allocator.free(line);

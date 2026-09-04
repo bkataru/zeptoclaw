@@ -85,7 +85,7 @@ fn burstSlot(chat_id: []const u8) *BurstChat {
     return s;
 }
 
-fn burstPush(chat_id: []const u8, id: []const u8, body: []const u8, from_me: bool) void {
+fn burstPush(chat_id: []const u8, id: []const u8, body: []const u8, from_me: bool, who: ?[]const u8) void {
     const s = burstSlot(chat_id);
     if (s.n >= BURST_CAP) {
         var i: usize = 1;
@@ -102,9 +102,24 @@ fn burstPush(chat_id: []const u8, id: []const u8, body: []const u8, from_me: boo
     const il = @min(id.len, s.ids[i].len);
     @memcpy(s.ids[i][0..il], id[0..il]);
     s.id_lens[i] = il;
-    const bl = @min(body.len, s.bodies[i].len);
-    @memcpy(s.bodies[i][0..bl], body[0..bl]);
-    s.body_lens[i] = bl;
+    // Group lines keep their sender prefix so the follow-up turn still
+    // knows who said what. Fixed buffers, no allocation.
+    var bl: usize = 0;
+    if (who) |w| {
+        if (w.len > 0) {
+            const wn = @min(w.len, s.bodies[i].len);
+            @memcpy(s.bodies[i][0..wn], w[0..wn]);
+            bl = wn;
+            if (bl + 2 <= s.bodies[i].len) {
+                s.bodies[i][bl] = ':';
+                s.bodies[i][bl + 1] = ' ';
+                bl += 2;
+            }
+        }
+    }
+    const rest = @min(body.len, s.bodies[i].len - bl);
+    @memcpy(s.bodies[i][bl..][0..rest], body[0..rest]);
+    s.body_lens[i] = bl + rest;
     s.from_me[i] = from_me;
     s.n += 1;
 }
@@ -201,9 +216,22 @@ fn fallback_reply(alloc: std.mem.Allocator, prompt: []const u8, model: []const u
     return std.fmt.allocPrint(alloc, "barvis here - you said: {s} (model {s} unavailable, echo)", .{ prompt, model });
 }
 
-/// Append a chat turn to workspace memory/YYYY-MM-DD.md (real IST calendar).
-fn journal_append(alloc: std.mem.Allocator, kind: []const u8, chat_id: []const u8, text: []const u8) void {
-    memory.journalAppend(alloc, kind, chat_id, text);
+/// Sender label for group turns: push name, else E.164 digits, else Baala for
+/// the operator's own messages. Null when the message carries no sender
+/// identity (burst follow-ups already embed their own prefixes).
+fn groupSenderLabel(msg: *const whatsapp_types.WhatsAppMessage) ?[]const u8 {
+    if (msg.sender_name) |n| {
+        if (n.len > 0) return n;
+    }
+    if (msg.sender_e164) |e| {
+        if (e.len > 0) return e;
+    }
+    if (msg.from_me) return "Baala";
+    return null;
+}
+
+fn journal_append(alloc: std.mem.Allocator, kind: []const u8, chat_id: []const u8, text: []const u8, who: ?[]const u8) void {
+    memory.journalAppend(alloc, kind, chat_id, text, who);
 }
 
 /// Build a compact transcript of the last N session messages as extra context
@@ -367,7 +395,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         }
     }
     defer if (journal_body_owned) g_whatsapp_alloc.free(journal_body);
-    if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body);
+    if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
     session.addMessage(eff_msg.*) catch {};
 
     // Skip our own outbound echo (self-chat fromMe replies). Exact or prefix match.
@@ -437,7 +465,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const slot = burstSlot(chat_id_copy);
     if (slot.busy and !opts.skip_inbound) {
         const pid = if (eff_msg.id.len > 0) eff_msg.id else chat_id_copy;
-        burstPush(chat_id_copy, pid, body_copy, eff_msg.from_me);
+        burstPush(chat_id_copy, pid, body_copy, eff_msg.from_me, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
         zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pid, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
         std.log.info("[whatsapp] coalesce while generating chat={s} n={d} body={s}", .{ chat_id_copy, slot.n, body_copy });
         g_whatsapp_mu.unlock(compat.getIo());
@@ -534,7 +562,18 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = lc }) catch {};
         }
 
-        const prompt = body_copy;
+        // Group turns name the sender: without this every group message
+        // looks like it came from the group itself. Burst follow-ups skip
+        // this (their merged lines already carry prefixes, and the follow
+        // message has no sender identity to label).
+        var prompt_owned: ?[]const u8 = null;
+        defer if (prompt_owned) |p| g_whatsapp_alloc.free(p);
+        const prompt: []const u8 = if (!is_dm) blk: {
+            const w = groupSenderLabel(eff_msg) orelse break :blk body_copy;
+            const p = std.fmt.allocPrint(g_whatsapp_alloc, "[{s}]: {s}", .{ w, body_copy }) catch break :blk body_copy;
+            prompt_owned = p;
+            break :blk p;
+        } else body_copy;
         var extra = std.ArrayList(u8).empty;
         defer extra.deinit(g_whatsapp_alloc);
         if (pre) |pc| extra.appendSlice(g_whatsapp_alloc, pc) catch {};
@@ -548,6 +587,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         extra.appendSlice(g_whatsapp_alloc, "\nYou are in WhatsApp chat `") catch {};
         extra.appendSlice(g_whatsapp_alloc, chat_id_copy) catch {};
         extra.appendSlice(g_whatsapp_alloc, "`. Do not mention or use information from any other chat or group.\n") catch {};
+        if (!is_dm) extra.appendSlice(g_whatsapp_alloc, "Group chat: each inbound message starts with `[sender name]:`. Baala is the operator (his own messages). Address your reply to the person who spoke, by name when it matters.\n") catch {};
 
         var nim_client = NIMClient.init(g_whatsapp_alloc, cfg);
         defer nim_client.deinit();
@@ -633,7 +673,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     g_whatsapp_alloc.free(send_result.message_ids);
     std.log.info("[whatsapp] sent message_id=chunked/{d} to {s}", .{ send_result.chunk_count, chat_id_copy });
     std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, signed_text });
-    journal_append(g_whatsapp_alloc, "out", chat_id_copy, signed_text);
+    journal_append(g_whatsapp_alloc, "out", chat_id_copy, signed_text, if (!is_dm) "Barvis" else null);
     if (is_dm) memory.persistDmNote(g_whatsapp_alloc, chat_id_copy, body_copy, signed_text);
     const rlen = @min(signed_text.len, g_last_reply_buf.len);
     @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);
