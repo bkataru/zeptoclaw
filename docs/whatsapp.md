@@ -19,7 +19,7 @@ There is no mute-fromMe-for-N-seconds-after-connect. First deploy with an empty 
 
 ## Access
 
-Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist. A **barvis** wake word or an @mention of the bot's PN/LID/device JID starts a turn. The wake word in your own message to someone also starts a turn in that DM. `leave` unsubscribes a chat until the next **barvis**.
+Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist. A **barvis** wake word or an @mention of the bot's PN/LID/device JID starts a turn. The wake word in your own message to someone also starts a turn in that DM, and one invocation keeps a peer DM subscribed for both sides until `leave`. `leave` unsubscribes a chat until the next **barvis**.
 
 The `exec` tool only runs on an operator `fromMe` message in self-chat. A wake-word turn in a peer DM runs without `exec`.
 

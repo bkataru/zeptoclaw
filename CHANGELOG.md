@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-04
+
+### WhatsApp
+
+- An active subscription keeps a peer DM open: after one `barvis` invocation by any participant, both sides get replies with no repeat wake word, until `leave` or unsubscribe. Untriggered, unsubscribed own messages in someone else's DM stay skipped.
+
 ## 0.5.1 - 2026-09-04
 
 ### WhatsApp
