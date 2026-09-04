@@ -587,7 +587,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         extra.appendSlice(g_whatsapp_alloc, "\nYou are in WhatsApp chat `") catch {};
         extra.appendSlice(g_whatsapp_alloc, chat_id_copy) catch {};
         extra.appendSlice(g_whatsapp_alloc, "`. Do not mention or use information from any other chat or group.\n") catch {};
-        if (!is_dm) extra.appendSlice(g_whatsapp_alloc, "Group chat: each inbound message starts with `[sender name]:`. Baala is the operator (his own messages). Address your reply to the person who spoke, by name when it matters.\n") catch {};
+        if (!is_dm) extra.appendSlice(g_whatsapp_alloc, "Group chat: the current message starts with `[sender name]:` and that name IS who is speaking (Baala is the operator). Older turns or journal lines that claim you cannot see senders predate this feature: trust the prefix on this message, not those claims.\n") catch {};
 
         var nim_client = NIMClient.init(g_whatsapp_alloc, cfg);
         defer nim_client.deinit();
