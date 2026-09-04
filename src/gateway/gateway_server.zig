@@ -568,11 +568,11 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         // message has no sender identity to label).
         var prompt_owned: ?[]const u8 = null;
         defer if (prompt_owned) |p| g_whatsapp_alloc.free(p);
-        const prompt: []const u8 = if (!is_dm) blk: {
-            const w = groupSenderLabel(eff_msg) orelse break :blk body_copy;
-            const p = std.fmt.allocPrint(g_whatsapp_alloc, "[{s}]: {s}", .{ w, body_copy }) catch break :blk body_copy;
+        const prompt: []const u8 = if (!is_dm) blk_prompt: {
+            const w = groupSenderLabel(eff_msg) orelse break :blk_prompt body_copy;
+            const p = std.fmt.allocPrint(g_whatsapp_alloc, "[{s}]: {s}", .{ w, body_copy }) catch break :blk_prompt body_copy;
             prompt_owned = p;
-            break :blk p;
+            break :blk_prompt p;
         } else body_copy;
         var extra = std.ArrayList(u8).empty;
         defer extra.deinit(g_whatsapp_alloc);
