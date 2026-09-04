@@ -80,9 +80,10 @@ pub fn isSelfChat(chat_id: []const u8, identities: []const []const u8) bool {
 pub const TurnGate = enum { skip_peer_from_me, listening, run };
 
 /// fromMe in a 1:1 with someone else is the operator talking to that person, not to Barvis.
+/// Exception: the wake word addresses Barvis directly, so a triggered peer fromMe runs.
 /// Group fromMe only runs on an explicit wake/mention, not leftover subscription.
 pub fn decideTurn(is_dm: bool, from_me: bool, is_self_chat: bool, triggered: bool, subscribed: bool) TurnGate {
-    if (is_dm and from_me and !is_self_chat) return .skip_peer_from_me;
+    if (is_dm and from_me and !is_self_chat) return if (triggered) .run else .skip_peer_from_me;
     if (from_me and !is_dm) {
         return if (triggered) .run else .listening;
     }
@@ -176,8 +177,9 @@ test "isSelfChat matches own LID PN and E164" {
     }));
 }
 
-test "decideTurn skips fromMe peer DMs even when subscribed or wake word" {
-    try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, true, true));
+test "decideTurn runs triggered fromMe peer DMs, skips the rest" {
+    try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, false, true, true));
+    try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, false, true, false));
     try std.testing.expectEqual(TurnGate.skip_peer_from_me, decideTurn(true, true, false, false, true));
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, true, true, true, false));
     try std.testing.expectEqual(TurnGate.run, decideTurn(true, false, false, false, true));
