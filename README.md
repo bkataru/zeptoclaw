@@ -6,10 +6,12 @@
 
 ## Build Status
 
-**0.4.0** (2026-09-04). Native WhatsApp is the only transport. `zig build test --summary all`: 468 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.5.0** (2026-09-04). Native WhatsApp is the only transport. `zig build test --summary all`: 469 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
+- **LID-group phone delivery** (0.5.0): self PN devices mirror to LID form before the SKDM fanout, so new LID-addressed groups work on the first reply
+- **Sender attribution** (0.5.0): group prompts arrive as `[name]: body`. Burst follow-ups and journal lines carry the same prefix
 - **Native-only WhatsApp** (0.4.0): the Node child, root `package.json`, and all Node spawn/JSON-RPC paths are gone. Pair with `zeptoclaw whatsapp pair`, which now works without `NVIDIA_API_KEY`
 - **Group replies reach your phone** (0.4.0): group sends query usync for own devices and include them in the SKDM fanout. A group @mention of the bot also triggers a turn
 - **Outbound edits and revokes** (0.4.0): the stanza carries `edit` (`1` / `7` / `8`); inbound edits decode. A group retry receipt resends SKDM plus skmsg (cap 5 per message)
@@ -44,9 +46,9 @@
 | Metric | Value |
 |--------|-------|
 | **Zig source files** | 119 |
-| **Lines of code** | ~46.6k in `src/` |
+| **Lines of code** | ~46.7k in `src/` |
 | **Build errors** | 0 |
-| **Tests** | 471 (468 pass, 3 skip) |
+| **Tests** | 472 (469 pass, 3 skip) |
 | **Binaries** | 6 |
 | **Skills ported** | 21 |
 
@@ -497,10 +499,10 @@ MIT - Same as the rest of the Claw family.
 
 ## History
 
-August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
+August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. 0.5.0 fixes LID-group phone delivery for new groups and names the sender on every group turn. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
 
 ---
 
-**Status:** v0.4.0 tagged. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair. WhatsApp `runTurn` plus journals plus memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
+**Status:** v0.5.0 tagged. LID-group phone delivery, sender attribution on group turns, fanout diag logging. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair. WhatsApp `runTurn` plus journals plus memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

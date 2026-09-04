@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-04
+
+### WhatsApp
+
+- LID-addressed groups now mirror self PN devices to LID form before the SKDM fanout. Phones drop PN-addressed targets in LID groups, so group replies stayed invisible on the sender phone while peers could read them. New allowlisted groups work on the first reply.
+- Group turns name the sender. Prompts arrive as `[name]: body` (push name, else E.164 digits, Baala for the operator's own messages). Burst follow-ups and journal lines carry the same prefix, so the model no longer attributes one member's words to another.
+- Group sends log a one-line fanout summary (addressing mode, participant, usync, and device counts) plus the device list, for delivery debugging.
+
 ## 0.4.0 - 2026-09-04
 
 ### WhatsApp

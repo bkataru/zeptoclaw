@@ -38,8 +38,11 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - Group own-phone delivery: group sends query usync for own devices and include them in the SKDM fanout, so the sender phone decrypts group replies.
 - Retry recovery: `sendText` caches the last 64 outbound plaintexts. A 1:1 retry drops the stale session, fetches a fresh prekey bundle, and resends with the same id. A group retry fans out SKDM plus skmsg. Cap: 5 resends per message.
 - 401 logout: the client starts QR re-pair instead of leaving a dead session.
+- LID-group phone delivery: in LID-addressed groups, self PN devices mirror to LID form before the SKDM fanout. Phones drop PN-addressed targets in LID groups.
 
-`zeptoclaw-wa-send <db-path> <to-jid> <text>` is a standalone one-shot sender. Use it to force a fresh handshake by hand, outside the automatic path, for example for a first-contact or self-chat probe, or when the automatic retry cap is hit. Stop the gateway first, so `wa-send` gets exclusive access to the sqlite session store.
+## Sender attribution
+
+Group prompts arrive as `[name]: body`. The name is the push name, else E.164 digits, else Baala for the operator's own messages. Burst follow-ups merge already-prefixed lines, and journal `[in]`/`[out]` lines carry `[sender]` tags after the chat marker. The model is told the prefix names the speaker, and that older turns claiming otherwise predate the feature.
 
 ## Signature
 
