@@ -2089,6 +2089,8 @@ pub const Client = struct {
             try devices.append(alloc, dj);
         }
         if (devices.items.len == 0) return error.NoDevices;
+        std.log.info("[whatsapp-native] group send to={s} mode={s} parts={d} usync={d} devices={d}", .{ to, info.addressing_mode, info.participants.len, entries.len, devices.items.len });
+        for (devices.items) |d| std.log.info("[whatsapp-native] group send device {s}", .{d});
 
         // phash input = allDevices (own phone + this companion + every participant device)
         var all_devices: std.ArrayList([]const u8) = .empty;
