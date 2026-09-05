@@ -13,18 +13,18 @@ Three jobs. They write different files.
 
 This is the trace. `MEMORY.md` is distilled later.
 
-## Tools (`core_tools.zig`)
+## Recall (auto + tools)
 
-Turns do not inject `MEMORY.md` or daily files into the system prompt. The model can call:
+Every turn preloads ranked recall: the inbound text is tokenized (lowercase alnum runs of 3+, no stopwords, max 12 terms), each line of `MEMORY.md` plus every daily journal scores by distinct-term coverage, and the best 8 lines go into the turn context. Newest journal wins score ties. `memory_search` runs the same engine with 20 hits. `memory_get` still reads full files, and append/edit store notes.
+
+## Tools (`core_tools.zig`)
 
 | Tool | Args | File |
 |------|------|------|
 | `memory_get` | `which=long\|daily\|yesterday` | `MEMORY.md` or today's/yesterday's journal |
-| `memory_search` | `query`, optional `include_long` | `MEMORY.md` + recent journals |
+| `memory_search` | `query`, optional `include_long` | ranked recall over `MEMORY.md` + all journals |
 | `memory_append` | `text`, `target=long\|daily` | `MEMORY.md` or today |
 | `memory_edit` | `old_str`, `new_str`, `target=long\|daily` | replace span |
-
-`core_tools.setChatId` is called from `loop.zig` so appends tag the chat.
 
 ## Ingest (30 min): `zeptoclaw memory update`
 
@@ -55,7 +55,7 @@ Stamps keep both `lastMemoryUpdate` and `lastMemoryCompact` in `heartbeat-state.
 
 ## Same-chat hydrate (after restart)
 
-`memory.dailyContext` injects today+yesterday **journal lines for this `chat_id` only** into the WhatsApp turn (RAM history is empty after a gateway restart). Marker is `] (JID):`. Other chats and `MEMORY.md` are not included. Cap 12KB of matching lines.
+`memory.dailyContext` injects today+yesterday **journal lines for this `chat_id` only** into the WhatsApp turn (RAM history is empty after a gateway restart). Marker is `] (JID):`. Cap 12KB of matching lines. Ranked recall (above) covers the rest: other chats, `MEMORY.md`, and older journals.
 
 ## Isolated NIM child
 

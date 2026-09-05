@@ -39,6 +39,8 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - Retry recovery: `sendText` caches the last 64 outbound plaintexts. A 1:1 retry drops the stale session, fetches a fresh prekey bundle, and resends with the same id. A group retry fans out SKDM plus skmsg. Cap: 5 resends per message.
 - 401 logout: the client starts QR re-pair instead of leaving a dead session.
 - LID-group phone delivery: in LID-addressed groups, self PN devices mirror to LID form before the SKDM fanout. Phones drop PN-addressed targets in LID groups.
+- Repeat greetings: the rolling transcript once held inbound lines only, so every turn looked like the first. Outbound replies are now recorded as Barvis, and `fromMe` inbound carries the push name.
+- Vision breaker: `see_image` opens for 10 minutes after 3 straight model failures, fails fast, and tells Barvis to answer from text without repeating the outage.
 
 ## Sender attribution
 
