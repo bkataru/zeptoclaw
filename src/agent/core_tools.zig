@@ -36,6 +36,22 @@ threadlocal var g_vision_image_mime: []const u8 = "image/jpeg";
 threadlocal var g_vision_api_key: []const u8 = "";
 threadlocal var g_vision_model: []const u8 = "";
 threadlocal var g_vision_base_url: []const u8 = "";
+    const vision_breaker_trips: u32 = 3;
+    const vision_breaker_cooldown_s: i64 = 600;
+    var g_vision_fail_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+    var g_vision_last_fail_sec: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+    /// True while the breaker is open: repeated vision failures within cooldown.
+    fn visionBreakerOpen() bool {
+        if (g_vision_fail_count.load(.acquire) < vision_breaker_trips) return false;
+        const dt = compat.timestamp() - g_vision_last_fail_sec.load(.acquire);
+        if (dt < vision_breaker_cooldown_s) return true;
+        g_vision_fail_count.store(0, .release);
+        return false;
+    }
+    fn visionNoteFailure() void {
+        _ = g_vision_fail_count.fetchAdd(1, .monotonic);
+        g_vision_last_fail_sec.store(compat.timestamp(), .release);
+    }
 
 /// Sets the image attached to the current turn (if any). Call once per turn; pass null to clear.
 pub fn setVisionImage(path: ?[]const u8, mime: ?[]const u8) void {
@@ -318,6 +334,7 @@ pub fn seeImageTool(allocator: Allocator, args: []const u8) ![]const u8 {
     if (path.len == 0) return allocator.dupe(u8, "error: no image attached to this turn");
     if (g_vision_api_key.len == 0 or g_vision_model.len == 0 or g_vision_base_url.len == 0)
         return allocator.dupe(u8, "error: vision model not configured");
+    if (visionBreakerOpen()) return allocator.dupe(u8, "error: vision model temporarily unavailable after repeated failures (cooling down). Do not call see_image again this turn. Answer from the text context; if you already told the user about the outage, do not repeat it.");
 
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch null;
     defer if (parsed) |p| p.deinit();
@@ -337,8 +354,11 @@ pub fn seeImageTool(allocator: Allocator, args: []const u8) ![]const u8 {
     var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
     defer client.deinit();
 
-    var response = client.chat(&messages) catch |err|
-        return std.fmt.allocPrint(allocator, "error: vision request failed: {s}", .{@errorName(err)});
+    var response = client.chat(&messages) catch |err| {
+        visionNoteFailure();
+        return std.fmt.allocPrint(allocator, "error: vision request failed: {s}. Do not retry see_image this turn; answer from the text context.", .{@errorName(err)});
+    };
+    g_vision_fail_count.store(0, .release);
     defer response.deinit(allocator);
 
     if (response.choices.len == 0) return allocator.dupe(u8, "error: vision model returned no response");
@@ -640,6 +660,20 @@ test "core_tools see_image no image attached" {
     const out = try seeImageTool(allocator, "{}");
     defer allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "no image attached") != null);
+}
+
+test "core_tools vision breaker trips and cools down" {
+    g_vision_fail_count.store(0, .release);
+    try std.testing.expect(!visionBreakerOpen());
+    visionNoteFailure();
+    visionNoteFailure();
+    try std.testing.expect(!visionBreakerOpen());
+    visionNoteFailure();
+    try std.testing.expect(visionBreakerOpen());
+    // Cooldown expiry closes it and resets the count.
+    g_vision_last_fail_sec.store(compat.timestamp() - 601, .release);
+    try std.testing.expect(!visionBreakerOpen());
+    try std.testing.expectEqual(@as(u32, 0), g_vision_fail_count.load(.acquire));
 }
 
 test "core_tools see_image vision not configured" {

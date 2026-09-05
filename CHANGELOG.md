@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Presence lifecycle is now an explicit transition table (`nextGate` + `applyGate` own the subscribe/unsubscribe side effects, so the gateway cannot drift from the table). Retry-receipt drop policy is a pure tested kernel (`decideRetryReceipt`). No behavior change.
+- Memory recall: ranked term-coverage retrieval over MEMORY.md plus every daily journal (newest-first tiebreak), auto-preloaded into each turn (8 hits). `memory_search` shares the engine. Replaces 3-day substring grep.
+- Vision circuit breaker: `see_image` trips open after 3 straight failures (10 min cooldown), fails fast instead of hammering the model, and tells Barvis to answer from text without repeat outage announcements.
 
 ## 0.5.2 - 2026-09-04
 

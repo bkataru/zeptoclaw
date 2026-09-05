@@ -363,6 +363,7 @@ fn recallInner(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, m
         for (terms.items) |t| allocator.free(t);
         terms.deinit(allocator);
     }
+
     if (terms.items.len == 0 or max_hits == 0) return allocator.dupe(u8, "");
     // Newest journals first so recency wins score ties.
     var journal_names = std.ArrayList([]u8).empty;
@@ -372,10 +373,10 @@ fn recallInner(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, m
     }
     // Journal dir lives at <ws>/memory.
     const io = compat.getIo();
-    if (std.Io.Dir.openDirAbsolute(io, ws, .{})) |d| {
+    if (std.Io.Dir.openDirAbsolute(io, ws, .{ .iterate = true })) |d| {
         var dir = d;
         defer dir.close(io);
-        if (dir.openDir(io, "memory", .{})) |jd| {
+        if (dir.openDir(io, "memory", .{ .iterate = true })) |jd| {
             var jdir = jd;
             defer jdir.close(io);
             var it = jdir.iterate();
@@ -400,7 +401,7 @@ fn recallInner(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, m
     if (include_long) {
         if (getLongTerm(allocator, ws)) |buf| {
             defer allocator.free(buf);
-            collectScored(&best, &nbest, cap_hits, "MEMORY.md", buf, terms.items);
+            collectScored(allocator, &best, &nbest, cap_hits, "MEMORY.md", buf, terms.items);
         }
     }
     for (journal_names.items) |jn| {
@@ -408,23 +409,25 @@ fn recallInner(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, m
         defer allocator.free(path);
         const buf = readFileCapped(allocator, path, 64 * 1024) orelse continue;
         defer allocator.free(buf);
-        collectScored(&best, &nbest, cap_hits, jn, buf, terms.items);
+        collectScored(allocator, &best, &nbest, cap_hits, jn, buf, terms.items);
     }
     if (nbest == 0) return allocator.dupe(u8, "");
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     for (best[0..nbest]) |h| {
-        try out.appendSlice(allocator, h.name);
-        try out.appendSlice(allocator, ": ");
-        try out.appendSlice(allocator, snippet(h.line, 240));
-        try out.append(allocator, '\n');
+        out.appendSlice(allocator, h.name) catch continue;
+        out.appendSlice(allocator, ": ") catch continue;
+        out.appendSlice(allocator, snippet(h.line, 240)) catch continue;
+        out.append(allocator, '\n') catch continue;
         if (out.items.len > 6 * 1024) break;
     }
+    for (best[0..nbest]) |h| allocator.free(h.line);
     return out.toOwnedSlice(allocator);
 }
 
-/// Score every line of `buf`, keeping the top `cap` hits in `best`/`nbest`.
-fn collectScored(best: *[16]ScoredHit, nbest: *usize, cap: usize, name: []const u8, buf: []const u8, terms: []const []u8) void {
+/// Score every line of `buf`, keeping the top `cap` hits. Kept lines are
+/// duped (owned by `best`, freed by the caller after output); `buf` may die.
+fn collectScored(allocator: std.mem.Allocator, best: *[16]ScoredHit, nbest: *usize, cap: usize, name: []const u8, buf: []const u8, terms: []const []u8) void {
     var it = std.mem.splitScalar(u8, buf, '\n');
     while (it.next()) |line| {
         if (line.len < 4) continue;
@@ -434,10 +437,11 @@ fn collectScored(best: *[16]ScoredHit, nbest: *usize, cap: usize, name: []const 
         var pos: usize = 0;
         while (pos < nbest.* and best[pos].score >= s) : (pos += 1) {}
         if (pos >= cap and nbest.* >= cap) continue;
+        const owned = allocator.dupe(u8, line) catch continue;
         if (nbest.* < cap) nbest.* += 1;
         var j: usize = nbest.* - 1;
         while (j > pos) : (j -= 1) best[j] = best[j - 1];
-        best[pos] = .{ .score = s, .name = name, .line = line };
+        best[pos] = .{ .score = s, .name = name, .line = owned };
     }
 }
 
