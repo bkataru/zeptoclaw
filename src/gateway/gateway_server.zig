@@ -529,6 +529,26 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         // Disk hydrate: same chat_id only. Survives gateway restart. Not MEMORY.md.
         const journal_ctx: ?[]const u8 = memory.dailyContext(g_whatsapp_alloc, chat_id_copy, is_dm);
         defer if (journal_ctx) |jc| g_whatsapp_alloc.free(jc);
+        // Auto-recall: ranked hits from MEMORY.md + every daily journal for
+        // this message, so the model does not have to choose to search.
+        // Skipped for reactions/polls/revokes and tiny bodies.
+        const recall_ctx: ?[]const u8 = blk_recall: {
+            if (event_only or body_copy.len < 4) break :blk_recall null;
+            const wd = ws_dir_const orelse break :blk_recall null;
+            const hits = memory.recall(g_whatsapp_alloc, wd, body_copy, 8) catch break :blk_recall null;
+            if (hits.len == 0) {
+                g_whatsapp_alloc.free(hits);
+                break :blk_recall null;
+            }
+            const joined = std.fmt.allocPrint(g_whatsapp_alloc, "\n--- Memory recall (MEMORY.md + journals, ranked) ---\n{s}\n", .{hits}) catch {
+                g_whatsapp_alloc.free(hits);
+                break :blk_recall null;
+            };
+            g_whatsapp_alloc.free(hits);
+            break :blk_recall joined;
+        };
+        defer if (recall_ctx) |rc| g_whatsapp_alloc.free(rc);
+
         if (pre) |pc| {
             msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = pc }) catch {};
         }
@@ -539,6 +559,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         }
         if (journal_ctx) |jc| {
             msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = jc }) catch {};
+        }
+        if (recall_ctx) |rc| {
+            msgs_list.append(g_whatsapp_alloc, .{ .role = .system, .content = rc }) catch {};
         }
         const long_ctx: ?[]const u8 = if (is_dm and eff_msg.from_me)
             blk_mem: {
@@ -578,8 +601,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         if (hist_ctx) |hc| extra.appendSlice(g_whatsapp_alloc, hc) catch {};
         if (journal_ctx) |jc| extra.appendSlice(g_whatsapp_alloc, jc) catch {};
         if (long_ctx) |lc| extra.appendSlice(g_whatsapp_alloc, lc) catch {};
+        if (recall_ctx) |rc| extra.appendSlice(g_whatsapp_alloc, rc) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\n") catch {};
-        extra.appendSlice(g_whatsapp_alloc, "\nUse memory_get, memory_search, memory_append, memory_edit when you need long-term or daily notes. They are not preloaded.\n") catch {};
+        extra.appendSlice(g_whatsapp_alloc, "\nMemory recall above is preloaded. Use memory_get for full files and memory_append/memory_edit to store durable notes.\n") catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.PRESENCE_INSTRUCTIONS) catch {};
         extra.appendSlice(g_whatsapp_alloc, zeptoclaw.channels.whatsapp.engagement.LANGUAGE_INSTRUCTIONS) catch {};
         extra.appendSlice(g_whatsapp_alloc, "\nYou are in WhatsApp chat `") catch {};

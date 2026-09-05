@@ -501,8 +501,8 @@ pub fn registerAll(reg: *tools.ToolRegistry, hold: *ParamHold) !void {
         .{ .name = "listen", .desc = "Stay silent this turn; keep recording inbound", .json = PARAM_EMPTY, .h = listenTool },
         .{ .name = "leave", .desc = "Leave this chat until woken with barvis", .json = PARAM_EMPTY, .h = leaveTool },
         .{ .name = "skill", .desc = "Run a named skill command", .json = PARAM_SKILL, .h = skillTool },
-        .{ .name = "memory_get", .desc = "Read MEMORY.md (which=long) or today's/yesterday's daily journal. Optional; not loaded unless you call it.", .json = PARAM_MEM_GET, .h = memoryGetTool },
-        .{ .name = "memory_search", .desc = "Search MEMORY.md and recent daily journals", .json = PARAM_MEM_SEARCH, .h = memorySearchTool },
+        .{ .name = "memory_get", .desc = "Read full MEMORY.md (which=long) or today's/yesterday's daily journal. Ranked recall is already preloaded per turn; use this for full files.", .json = PARAM_MEM_GET, .h = memoryGetTool },
+        .{ .name = "memory_search", .desc = "Ranked search over MEMORY.md and all daily journals (same engine as preloaded recall, more hits)", .json = PARAM_MEM_SEARCH, .h = memorySearchTool },
         .{ .name = "memory_append", .desc = "Append a note to MEMORY.md (target=long) or today's journal (target=daily)", .json = PARAM_MEM_APPEND, .h = memoryAppendTool },
         .{ .name = "memory_edit", .desc = "Replace old_str with new_str in MEMORY.md or today's daily file", .json = PARAM_MEM_EDIT, .h = memoryEditTool },
     };

@@ -289,44 +289,168 @@ pub fn appendDailyNote(allocator: std.mem.Allocator, ws: []const u8, chat_id: []
     writeFile(path, body.items);
 }
 
-/// Memory: Caller owns returned search hits.
-pub fn search(allocator: std.mem.Allocator, ws: []const u8, query: []const u8, include_long: bool) ![]u8 {
-    if (query.len == 0) return allocator.dupe(u8, "error: empty query");
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    var hits: usize = 0;
+/// Stopwords for recall term extraction: glue words that never identify a memory.
+const recall_stopwords: []const []const u8 = &.{
+    "the", "and", "for", "are", "but", "not", "you", "all", "any", "can",
+    "had", "her", "was", "one", "our", "out", "day", "has", "have", "from",
+    "they", "with", "that", "this", "what", "when", "where", "which", "who",
+    "will", "how", "about", "into", "your", "then", "than", "them", "there",
+    "their", "been", "also", "just", "said", "with", "are", "was", "were",
+    "does", "did", "she", "him", "his", "hers", "its", "our", "ours", "yours",
+    "please", "thanks", "thank", "hello", "hey", "morning", "evening", "today",
+    "tell", "know", "like", "want", "need", "much", "more", "very", "here",
+    "there", "some", "such", "only", "over", "under", "again", "once", "now",
+};
+
+fn isRecallStopword(w: []const u8) bool {
+    for (recall_stopwords) |s| if (std.mem.eql(u8, s, w)) return true;
+    return false;
+}
+
+/// Split text into lowercase query terms: alnum runs of 3+, deduped, no
+/// stopwords, capped at 12. Caller frees each term and the list.
+fn queryTerms(allocator: std.mem.Allocator, text: []const u8) !std.ArrayList([]u8) {
+    var terms = std.ArrayList([]u8).empty;
+    errdefer {
+        for (terms.items) |t| allocator.free(t);
+        terms.deinit(allocator);
+    }
+    var i: usize = 0;
+    while (i < text.len) {
+        while (i < text.len and !std.ascii.isAlphanumeric(text[i])) : (i += 1) {}
+        const start = i;
+        while (i < text.len and std.ascii.isAlphanumeric(text[i])) : (i += 1) {}
+        if (i - start < 3) continue;
+        const w = try allocator.dupe(u8, text[start..i]);
+        errdefer allocator.free(w);
+        for (w) |*c| c.* = std.ascii.toLower(c.*);
+        var dup = false;
+        for (terms.items) |t| if (std.mem.eql(u8, t, w)) {
+            dup = true;
+            break;
+        };
+        if (dup or isRecallStopword(w)) {
+            allocator.free(w);
+            continue;
+        }
+        try terms.append(allocator, w);
+        if (terms.items.len >= 12) break;
+    }
+    return terms;
+}
+
+/// Distinct query terms contained in the line (case-insensitive).
+fn scoreLine(line: []const u8, terms: []const []u8) usize {
+    var n: usize = 0;
+    for (terms) |t| {
+        if (containsIgnoreCase(line, t)) n += 1;
+    }
+    return n;
+}
+
+const ScoredHit = struct { score: usize, name: []const u8, line: []const u8 };
+
+/// Ranked recall over MEMORY.md plus every daily journal (newest first):
+/// tokenize the text, score each line by distinct-term coverage, keep the
+/// best `max_hits`. Returns "" when nothing matches. Caller owns result.
+pub fn recall(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, max_hits: usize) ![]u8 {
+    return recallInner(allocator, ws, text, max_hits, true);
+}
+
+fn recallInner(allocator: std.mem.Allocator, ws: []const u8, text: []const u8, max_hits: usize, include_long: bool) ![]u8 {
+    var terms = try queryTerms(allocator, text);
+    defer {
+        for (terms.items) |t| allocator.free(t);
+        terms.deinit(allocator);
+    }
+    if (terms.items.len == 0 or max_hits == 0) return allocator.dupe(u8, "");
+    // Newest journals first so recency wins score ties.
+    var journal_names = std.ArrayList([]u8).empty;
+    defer {
+        for (journal_names.items) |n| allocator.free(n);
+        journal_names.deinit(allocator);
+    }
+    // Journal dir lives at <ws>/memory.
+    const io = compat.getIo();
+    if (std.Io.Dir.openDirAbsolute(io, ws, .{})) |d| {
+        var dir = d;
+        defer dir.close(io);
+        if (dir.openDir(io, "memory", .{})) |jd| {
+            var jdir = jd;
+            defer jdir.close(io);
+            var it = jdir.iterate();
+            while (it.next(io) catch null) |e| {
+                if (e.kind != .file) continue;
+                if (!std.mem.startsWith(u8, e.name, "20")) continue;
+                if (!std.mem.endsWith(u8, e.name, ".md")) continue;
+                journal_names.append(allocator, allocator.dupe(u8, e.name) catch continue) catch continue;
+                if (journal_names.items.len >= 60) break;
+            }
+        } else |_| {}
+    } else |_| {}
+    std.mem.sort([]u8, journal_names.items, {}, struct {
+        fn lessThan(_: void, a: []u8, b: []u8) bool {
+            return std.mem.order(u8, a, b) == .gt; // newest first
+        }
+    }.lessThan);
+    var best: [16]ScoredHit = undefined;
+    var nbest: usize = 0;
+    const cap_hits = @min(max_hits, best.len);
+    // Distilled memory first, then journals newest-first.
     if (include_long) {
         if (getLongTerm(allocator, ws)) |buf| {
             defer allocator.free(buf);
-            hits += collectHits(&out, allocator, "MEMORY.md", buf, query);
+            collectScored(&best, &nbest, cap_hits, "MEMORY.md", buf, terms.items);
         }
     }
-    var off: i64 = 0;
-    while (off > -3) : (off -= 1) {
-        const path = dailyPath(allocator, ws, civilNowIst(), off) catch continue;
+    for (journal_names.items) |jn| {
+        const path = std.fmt.allocPrint(allocator, "{s}/memory/{s}", .{ ws, jn }) catch continue;
         defer allocator.free(path);
-        const buf = readFileCapped(allocator, path, 32 * 1024) orelse continue;
+        const buf = readFileCapped(allocator, path, 64 * 1024) orelse continue;
         defer allocator.free(buf);
-        const name = std.fs.path.basename(path);
-        hits += collectHits(&out, allocator, name, buf, query);
+        collectScored(&best, &nbest, cap_hits, jn, buf, terms.items);
     }
-    if (hits == 0) return allocator.dupe(u8, "(no matches)");
+    if (nbest == 0) return allocator.dupe(u8, "");
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (best[0..nbest]) |h| {
+        try out.appendSlice(allocator, h.name);
+        try out.appendSlice(allocator, ": ");
+        try out.appendSlice(allocator, snippet(h.line, 240));
+        try out.append(allocator, '\n');
+        if (out.items.len > 6 * 1024) break;
+    }
     return out.toOwnedSlice(allocator);
 }
 
-fn collectHits(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, buf: []const u8, query: []const u8) usize {
-    var n: usize = 0;
+/// Score every line of `buf`, keeping the top `cap` hits in `best`/`nbest`.
+fn collectScored(best: *[16]ScoredHit, nbest: *usize, cap: usize, name: []const u8, buf: []const u8, terms: []const []u8) void {
     var it = std.mem.splitScalar(u8, buf, '\n');
     while (it.next()) |line| {
-        if (!containsIgnoreCase(line, query)) continue;
-        out.appendSlice(allocator, name) catch return n;
-        out.appendSlice(allocator, ": ") catch return n;
-        out.appendSlice(allocator, snippet(line, 240)) catch return n;
-        out.append(allocator, '\n') catch return n;
-        n += 1;
-        if (n >= 40 or out.items.len > 8 * 1024) break;
+        if (line.len < 4) continue;
+        const s = scoreLine(line, terms);
+        if (s == 0) continue;
+        // Insert ranked (higher score first; ties keep earlier = newer file).
+        var pos: usize = 0;
+        while (pos < nbest.* and best[pos].score >= s) : (pos += 1) {}
+        if (pos >= cap and nbest.* >= cap) continue;
+        if (nbest.* < cap) nbest.* += 1;
+        var j: usize = nbest.* - 1;
+        while (j > pos) : (j -= 1) best[j] = best[j - 1];
+        best[pos] = .{ .score = s, .name = name, .line = line };
     }
-    return n;
+}
+
+/// Memory: Caller owns returned search hits. Ranked recall over MEMORY.md
+/// and all daily journals; `include_long=false` skips MEMORY.md.
+pub fn search(allocator: std.mem.Allocator, ws: []const u8, query: []const u8, include_long: bool) ![]u8 {
+    if (query.len == 0) return allocator.dupe(u8, "error: empty query");
+    const hits = try recallInner(allocator, ws, query, 20, include_long);
+    if (hits.len == 0) {
+        allocator.free(hits);
+        return allocator.dupe(u8, "(no matches)");
+    }
+    return hits;
 }
 
 pub fn replaceIn(allocator: std.mem.Allocator, ws: []const u8, rel: []const u8, old_str: []const u8, new_str: []const u8) ![]u8 {
@@ -554,6 +678,39 @@ test "dailyPath pads month and day" {
     const p = try dailyPath(allocator, "/tmp/ws", .{ .year = 2026, .month = 8, .day = 22 }, 0);
     defer allocator.free(p);
     try std.testing.expectEqualStrings("/tmp/ws/memory/2026-08-22.md", p);
+}
+
+test "recall ranks multi-term lines first across journals" {
+    const allocator = std.testing.allocator;
+    const dir = "/tmp/zeptoclaw-recall-test";
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, dir) catch {};
+    const mem_path = try std.fmt.allocPrint(allocator, "{s}/MEMORY.md", .{dir});
+    defer allocator.free(mem_path);
+    writeFile(mem_path, "# MEMORY.md\n- Haimdall router design notes\n");
+    const jdir_path = try std.fmt.allocPrint(allocator, "{s}/memory", .{dir});
+    defer allocator.free(jdir_path);
+    std.Io.Dir.createDirPath(compat.cwd().dir, compat.cwd().io, jdir_path) catch {};
+    const old_path = try std.fmt.allocPrint(allocator, "{s}/memory/2026-01-05.md", .{dir});
+    defer allocator.free(old_path);
+    writeFile(old_path, "- talked about billing webhooks\n");
+    const new_path = try std.fmt.allocPrint(allocator, "{s}/memory/2026-09-04.md", .{dir});
+    defer allocator.free(new_path);
+    writeFile(new_path, "- Haimdall metering crate plan\n- unrelated lunch note\n");
+    // Multi-term line outranks single-term lines.
+    const hits = try recall(allocator, dir, "Haimdall metering", 8);
+    defer allocator.free(hits);
+    try std.testing.expect(std.mem.indexOf(u8, hits, "metering crate") != null);
+    const first = std.mem.indexOf(u8, hits, "metering crate") orelse unreachable;
+    const router = std.mem.indexOf(u8, hits, "router design");
+    if (router) |r| try std.testing.expect(first < r);
+    // Stopword-only queries recall nothing.
+    const none = try recall(allocator, dir, "what is the", 8);
+    defer allocator.free(none);
+    try std.testing.expectEqualStrings("", none);
+    // Explicit search shares the engine and reports no-match text.
+    const miss = try search(allocator, dir, "zxqvkjwx", true);
+    defer allocator.free(miss);
+    try std.testing.expectEqualStrings("(no matches)", miss);
 }
 
 test "appendLongTerm and search and replaceIn" {
