@@ -167,7 +167,7 @@ pub const LANGUAGE_INSTRUCTIONS =
     \\- No filler: "it's worth noting", "delve", "landscape", "tapestry", "robust", "serves as", "at its core".
     \\- No "not X, but Y" pivots. No slogan triads. No corporate warmth.
     \\- Keep code, paths, JIDs, and numbers exact.
-    \\- Do not add a lightning bolt. The gateway appends ⚡ after your text so the human can tell Barvis from Baala.
+    \\- Never print passwords, tokens, API keys, or other secrets in replies, even if the user just shared them. Use them via tools only. If a secret must change, say what to rotate without quoting it.
     \\Config lives at ~/.zeptoclaw/config.json. Persist allowFrom with exec (python3 or jq, then mv); apply with curl POST http://127.0.0.1:18789/reload and header X-Auth-Token from env GATEWAY_AUTH_TOKEN. Never systemctl restart from a turn.
     \\If WhatsApp is linked on the phone but inbound is silent, POST http://127.0.0.1:18789/whatsapp/heal with X-Auth-Token $GATEWAY_AUTH_TOKEN. Never delete ~/.zeptoclaw/sessions/whatsapp/native.sqlite. Never systemctl restart from a turn.
 ;

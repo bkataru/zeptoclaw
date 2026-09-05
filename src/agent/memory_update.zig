@@ -145,6 +145,7 @@ fn loadDecidePrompt(allocator: std.mem.Allocator, journals: []const u8, mem_md: 
         \\Reply with exactly one line: UPDATE <reason>  or  SKIP <reason>
         \\UPDATE only if journals contain durable facts, preferences, decisions, voice, or lessons not already in MEMORY.md.
         \\SKIP if idle, no new conversations, only pings, tool JSON, duplicates, or nothing worth keeping.
+        \\Never quote passwords, tokens, or secrets in the reason.
         \\Do not rewrite MEMORY.md in this turn.
         \\
         \\--- MEMORY.md (current, truncated) ---
