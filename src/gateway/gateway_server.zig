@@ -672,6 +672,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     std.log.info("[whatsapp] sent message_id=chunked/{d} to {s}", .{ send_result.chunk_count, chat_id_copy });
     std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, signed_text });
     journal_append(g_whatsapp_alloc, "out", chat_id_copy, signed_text, if (!is_dm) "Barvis" else null);
+    // Feed the reply back into the rolling group transcript, so the next
+    // turn sees what Barvis already said instead of greeting anew.
+    session.recordTranscript(chat_id_copy, "Barvis", signed_text);
     if (is_dm) memory.persistDmNote(g_whatsapp_alloc, chat_id_copy, body_copy, signed_text);
     const rlen = @min(signed_text.len, g_last_reply_buf.len);
     @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);

@@ -282,7 +282,7 @@ pub const WhatsAppSession = struct {
 
     /// Process inbound message with debouncing
     /// Record a message line into the per-chat rolling transcript (max 50 entries).
-    fn recordTranscript(self: *WhatsAppSession, chat_id: []const u8, who: []const u8, body: []const u8) void {
+    pub fn recordTranscript(self: *WhatsAppSession, chat_id: []const u8, who: []const u8, body: []const u8) void {
         if (std.mem.indexOf(u8, chat_id, "@g.us") == null) return; // groups only
         const gop = self.group_transcripts.getOrPut(chat_id) catch return;
         if (!gop.found_existing) {
@@ -325,7 +325,10 @@ pub const WhatsAppSession = struct {
     pub fn processInboundMessage(self: *WhatsAppSession, msg: WhatsAppMessage) !ProcessResult {
         // Record into rolling group transcript BEFORE policy gate: pre-context needs all traffic.
         {
-            const who: []const u8 = if (msg.from_me) "Barvis" else (msg.sender_name orelse (msg.sender_e164 orelse msg.from));
+            // fromMe is the operator typing, not Barvis: label it with the push
+            // name. Barvis's own replies are recorded at the outbound send
+            // site, so the model sees both sides of the conversation.
+            const who: []const u8 = msg.sender_name orelse (msg.sender_e164 orelse msg.from);
             self.recordTranscript(msg.chat_id, who, msg.body);
         }
         // Check access control
