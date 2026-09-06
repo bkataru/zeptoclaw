@@ -284,10 +284,8 @@ pub const Agent = struct {
     /// fails deterministically — retrying the identical body forever wedges
     /// the turn and swallows every later wake-up via coalescing.
     pub fn isTransient(err: types.ProviderError) bool {
-        return switch (err) {
-            error.Timeout, error.RateLimit, error.Network => true,
-            else => false,
-        };
+        // Single definition lives on NIMClient; media tools share it too.
+        return NIMClient.isTransientErr(err);
     }
 
     /// Permanent errors get 3 attempts, then propagate so the caller can

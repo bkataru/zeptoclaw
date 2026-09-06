@@ -354,7 +354,7 @@ pub fn seeImageTool(allocator: Allocator, args: []const u8) ![]const u8 {
     var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
     defer client.deinit();
 
-    var response = client.chat(&messages) catch |err| {
+    var response = client.chatWithRetry(&messages) catch |err| {
         visionNoteFailure();
         return std.fmt.allocPrint(allocator, "error: vision request failed: {s}. Do not retry see_image this turn; answer from the text context.", .{@errorName(err)});
     };
@@ -412,7 +412,7 @@ pub fn hearAudioTool(allocator: Allocator, args: []const u8) ![]const u8 {
     var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
     defer client.deinit();
 
-    var response = client.chat(&messages) catch |err| {
+    var response = client.chatWithRetry(&messages) catch |err| {
         visionNoteFailure();
         return std.fmt.allocPrint(allocator, "error: audio request failed: {s}. Do not retry hear_audio this turn; answer from the text context.", .{@errorName(err)});
     };
@@ -470,7 +470,7 @@ pub fn watchVideoTool(allocator: Allocator, args: []const u8) ![]const u8 {
     var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
     defer client.deinit();
 
-    var response = client.chat(&messages) catch |err| {
+    var response = client.chatWithRetry(&messages) catch |err| {
         visionNoteFailure();
         return std.fmt.allocPrint(allocator, "error: video request failed: {s}. Do not retry watch_video this turn; answer from the text context.", .{@errorName(err)});
     };

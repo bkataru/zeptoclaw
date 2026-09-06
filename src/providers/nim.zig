@@ -178,6 +178,33 @@ pub fn deinit(self: *NIMClient) void {
         try s.endObject();
     }
 
+    /// Mainline resilience, shared by chat turns and media tools: transient
+    /// errors (slow server, throttle, blip) deserve infinite retry; anything
+    /// else fails deterministically.
+    pub fn isTransientErr(err: types.ProviderError) bool {
+        return switch (err) {
+            error.Timeout, error.RateLimit, error.Network => true,
+            else => false,
+        };
+    }
+
+    /// Plain chat with mainline retry: transient errors retry forever,
+    /// permanent errors get 3 attempts, then propagate. Backs off between
+    /// tries like the agent loop.
+    pub fn chatWithRetry(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
+        var bad: u32 = 0;
+        while (true) {
+            if (self.chat(messages)) |resp| return resp else |err| {
+                std.log.warn("[nim] media {s} — retrying", .{@errorName(err)});
+                sleepAfterFailure();
+                if (!isTransientErr(err)) {
+                    bad += 1;
+                    if (bad >= 3) return err;
+                }
+            }
+        }
+    }
+
     /// Send chat completion request and return response
     /// Memory: Caller owns returned ChatCompletionResponse; call `response.deinit(allocator)` to free id/model/choices. Messages slice is borrowed.
     pub fn chat(self: *NIMClient, messages: []types.Message) types.ProviderError!types.ChatCompletionResponse {
@@ -935,4 +962,12 @@ test "nim backoff decays toward minimum" {
     try std.testing.expectEqual(@as(u64, 90), decayBackoff(180));
     try std.testing.expectEqual(@as(u64, 2), decayBackoff(3));
     try std.testing.expectEqual(@as(u64, 2), decayBackoff(2));
+}
+
+test "nim transient classifier" {
+    try std.testing.expect(NIMClient.isTransientErr(error.Timeout));
+    try std.testing.expect(NIMClient.isTransientErr(error.RateLimit));
+    try std.testing.expect(NIMClient.isTransientErr(error.Network));
+    try std.testing.expect(!NIMClient.isTransientErr(error.InvalidResponse));
+    try std.testing.expect(!NIMClient.isTransientErr(error.Auth));
 }
