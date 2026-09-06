@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Presence now expires after 30 minutes of silence (groups and DMs): a long-lost invocation can no longer answer a much-later message as if the conversation never paused. Any inbound keeps a live conversation open; a fresh wake reopens a quiet one.
+
 ## 0.6.0 - 2026-09-05
 
 ### WhatsApp

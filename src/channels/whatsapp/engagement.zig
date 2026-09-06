@@ -1,6 +1,7 @@
 //! Model-driven presence: gateway only tracks whether Barvis is *invoked*
 //! on a chat. Speak vs silent vs leave is decided by listen/leave tools.
 const std = @import("std");
+const compat = @import("../../compat.zig");
 
 const MAX_CHATS: usize = 32;
 const ID_CAP: usize = 128;
@@ -9,9 +10,16 @@ const Slot = struct {
     id: [ID_CAP]u8 = undefined,
     id_len: usize = 0,
     subscribed: bool = false,
+    /// Last inbound Unix time. Quiet chats expire via `isActive`, so a
+    /// long-lost invocation cannot answer a much-later message as if the
+    /// conversation never paused.
+    last_active: i64 = 0,
 };
 
 var g_slots: [MAX_CHATS]Slot = [_]Slot{.{}} ** MAX_CHATS;
+
+/// Silence longer than this unsubscribes a chat (groups and DMs alike).
+pub const IDLE_UNSUB_SEC: i64 = 1800;
 
 fn slotId(s: *const Slot) []const u8 {
     return s.id[0..s.id_len];
@@ -45,7 +53,9 @@ fn allocSlot(chat_id: []const u8) *Slot {
 
 /// Wake / keep receiving model turns for this chat.
 pub fn subscribe(chat_id: []const u8) void {
-    allocSlot(chat_id).subscribed = true;
+    const s = allocSlot(chat_id);
+    s.subscribed = true;
+    s.last_active = compat.timestamp();
 }
 
 /// Stop model turns until the next trigger word. Inbound is still journaled.
@@ -56,6 +66,24 @@ pub fn unsubscribe(chat_id: []const u8) void {
 pub fn isSubscribed(chat_id: []const u8) bool {
     if (findSlot(chat_id)) |s| return s.subscribed;
     return false;
+}
+
+/// Stamp inbound activity. Call for every processed inbound so a live
+/// conversation stays open while any side keeps talking.
+pub fn noteActivity(chat_id: []const u8, now_unix: i64) void {
+    if (findSlot(chat_id)) |s| s.last_active = now_unix;
+}
+
+/// Effective presence: subscribed and active within IDLE_UNSUB_SEC. Quiet
+/// chats lazily unsubscribe on read. Pure in `now_unix`; pinned by tests.
+pub fn isActive(chat_id: []const u8, now_unix: i64) bool {
+    const s = findSlot(chat_id) orelse return false;
+    if (!s.subscribed) return false;
+    if (s.last_active > 0 and now_unix - s.last_active > IDLE_UNSUB_SEC) {
+        s.subscribed = false;
+        return false;
+    }
+    return true;
 }
 
 const jid = @import("native/jid.zig");
@@ -234,6 +262,24 @@ test "isSelfChat matches own LID PN and E164" {
         "917019895010",
         "216638251077681@lid",
     }));
+}
+
+test "idle chats expire from presence" {
+    const id = "idle-test-chat";
+    unsubscribe(id);
+    try std.testing.expect(!isActive(id, 1000000));
+    subscribe(id);
+    noteActivity(id, 1000000);
+    try std.testing.expect(isActive(id, 1000000 + 1799));
+    try std.testing.expect(isActive(id, 1000000 + 1800));
+    try std.testing.expect(!isActive(id, 1000000 + 1801));
+    // Expiry unsubscribes lazily.
+    try std.testing.expect(!isSubscribed(id));
+    // Fresh activity reopens.
+    subscribe(id);
+    noteActivity(id, 2000000);
+    try std.testing.expect(isActive(id, 2000000 + 10));
+    unsubscribe(id);
 }
 
 test "decideTurn runs peer-DM fromMe on wake or subscription" {

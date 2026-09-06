@@ -438,11 +438,17 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     defer core_tools.setExecEnabled(true);
     const triggered = is_main_target or media_dm;
     const event_only = eff_msg.message_type == .reaction or eff_msg.message_type == .poll or eff_msg.message_type == .revoke;
+    const now_unix = compat.timestamp();
+    // Expiry first: a quiet chat must read idle even though this inbound is
+    // about to stamp it. Then stamp, so a live conversation stays open while
+    // any side keeps talking (groups and DMs alike).
+    const active_now = zeptoclaw.channels.whatsapp.engagement.isActive(chat_id_copy, now_unix);
+    zeptoclaw.channels.whatsapp.engagement.noteActivity(chat_id_copy, now_unix);
     const gate = zeptoclaw.channels.whatsapp.engagement.nextGate(.{
         .kind = if (!is_dm) .group else if (is_self_chat) .dm_self else .dm_peer,
         .from_me = eff_msg.from_me,
         .triggered = triggered,
-        .subscribed = zeptoclaw.channels.whatsapp.engagement.isSubscribed(chat_id_copy),
+        .subscribed = active_now,
         .event_only = event_only,
     });
     zeptoclaw.channels.whatsapp.engagement.applyGate(chat_id_copy, gate, triggered);
