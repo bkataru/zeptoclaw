@@ -77,6 +77,19 @@ pub fn isSelfChat(chat_id: []const u8, identities: []const []const u8) bool {
     return false;
 }
 
+/// Backlog guard: messages older than this never start a turn. Restarts and
+/// reconnects deliver offline mail in a flood; answering a 20-minute-old
+/// audio with "got it" reads as unprompted. Stale mail is still journaled.
+pub const STALE_TURN_SEC: i64 = 600;
+
+/// True when `sent_unix` (wire `t`, 0 when unset e.g. local replays) is older
+/// than STALE_TURN_SEC relative to `now_unix`. Pure; pinned by tests.
+pub fn isStaleInbound(sent_unix: i64, now_unix: i64) bool {
+    if (sent_unix <= 0) return false;
+    if (now_unix <= sent_unix) return false;
+    return now_unix - sent_unix > STALE_TURN_SEC;
+}
+
 pub const TurnGate = enum { skip_peer_from_me, listening, run };
 
 /// Presence lifecycle, one per chat. States: `idle` (unsubscribed) and
@@ -234,6 +247,15 @@ test "isSelfChat matches own LID PN and E164" {
         "917019895010",
         "216638251077681@lid",
     }));
+}
+
+test "isStaleInbound guards backlog floods" {
+    try std.testing.expect(!isStaleInbound(0, 1000000));
+    try std.testing.expect(!isStaleInbound(1000000, 1000000));
+    try std.testing.expect(!isStaleInbound(1000000, 999999));
+    try std.testing.expect(!isStaleInbound(1000000, 1000000 + 600));
+    try std.testing.expect(isStaleInbound(1000000, 1000000 + 601));
+    try std.testing.expect(isStaleInbound(1000000, 1000000 + 3600));
 }
 
 test "decideTurn runs peer-DM fromMe on wake or subscription" {
