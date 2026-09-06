@@ -396,14 +396,6 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     }
     defer if (journal_body_owned) g_whatsapp_alloc.free(journal_body);
     if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
-    // Backlog guard: offline mail arriving minutes late is journaled above
-    // but never starts a turn. Answering a 20-minute-old audio out of
-    // nowhere reads as unprompted.
-    if (zeptoclaw.channels.whatsapp.engagement.isStaleInbound(eff_msg.timestamp, compat.timestamp())) {
-        std.log.info("[whatsapp] stale inbound (age>{d}s), journaled only chat={s}", .{ zeptoclaw.channels.whatsapp.engagement.STALE_TURN_SEC, chat_id_copy });
-        g_whatsapp_mu.unlock(compat.getIo());
-        return;
-    }
     session.addMessage(eff_msg.*) catch {};
 
     // Skip our own outbound echo (self-chat fromMe replies). Exact or prefix match.
