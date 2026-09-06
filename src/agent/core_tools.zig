@@ -366,6 +366,65 @@ pub fn seeImageTool(allocator: Allocator, args: []const u8) ![]const u8 {
     if (text.len == 0) return allocator.dupe(u8, "error: vision model returned empty response");
     return allocator.dupe(u8, text);
 }
+threadlocal var g_audio_path: ?[]const u8 = null;
+threadlocal var g_audio_mime: []const u8 = "";
+
+/// Sets the voice note attached to the current turn (if any). Call once per turn; pass null to clear.
+pub fn setAudioAttachment(path: ?[]const u8, mime: ?[]const u8) void {
+    g_audio_path = path;
+    g_audio_mime = mime orelse "audio/ogg";
+}
+
+/// Memory: Caller owns returned transcription. Dispatches the attached turn audio to the same omni model as vision (it transcribes speech). Shares the vision breaker: one sick model, one cooldown.
+pub fn hearAudioTool(allocator: Allocator, args: []const u8) ![]const u8 {
+    const path = g_audio_path orelse return allocator.dupe(u8, "error: no audio attached to this turn");
+    if (path.len == 0) return allocator.dupe(u8, "error: no audio attached to this turn");
+    if (g_vision_api_key.len == 0 or g_vision_model.len == 0 or g_vision_base_url.len == 0)
+        return allocator.dupe(u8, "error: audio model not configured");
+    if (visionBreakerOpen()) return allocator.dupe(u8, "error: audio model temporarily unavailable after repeated failures (cooling down). Do not call hear_audio again this turn. Answer from the text context; if you already told the user about the outage, do not repeat it.");
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, args, .{}) catch null;
+    defer if (parsed) |p| p.deinit();
+    // WhatsApp voice notes arrive typed "audio" or "ptt" with .ogg paths; the
+    // model API wants a full MIME type. Derive from the path when bare.
+    var mime_buf: [32]u8 = undefined;
+    const mime: []const u8 = blk: {
+        if (std.mem.indexOf(u8, g_audio_mime, "/") != null) break :blk g_audio_mime;
+        if (std.mem.endsWith(u8, path, ".mp3")) break :blk "audio/mpeg";
+        if (std.mem.endsWith(u8, path, ".m4a") or std.mem.endsWith(u8, path, ".mp4")) break :blk "audio/mp4";
+        if (std.mem.endsWith(u8, path, ".wav")) break :blk "audio/wav";
+        if (std.mem.endsWith(u8, path, ".ogg") or std.mem.endsWith(u8, path, ".opus")) break :blk "audio/ogg";
+        break :blk std.fmt.bufPrint(&mime_buf, "audio/{s}", .{g_audio_mime}) catch "audio/ogg";
+    };
+    var question: []const u8 = "Transcribe this audio, then briefly say what it means in context.";
+    if (parsed) |p| {
+        if (jsonStr(p.value, "question")) |q| {
+            if (q.len > 0) question = q;
+        }
+    }
+
+    var msg = try message.userMessage(allocator, question);
+    defer msg.deinit(allocator);
+    msg.audio_data_url = inbound_media.fileToDataUrl(allocator, path, mime) orelse
+        return allocator.dupe(u8, "error: failed to read attached audio");
+
+    var messages = [_]types.Message{msg};
+    var client = nim.NIMClient.initWithBaseUrl(allocator, g_vision_api_key, g_vision_model, g_vision_base_url);
+    defer client.deinit();
+
+    var response = client.chat(&messages) catch |err| {
+        visionNoteFailure();
+        return std.fmt.allocPrint(allocator, "error: audio request failed: {s}. Do not retry hear_audio this turn; answer from the text context.", .{@errorName(err)});
+    };
+    g_vision_fail_count.store(0, .release);
+    defer response.deinit(allocator);
+
+    if (response.choices.len == 0) return allocator.dupe(u8, "error: audio model returned no response");
+    const text = response.choices[0].message.content orelse "";
+    if (text.len == 0) return allocator.dupe(u8, "error: audio model returned empty response");
+    return allocator.dupe(u8, text);
+}
+
 
 
 threadlocal var g_silent: bool = false;
@@ -407,6 +466,7 @@ const PARAM_EDIT = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"st
 const PARAM_EXEC = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}";
 const PARAM_SEARCH = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}";
 const PARAM_SEE_IMAGE = "{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"What to look for or ask about the image; defaults to a general description.\"}}}";
+const PARAM_HEAR_AUDIO = "{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"What to transcribe or ask about the voice note; defaults to transcription plus brief meaning.\"}}}";
 const PARAM_EMPTY = "{\"type\":\"object\",\"properties\":{}}";
 
 const PARAM_MEM_GET = "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":\"string\",\"description\":\"long, daily, or yesterday\"}},\"required\":[\"which\"]}";
@@ -518,6 +578,7 @@ pub fn registerAll(reg: *tools.ToolRegistry, hold: *ParamHold) !void {
         .{ .name = "exec", .desc = "Run /bin/sh -c in the workspace cwd. Mutating commands need ZEPTO_EXEC_APPROVE or exec-approvals.txt. WhatsApp: operator fromMe DMs only. Absolute paths allowed. After editing ~/.zeptoclaw/config.json, POST /reload with X-Auth-Token $GATEWAY_AUTH_TOKEN (do not restart the gateway).", .json = PARAM_EXEC, .h = execTool },
         .{ .name = "web_search", .desc = "Search the web via DuckDuckGo HTML", .json = PARAM_SEARCH, .h = webSearchTool },
         .{ .name = "see_image", .desc = "Inspect the image attached to this turn (if any) using the vision-capable model; pass an optional question", .json = PARAM_SEE_IMAGE, .h = seeImageTool },
+        .{ .name = "hear_audio", .desc = "Transcribe the voice note attached to this turn (if any) using the audio-capable model; pass an optional question", .json = PARAM_HEAR_AUDIO, .h = hearAudioTool },
         .{ .name = "listen", .desc = "Stay silent this turn; keep recording inbound", .json = PARAM_EMPTY, .h = listenTool },
         .{ .name = "leave", .desc = "Leave this chat until woken with barvis", .json = PARAM_EMPTY, .h = leaveTool },
         .{ .name = "skill", .desc = "Run a named skill command", .json = PARAM_SKILL, .h = skillTool },
@@ -641,6 +702,7 @@ test "core_tools exec pwd allowlisted" {
 }
 
 test "core_tools listen leave" {
+
     const allocator = std.testing.allocator;
     resetPresence();
     defer resetPresence();
@@ -652,6 +714,24 @@ test "core_tools listen leave" {
     defer allocator.free(b);
     try std.testing.expect(wantLeave());
     try std.testing.expect(wantSilent());
+}
+
+test "core_tools hear_audio no audio attached" {
+    const allocator = std.testing.allocator;
+    setAudioAttachment(null, null);
+    const out = try hearAudioTool(allocator, "{}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "no audio attached") != null);
+}
+
+test "core_tools hear_audio audio not configured" {
+    const allocator = std.testing.allocator;
+    setAudioAttachment("/tmp/zeptoclaw-audio-test.ogg", "audio/ogg");
+    defer setAudioAttachment(null, null);
+    setVisionClient("", "", "");
+    const out = try hearAudioTool(allocator, "{}");
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "audio model not configured") != null);
 }
 
 test "core_tools see_image no image attached" {
@@ -697,6 +777,7 @@ test "core_tools registerAll" {
     try std.testing.expect(reg.get("leave") != null);
     try std.testing.expect(reg.get("memory_get") != null);
     try std.testing.expect(reg.get("see_image") != null);
+    try std.testing.expect(reg.get("hear_audio") != null);
     try std.testing.expect(reg.get("memory_append") != null);
     const defs = try collectDefinitions(&reg, allocator);
     defer {

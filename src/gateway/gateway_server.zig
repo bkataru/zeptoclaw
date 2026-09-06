@@ -630,24 +630,51 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             var mime_buf: [64]u8 = [_]u8{0} ** 64;
             var vision_path: ?[]u8 = null;
             var vision_mime: []const u8 = "image/jpeg";
+            var audio_path: ?[]u8 = null;
+            var audio_mime: []const u8 = "audio/ogg";
+            // Route attached media by kind: audio (voice notes) go to hear_audio,
+            // everything else to see_image. Previously all media rode the vision
+            // path, so voice notes always failed there.
+            const routeMedia = struct {
+                fn isAudio(mime: []const u8) bool {
+                    return std.mem.startsWith(u8, mime, "audio") or std.mem.indexOf(u8, mime, "ogg") != null or std.mem.indexOf(u8, mime, "opus") != null;
+                }
+            }.isAudio;
             if (eff_msg.media_path) |mp| {
-                if (mp.len > 0) vision_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
-                if (eff_msg.media_type) |mt| vision_mime = mt;
+                if (mp.len > 0) {
+                    const mt = if (eff_msg.media_type) |t| t else "image/jpeg";
+                    if (routeMedia(mt)) {
+                        audio_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                        audio_mime = mt;
+                    } else {
+                        vision_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                        vision_mime = mt;
+                    }
+                }
             } else if (is_dm) {
                 if (zeptoclaw.channels.whatsapp.inbound_media.loadLast(g_whatsapp_alloc, chat_id_copy, &mime_buf)) |p| {
-                    vision_path = p;
-                    vision_mime = std.mem.sliceTo(mime_buf[0..], 0);
-                    if (vision_mime.len == 0) vision_mime = "image/jpeg";
+                    const mt = std.mem.sliceTo(mime_buf[0..], 0);
+                    if (routeMedia(mt)) {
+                        audio_path = p;
+                        audio_mime = if (mt.len > 0) mt else "audio/ogg";
+                    } else {
+                        vision_path = p;
+                        vision_mime = if (mt.len > 0) mt else "image/jpeg";
+                    }
                 }
             }
             defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
+            defer if (audio_path) |ap| g_whatsapp_alloc.free(ap);
             if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is available. Call the see_image tool if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
+            if (audio_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent voice note from this same chat is available. Call the hear_audio tool if the user is talking about audio, a voice note, or what was said. Transcribe, then answer. Do not invent words you did not hear.\n") catch {};
             break agent.runTurn(prompt, .{
                 .system_prompt = sys_prompt,
                 .extra_context = extra.items,
                 .max_iters = 200,
                 .image_path = vision_path,
                 .image_mime = if (vision_path != null) vision_mime else null,
+                .audio_path = audio_path,
+                .audio_mime = if (audio_path != null) audio_mime else null,
             }) catch |err| {
                 const transient = err == error.Timeout or err == error.RateLimit or err == error.Network;
                 if (!transient) {

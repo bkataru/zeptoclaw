@@ -55,6 +55,8 @@ pub const TurnOpts = struct {
     max_iters: u32 = 200,
     image_path: ?[]const u8 = null,
     image_mime: ?[]const u8 = null,
+    audio_path: ?[]const u8 = null,
+    audio_mime: ?[]const u8 = null,
 };
 
 const DEFAULT_VISION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
@@ -185,6 +187,9 @@ pub const Agent = struct {
         const user_msg = try message.userMessage(self.allocator, user_text);
         const vision_path: ?[]const u8 = if (opts.image_path) |ip| (if (ip.len > 0) ip else null) else null;
         core_tools.setVisionImage(vision_path, opts.image_mime);
+        const audio_path: ?[]const u8 = if (opts.audio_path) |ap| (if (ap.len > 0) ap else null) else null;
+        core_tools.setAudioAttachment(audio_path, opts.audio_mime);
+        if (audio_path) |ap| std.log.info("[agent] turn audio available path={s}", .{ap});
         if (vision_path) |vp| std.log.info("[agent] vision image available path={s}", .{vp});
         try self.session.addMessage(user_msg);
         self.transcripts.append(self.session_id, "user", user_text);
