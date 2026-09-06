@@ -19,7 +19,7 @@ There is no mute-fromMe-for-N-seconds-after-connect. First deploy with an empty 
 
 ## Access
 
-Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist. A **barvis** wake word or an @mention of the bot's PN/LID/device JID starts a turn. The wake word in your own message to someone also starts a turn in that DM, and one invocation keeps a peer DM subscribed for both sides until `leave`. `leave` unsubscribes a chat until the next **barvis**.
+Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) is treated as Message-yourself. `fromMe` in an allowlisted 1:1 is inbound from the operator. Groups need the group JID on the allowlist. A **barvis** wake word or an @mention of the bot's PN/LID/device JID starts a turn. The wake word in your own message to someone also starts a turn in that DM, and one invocation keeps a peer DM subscribed for both sides until `leave` or 30 silent minutes. `leave` unsubscribes a chat until the next **barvis**.
 
 The `exec` tool only runs on an operator `fromMe` message in self-chat. A wake-word turn in a peer DM runs without `exec`.
 
@@ -29,7 +29,7 @@ The `exec` tool only runs on an operator `fromMe` message in self-chat. A wake-w
 
 Pair with `zeptoclaw whatsapp pair` — it prints a terminal QR (half-block glyphs) plus the raw pairing URL. Identity is stored at `{auth_dir}/native.sqlite` (default `~/.zeptoclaw/sessions/whatsapp/native.sqlite`). Deleting that file unpairs the device.
 
-Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media downloads and decrypts. Outbound media, presence, reactions, revokes, edits, polls, location, and read receipts use the same native client.
+Text DM and group send/receive both work end to end. `sendText` auto-routes to group send when the target is a `g.us` JID, and group receive decrypts sender-key messages the same way. Inbound media downloads and decrypts. Outbound media, presence, reactions, revokes, edits, polls, location, and read receipts use the same native client. Turn media routes by kind: `see_image` for photos, `hear_audio` for voice notes (ogg transcribed by the omni model), `watch_video` for clips (mp4 up to 20MB). All three share one circuit breaker: 3 straight failures, 10 minute cooldown.
 
 ## Past fixes
 
@@ -41,6 +41,9 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - LID-group phone delivery: in LID-addressed groups, self PN devices mirror to LID form before the SKDM fanout. Phones drop PN-addressed targets in LID groups.
 - Repeat greetings: the rolling transcript once held inbound lines only, so every turn looked like the first. Outbound replies are now recorded as Barvis, and `fromMe` inbound carries the push name.
 - Vision breaker: `see_image` opens for 10 minutes after 3 straight model failures, fails fast, and tells Barvis to answer from text without repeating the outage.
+- Voice and video: both once rode the vision path and always failed. `hear_audio` and `watch_video` send `audio_url`/`video_url` parts to the omni model instead, routed by mime.
+- Secrets in replies: Barvis once quoted a just-shared password back into the group. Replies and memory reasons must never print secrets now.
+- Reply scrub: truncated model emoji bytes rendered as `?` on phones. Replies drop malformed sequences before send.
 
 ## Sender attribution
 

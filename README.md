@@ -6,10 +6,14 @@
 
 ## Build Status
 
-**0.6.0** (2026-09-05). Native WhatsApp is the only transport. `zig build test --summary all`: 474 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.7.0** (2026-09-06). Native WhatsApp is the only transport. `zig build test --summary all`: 480 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
+- **Voice and video** (0.7.0): `hear_audio` transcribes voice notes, `watch_video` describes clips. Media routes by kind; one shared breaker
+- **Idle expiry** (0.7.0): 30 silent minutes unsubscribes groups and DMs. A fresh wake reopens
+- **No secrets in replies** (0.7.0): passwords and tokens never print, even just-shared ones
+- **Clean replies** (0.7.0): malformed model bytes drop before send, no more `?` on phones
 - **Memory recall** (0.6.0): ranked retrieval over MEMORY.md plus every journal, auto-preloaded into each turn. Ends the opt-in search problem
 - **Vision breaker** (0.6.0): `see_image` trips open after 3 straight failures (10 min cooldown) instead of hammering a sick model
 - **No repeat greetings** (0.6.0): group turns see Barvis's own replies; `fromMe` lines carry the push name
@@ -52,9 +56,9 @@
 | Metric | Value |
 |--------|-------|
 | **Zig source files** | 119 |
-| **Lines of code** | ~47.0k in `src/` |
+| **Lines of code** | ~47.4k in `src/` |
 | **Build errors** | 0 |
-| **Tests** | 477 (474 pass, 3 skip) |
+| **Tests** | 483 (480 pass, 3 skip) |
 | **Binaries** | 6 |
 | **Skills ported** | 21 |
 
@@ -505,10 +509,10 @@ MIT - Same as the rest of the Claw family.
 
 ## History
 
-August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. 0.5.0 fixes LID-group phone delivery for new groups and names the sender on every group turn. 0.5.1 lets the wake word trigger replies to own messages in peer DMs. 0.5.2 keeps a subscribed peer DM open for both sides with no repeat wake word. 0.6.0 adds ranked memory recall with auto-preload, a vision circuit breaker, repeat-greeting fix, and an explicit presence state machine. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
+August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. 0.5.0 fixes LID-group phone delivery for new groups and names the sender on every group turn. 0.5.1 lets the wake word trigger replies to own messages in peer DMs. 0.5.2 keeps a subscribed peer DM open for both sides with no repeat wake word. 0.6.0 adds ranked memory recall with auto-preload, a vision circuit breaker, repeat-greeting fix, and an explicit presence state machine. 0.7.0 adds voice-note transcription and clip description, 30-minute idle expiry, a no-secrets reply rule, and reply scrub. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
 
 ---
 
-**Status:** v0.6.0 tagged. Memory recall with auto-preload, vision breaker, no repeat greetings, presence FSM. Sticky DM subscription, wake word in peer DMs, LID-group phone delivery, sender attribution on group turns. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair. WhatsApp `runTurn` plus journals plus memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
+**Status:** v0.7.0 tagged. Voice and video tools, idle expiry, no secrets in replies, clean replies. Memory recall with auto-preload, vision breaker, no repeat greetings, presence FSM. Sticky DM subscription, wake word in peer DMs, LID-group phone delivery, sender attribution on group turns. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair. WhatsApp `runTurn` plus journals plus memory update/compact, NIM retry caps with fallback replies, tool-output UTF-8 scrub, native media decoder fixes.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-06
+
+### WhatsApp
+
+- `hear_audio` transcribes voice notes and `watch_video` describes clips, both through the nano-omni model (proven against the hosted API with real ogg/mp4). Turn media routes by kind: voice to hear_audio, clips to watch_video, images stay on see_image. All three share one circuit breaker.
 - Presence now expires after 30 minutes of silence (groups and DMs): a long-lost invocation can no longer answer a much-later message as if the conversation never paused. Any inbound keeps a live conversation open; a fresh wake reopens a quiet one.
+- Barvis never prints passwords, tokens, or secrets in replies, even just-shared ones; memory synthesis reasons stay secret-free too.
+- Malformed UTF-8 (truncated model emoji) is dropped from replies before send, so phones never render `?`.
 
 ## 0.6.0 - 2026-09-05
 
