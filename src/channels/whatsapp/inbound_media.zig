@@ -80,11 +80,17 @@ pub fn loadLast(allocator: std.mem.Allocator, chat_id: []const u8, mime_buf: *[6
 
 /// Memory: caller owns data URL.
 pub fn fileToDataUrl(allocator: std.mem.Allocator, path: []const u8, mime: []const u8) ?[]u8 {
+    return fileToDataUrlCapped(allocator, path, mime, MAX_BYTES);
+}
+
+/// Memory: caller owns data URL. Video clips run bigger than images; callers
+/// pass their own ceiling (WhatsApp videos regularly exceed the 4MB default).
+pub fn fileToDataUrlCapped(allocator: std.mem.Allocator, path: []const u8, mime: []const u8, max_bytes: usize) ?[]u8 {
     const cwd = compat.cwd();
     const f = cwd.openFile(path, .{}) catch return null;
     defer f.close(cwd.io);
     const st = f.stat(cwd.io) catch return null;
-    if (st.kind != .file or st.size == 0 or st.size > MAX_BYTES) return null;
+    if (st.kind != .file or st.size == 0 or st.size > max_bytes) return null;
     const sz: usize = @intCast(st.size);
     const raw = allocator.alloc(u8, sz) catch return null;
     defer allocator.free(raw);

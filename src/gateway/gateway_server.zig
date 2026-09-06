@@ -632,18 +632,28 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             var vision_mime: []const u8 = "image/jpeg";
             var audio_path: ?[]u8 = null;
             var audio_mime: []const u8 = "audio/ogg";
-            // Route attached media by kind: audio (voice notes) go to hear_audio,
-            // everything else to see_image. Previously all media rode the vision
-            // path, so voice notes always failed there.
+            var video_path: ?[]u8 = null;
+            var video_mime: []const u8 = "video/mp4";
+            // Route attached media by kind: voice notes to hear_audio, clips to
+            // watch_video, everything else to see_image. Previously all media
+            // rode the vision path, so voice notes and videos always failed there.
             const routeMedia = struct {
                 fn isAudio(mime: []const u8) bool {
                     return std.mem.startsWith(u8, mime, "audio") or std.mem.indexOf(u8, mime, "ogg") != null or std.mem.indexOf(u8, mime, "opus") != null;
                 }
-            }.isAudio;
+                fn isVideo(mime: []const u8, path: []const u8) bool {
+                    if (std.mem.startsWith(u8, mime, "video")) return true;
+                    if (std.mem.endsWith(u8, path, ".mp4") or std.mem.endsWith(u8, path, ".mov") or std.mem.endsWith(u8, path, ".webm")) return true;
+                    return false;
+                }
+            };
             if (eff_msg.media_path) |mp| {
                 if (mp.len > 0) {
                     const mt = if (eff_msg.media_type) |t| t else "image/jpeg";
-                    if (routeMedia(mt)) {
+                    if (routeMedia.isVideo(mt, mp)) {
+                        video_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                        video_mime = mt;
+                    } else if (routeMedia.isAudio(mt)) {
                         audio_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
                         audio_mime = mt;
                     } else {
@@ -654,7 +664,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             } else if (is_dm) {
                 if (zeptoclaw.channels.whatsapp.inbound_media.loadLast(g_whatsapp_alloc, chat_id_copy, &mime_buf)) |p| {
                     const mt = std.mem.sliceTo(mime_buf[0..], 0);
-                    if (routeMedia(mt)) {
+                    if (routeMedia.isVideo(mt, p)) {
+                        video_path = p;
+                        video_mime = if (mt.len > 0) mt else "video/mp4";
+                    } else if (routeMedia.isAudio(mt)) {
                         audio_path = p;
                         audio_mime = if (mt.len > 0) mt else "audio/ogg";
                     } else {
@@ -665,8 +678,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
             }
             defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
             defer if (audio_path) |ap| g_whatsapp_alloc.free(ap);
+            defer if (video_path) |vp| g_whatsapp_alloc.free(vp);
             if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is available. Call the see_image tool if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
             if (audio_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent voice note from this same chat is available. Call the hear_audio tool if the user is talking about audio, a voice note, or what was said. Transcribe, then answer. Do not invent words you did not hear.\n") catch {};
+            if (video_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent video from this same chat is available. Call the watch_video tool if the user is talking about a video or clip. Describe what happens. Do not invent details you cannot see.\n") catch {};
             break agent.runTurn(prompt, .{
                 .system_prompt = sys_prompt,
                 .extra_context = extra.items,
@@ -675,6 +690,8 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
                 .image_mime = if (vision_path != null) vision_mime else null,
                 .audio_path = audio_path,
                 .audio_mime = if (audio_path != null) audio_mime else null,
+                .video_path = video_path,
+                .video_mime = if (video_path != null) video_mime else null,
             }) catch |err| {
                 const transient = err == error.Timeout or err == error.RateLimit or err == error.Network;
                 if (!transient) {

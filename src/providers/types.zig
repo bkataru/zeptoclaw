@@ -112,6 +112,7 @@ pub const Message = struct {
     content: ?[]const u8 = null,
     image_data_url: ?[]const u8 = null,
     audio_data_url: ?[]const u8 = null,
+    video_data_url: ?[]const u8 = null,
     tool_call_id: ?[]const u8 = null,
     tool_calls: ?[]ToolCall = null,
 
@@ -120,6 +121,7 @@ pub const Message = struct {
         if (self.content) |c| allocator.free(c);
         if (self.image_data_url) |u| allocator.free(u);
         if (self.audio_data_url) |u| allocator.free(u);
+        if (self.video_data_url) |u| allocator.free(u);
         if (self.tool_call_id) |tcid| allocator.free(tcid);
         if (self.tool_calls) |calls| {
             for (calls) |*call| call.deinit(allocator);
@@ -134,6 +136,7 @@ pub const Message = struct {
             .content = if (self.content) |c| try allocator.dupe(u8, c) else null,
             .image_data_url = if (self.image_data_url) |u| try allocator.dupe(u8, u) else null,
             .audio_data_url = if (self.audio_data_url) |u| try allocator.dupe(u8, u) else null,
+            .video_data_url = if (self.video_data_url) |u| try allocator.dupe(u8, u) else null,
             .tool_call_id = if (self.tool_call_id) |tcid| try allocator.dupe(u8, tcid) else null,
             .tool_calls = null,
         };
