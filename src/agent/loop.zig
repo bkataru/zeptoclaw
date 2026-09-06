@@ -313,6 +313,60 @@ fn jsonValueToOwnedString(allocator: std.mem.Allocator, v: std.json.Value) ![]u8
     return allocator.dupe(u8, out.written());
 }
 
+/// Reply scrub: drop malformed UTF-8 sequences (usually truncated emoji from
+/// the model) so phones never render a ?. Returns the input slice untouched
+/// when already valid; otherwise an owned copy the caller must free.
+/// Contrast sanitizeUtf8 below: tool output keeps U+FFFD so the model can see
+/// data loss, but replies drop for clean display.
+pub fn sanitizeReply(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    if (std.unicode.utf8ValidateSlice(s)) return s;
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < s.len) {
+        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch {
+            i += 1;
+            continue;
+        };
+        if (i + n > s.len) {
+            i += 1;
+            continue;
+        }
+        const cp = std.unicode.utf8Decode(s[i..][0..n]) catch {
+            i += 1;
+            continue;
+        };
+        const m = std.unicode.utf8CodepointSequenceLength(cp) catch {
+            i += 1;
+            continue;
+        };
+        if (m != n) {
+            i += 1;
+            continue;
+        }
+        try out.appendSlice(allocator, s[i..][0..n]);
+        i += n;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "sanitizeReply drops bad bytes, keeps valid text untouched" {
+    const allocator = std.testing.allocator;
+    const good = "Hey \xF0\x9F\x91\x8B";
+    const kept = try sanitizeReply(allocator, good);
+    defer if (kept.ptr != good.ptr) allocator.free(kept);
+    try std.testing.expect(kept.ptr == good.ptr);
+    try std.testing.expectEqualStrings(good, kept);
+    const bad = "Hey \xF0\x9F\x91 coupling";
+    const fixed = try sanitizeReply(allocator, bad);
+    defer allocator.free(fixed);
+    try std.testing.expectEqualStrings("Hey  coupling", fixed);
+    const all_bad = "\xFF\xFE";
+    const empty = try sanitizeReply(allocator, all_bad);
+    defer allocator.free(empty);
+    try std.testing.expectEqualStrings("", empty);
+}
+
 /// Lossy UTF-8 scrub: copies `s`, replacing each invalid byte sequence with
 /// U+FFFD. Tool subprocesses emit arbitrary bytes; request JSON must be
 /// strict UTF-8 or NVIDIA 400s the turn.

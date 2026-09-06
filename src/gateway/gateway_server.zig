@@ -665,15 +665,20 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         break :blk reply;
     };
     defer if (reply_text.len > 0) g_whatsapp_alloc.free(reply_text);
-    if (reply_text.len == 0) {
+    // Model output occasionally carries malformed UTF-8 (truncated emoji);
+    // raw bytes render as ? on phones. Drop bad sequences once, up front, so
+    // the signed text, logs, journals, and transcripts all stay clean.
+    const clean_text = zeptoclaw.agent.loop.sanitizeReply(g_whatsapp_alloc, reply_text) catch reply_text;
+    defer if (clean_text.ptr != reply_text.ptr) g_whatsapp_alloc.free(clean_text);
+    if (clean_text.len == 0) {
         std.log.info("[whatsapp] silent/leave; not sending", .{});
         zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
         try drainBurstOrClear(chat_id_copy, is_dm, opts);
         return;
     }
 
-    const signed_text = zeptoclaw.channels.whatsapp.engagement.appendSignature(g_whatsapp_alloc, reply_text) catch reply_text;
-    defer if (signed_text.ptr != reply_text.ptr) g_whatsapp_alloc.free(signed_text);
+    const signed_text = zeptoclaw.channels.whatsapp.engagement.appendSignature(g_whatsapp_alloc, clean_text) catch clean_text;
+    defer if (signed_text.ptr != clean_text.ptr) g_whatsapp_alloc.free(signed_text);
 
     // Outbound send via OutboundProcessor (chunking/retry/markdown) using channel.sendMessage.
     var send_attempt: u32 = 0;
