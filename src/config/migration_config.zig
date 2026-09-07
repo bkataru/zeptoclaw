@@ -620,6 +620,8 @@ pub const ConfigLoader = struct {
             result.gateway_allow_insecure_auth = mutable_fc.gateway_allow_insecure_auth;
             result.workspace = try self.allocator.dupe(u8, mutable_fc.workspace);
             result.max_concurrent = mutable_fc.max_concurrent;
+            result.max_tokens = mutable_fc.max_tokens;
+            result.nim_timeout_ms = mutable_fc.nim_timeout_ms;
             result.source = .file;
             // WhatsApp config from file
             result.whatsapp_enabled = mutable_fc.whatsapp_enabled;
