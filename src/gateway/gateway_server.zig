@@ -344,13 +344,11 @@ fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt:
     const is_group = std.mem.indexOf(u8, chat_id, "@g.us") != null;
     if (is_group) extra.appendSlice(allocator, "Group chat: the current message starts with `[sender name]:` and that name IS who is speaking.\n") catch {};
 
-    // Inject turns cap at 6 tool rounds AND 5 model retries (via a bounded
-    // NIMClient): an operator-triggered turn that hits a sick model should
-    // fail in minutes, not spin forever.
-    var bounded_nim = NIMClient.init(allocator, cfg);
-    bounded_nim.timeout_ms = 60000; // 60s per attempt, tighter than mainline
-    defer bounded_nim.deinit();
-    var agent = try zeptoclaw.agent.loop.Agent.init(allocator, &bounded_nim, 64);
+    // Inject uses the mainline NIMClient (same timeout as regular turns).
+    // The fire-and-forget thread keeps it off the accept loop regardless.
+    var nim_client = NIMClient.init(allocator, cfg);
+    defer nim_client.deinit();
+    var agent = try zeptoclaw.agent.loop.Agent.init(allocator, &nim_client, 64);
     defer agent.deinit();
     if (ws_dir_const) |wd| agent.setWorkspace(wd);
     if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
