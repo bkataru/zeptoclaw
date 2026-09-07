@@ -493,8 +493,10 @@ pub fn deinit(self: *NIMClient) void {
         };
         // Heap-allocate context so the detached thread always has a valid pointer.
         const ctx = self.allocator.create(WorkerCtx) catch return error.Network;
+        var wc = NIMClient.initWithBaseUrl(self.allocator, self.api_key, self.model, self.base_url);
+        wc.timeout_ms = self.timeout_ms;
         ctx.* = .{
-            .client = NIMClient.initWithBaseUrl(self.allocator, self.api_key, self.model, self.base_url),
+            .client = wc,
             .body = self.allocator.dupe(u8, body) catch {
                 self.allocator.destroy(ctx);
                 return error.Network;
