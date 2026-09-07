@@ -444,7 +444,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     // loadLast). Journal keeps the real text + media path (operator audit);
     // model context, transcript, burst buffer, session history, and media
     // cache never see it.
-    const is_redacted = body_copy.len >= 2 and body_copy[0] == '~' and body_copy[1] == ' ';
+    // Bare "~" (image caption) or "~ " (tilde + space before text) trigger
+    // redaction. ~word~ (strikethrough) and ~~text~~ (double-tilde) do not.
+    const is_redacted = (body_copy.len == 1 and body_copy[0] == '~') or
+        (body_copy.len >= 2 and body_copy[0] == '~' and body_copy[1] == ' ');
     var journal_body = body_copy;
     var journal_body_owned = false;
     if (eff_msg.media_path) |mp| {
