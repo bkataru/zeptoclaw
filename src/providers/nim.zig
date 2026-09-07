@@ -95,6 +95,7 @@ pub const NIMClient = struct {
     model: []const u8,
     base_url: []const u8,
     timeout_ms: u32,
+    max_tokens: u32 = 4096,
     fallback_models: []const []const u8 = &.{},
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
@@ -107,6 +108,7 @@ pub const NIMClient = struct {
             .model = cfg.nim_model,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = cfg.nim_timeout_ms,
+            .max_tokens = cfg.max_tokens,
             .fallback_models = cfg.fallback_models,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
@@ -122,6 +124,7 @@ pub const NIMClient = struct {
             .model = model_id,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = cfg.nim_timeout_ms,
+            .max_tokens = cfg.max_tokens,
             .fallback_models = cfg.fallback_models,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
@@ -434,6 +437,13 @@ pub fn deinit(self: *NIMClient) void {
                 };
             }
         }
+        // max_tokens: gives models room to think AND respond. Default 4096.
+        stringifier.objectField("max_tokens") catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
+        stringifier.write(self.max_tokens) catch |err| return switch (err) {
+            error.WriteFailed => types.ProviderError.Network,
+        };
         stringifier.endObject() catch |err| return switch (err) {
             error.WriteFailed => types.ProviderError.Network,
         };
