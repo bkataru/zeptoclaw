@@ -453,9 +453,16 @@ pub fn deinit(self: *NIMClient) void {
         var attempt: u32 = 0;
         var model_idx: usize = 0;
         const primary = self.model;
+        const turn_start = compat.timestamp();
         while (true) : (attempt += 1) {
             paceForRpm();
+            const req_start = compat.timestamp();
             if (self.postOnceWithDeadline(body)) |resp| {
+                const req_ms = (compat.timestamp() - req_start) * 1000;
+                const turn_ms = (compat.timestamp() - turn_start) * 1000;
+                const tok_in = resp.usage.prompt_tokens;
+                const tok_out = resp.usage.completion_tokens;
+                std.log.info("[nim] ok model={s} attempt={d} req={d}ms turn={d}ms tok_in={d} tok_out={d}", .{ self.model, attempt + 1, req_ms, turn_ms, tok_in, tok_out });
                 noteSuccess();
                 return resp;
             } else |err| switch (err) {
@@ -473,7 +480,8 @@ pub fn deinit(self: *NIMClient) void {
                             model_idx = 0;
                         }
                     }
-                    std.log.warn("[nim] {s} attempt {d} on {s}; retrying", .{ @errorName(err), attempt + 1, self.model });
+                    const fail_ms = (compat.timestamp() - req_start) * 1000;
+                    std.log.warn("[nim] {s} attempt={d} model={s} req={d}ms; retrying", .{ @errorName(err), attempt + 1, self.model, fail_ms });
                     sleepAfterFailure();
                 },
                 else => {

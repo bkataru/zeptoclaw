@@ -327,7 +327,8 @@ fn whatsappOnQr(event: zeptoclaw.channels.whatsapp.types.QrEvent) anyerror!void 
 /// (system prompt, memory recall, tools, send) and return the reply. Called by
 /// POST /whatsapp/inject. Auth-required at the HTTP layer.
 fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt: []const u8) anyerror![]const u8 {
-    std.log.info("[inject] starting chat_id={s} prompt_len={d}", .{ chat_id, prompt.len });
+    const inject_start = compat.timestamp();
+    std.log.info("[inject] starting chat_id={s} prompt_len={d} model={s} fallbacks={d}", .{ chat_id, prompt.len, (g_whatsapp_cfg orelse unreachable).nim_model, (g_whatsapp_cfg orelse unreachable).fallback_models.len });
     const cfg = g_whatsapp_cfg orelse return error.NotConnected;
     const session = g_whatsapp_session orelse return error.NotConnected;
     const ws_dir_const: ?[]const u8 = zeptoclaw.openclaw_compat.resolveWorkspaceDir(allocator) catch null;
@@ -371,7 +372,8 @@ fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt:
         std.log.err("[inject] send failed: {}", .{err});
         return err;
     };
-    std.log.info("[inject] sent to {s}: {s}", .{ chat_id, signed });
+    const inject_elapsed = compat.timestamp() - inject_start;
+    std.log.info("[inject] sent to {s} turn={d}s reply_len={d}: {s}", .{ chat_id, inject_elapsed, signed.len, signed });
     memory.journalAppend(allocator, "out", chat_id, signed, if (is_group) "Barvis" else null);
     session.recordTranscript(chat_id, "Barvis", signed);
     return reply;
@@ -561,6 +563,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const sys_prompt: ?[]const u8 = workspace_system_prompt(g_whatsapp_alloc) catch null;
     defer if (sys_prompt) |sp| g_whatsapp_alloc.free(sp);
 
+    const turn_start = compat.timestamp();
     const reply_text: []const u8 = blk: {
         var msgs_list = std.ArrayList(zeptoclaw.providers.types.Message).initCapacity(g_whatsapp_alloc, 8) catch {
             break :blk fallback_reply(g_whatsapp_alloc, body_copy, cfg.nim_model) catch "barvis ack";
@@ -803,7 +806,8 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     }
     g_whatsapp_alloc.free(send_result.message_ids);
     std.log.info("[whatsapp] sent message_id=chunked/{d} to {s}", .{ send_result.chunk_count, chat_id_copy });
-    std.log.info("[whatsapp] replying to {s}: {s}", .{ chat_id_copy, signed_text });
+    const turn_elapsed = compat.timestamp() - turn_start;
+    std.log.info("[whatsapp] replying to {s} turn={d}s reply_len={d}: {s}", .{ chat_id_copy, turn_elapsed, signed_text.len, signed_text });
     journal_append(g_whatsapp_alloc, "out", chat_id_copy, signed_text, if (!is_dm) "Barvis" else null);
     // Feed the reply back into the rolling group transcript, so the next
     // turn sees what Barvis already said instead of greeting anew.
@@ -1144,7 +1148,12 @@ pub fn main() !void {
     std.debug.print("  Allow Insecure Auth: {s}\n", .{if (cfg.gateway_allow_insecure_auth) "true" else "false"});
     std.debug.print("  Sessions Directory: {s}\n", .{sessions_dir});
     if (cfg.whatsapp_enabled) std.debug.print("  WhatsApp: enabled ({s})\n", .{cfg.whatsapp_auth_dir}) else std.debug.print("  WhatsApp: disabled\n", .{});
-    std.debug.print("\n", .{});
+    std.debug.print("  Primary model: {s}\n", .{cfg.nim_model});
+    std.debug.print("  Fallbacks: {d} models\n", .{cfg.fallback_models.len});
+    for (cfg.fallback_models, 0..) |fb, i| std.debug.print("    [{d}] {s}\n", .{ i, fb });
+    std.debug.print("  max_tokens: {d}\n", .{cfg.max_tokens});
+    std.debug.print("  timeout_ms: {d}\n", .{cfg.nim_timeout_ms});
+    std.log.info("[gateway] primary={s} fallbacks={d} max_tokens={d} timeout={d}ms", .{ cfg.nim_model, cfg.fallback_models.len, cfg.max_tokens, cfg.nim_timeout_ms });
     std.debug.print("API Endpoints:\n", .{});
     std.debug.print("  GET  /health          - Health check\n", .{});
     std.debug.print("  GET  /status          - Gateway status\n", .{});
