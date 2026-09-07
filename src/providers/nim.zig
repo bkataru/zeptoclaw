@@ -95,7 +95,7 @@ pub const NIMClient = struct {
     model: []const u8,
     base_url: []const u8,
     timeout_ms: u32,
-    max_tokens: u32 = 4096,
+    max_tokens: u32 = 32768,
     fallback_models: []const []const u8 = &.{},
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
