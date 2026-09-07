@@ -328,9 +328,9 @@ fn whatsappOnQr(event: zeptoclaw.channels.whatsapp.types.QrEvent) anyerror!void 
 /// POST /whatsapp/inject. Auth-required at the HTTP layer.
 fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt: []const u8) anyerror![]const u8 {
     const inject_start = compat.timestamp();
-    std.log.info("[inject] starting chat_id={s} prompt_len={d} model={s} fallbacks={d}", .{ chat_id, prompt.len, (g_whatsapp_cfg orelse unreachable).nim_model, (g_whatsapp_cfg orelse unreachable).fallback_models.len });
     const cfg = g_whatsapp_cfg orelse return error.NotConnected;
     const session = g_whatsapp_session orelse return error.NotConnected;
+    std.log.info("[inject] starting chat_id={s} prompt_len={d} model={s} fallbacks={d}", .{ chat_id, prompt.len, cfg.nim_model, cfg.fallback_models.len });
     const ws_dir_const: ?[]const u8 = zeptoclaw.openclaw_compat.resolveWorkspaceDir(allocator) catch null;
     defer if (ws_dir_const) |wd| allocator.free(wd);
 
