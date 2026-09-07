@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-07
+
+### WhatsApp
+
+- Model rotation on failure: after 2 consecutive failures on the same model, `chatWithTools` rotates through the fallback list (super → lightning → ultra → nano-omni), cycling back to primary after exhausting the chain.
+- Primary model switched to `moonshotai/kimi-k3` (~2.8T hybrid MoE). Kimi follows in-character instructions and answers edgy prompts that nemotron models refused or truncated.
+- `max_tokens` emitted in every NIM request (default 32768). Models no longer hit `finish_reason:length` mid-thought on complex prompts.
+- NIM timeout raised to 300s with correct propagation to the deadline worker thread. Slower models like kimi-k3 (~140s) no longer get killed mid-response.
+- Wall-clock deadline on every NIM HTTP request: a spawned thread with an atomic done flag returns `Timeout` if NVIDIA goes silent. Fixes 14-minute hung turns.
+- `POST /whatsapp/inject`: auth-required endpoint to run a full agent turn (system prompt, memory, tools, send) on any chat without a WhatsApp trigger. Fire-and-forget (202 ack, background thread).
+- No-refusal instruction: Barvis never refuses playful, edgy, or flirty prompts from allowlisted group members. Roasts, dark humor, and compliments all answer instead of calling `listen`.
+
 ## 0.7.1 - 2026-09-07
 
 ### WhatsApp

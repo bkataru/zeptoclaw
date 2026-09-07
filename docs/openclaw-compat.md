@@ -63,7 +63,7 @@ Both candidates share the **OpenClaw JSON schema** (`OpenClawConfig`):
   "env": { "NVIDIA_API_KEY": "nvapi-..." },
   "agents": {
     "defaults": {
-      "model": { "primary": "nvidia/nemotron-3-ultra-550b-a55b", "fallbacks": ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"] },
+      "model": { "primary": "moonshotai/kimi-k3", "fallbacks": ["nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"] },
       "imageModel": { "primary": "...", "fallbacks": [] },
       "workspace": "/home/user/.openclaw/workspace",
       "maxConcurrent": 4

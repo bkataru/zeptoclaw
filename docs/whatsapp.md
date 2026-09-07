@@ -44,6 +44,11 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - Voice and video: both once rode the vision path and always failed. `hear_audio` and `watch_video` send `audio_url`/`video_url` parts to the omni model instead, routed by mime.
 - Secrets in replies: Barvis once quoted a just-shared password back into the group. Replies and memory reasons must never print secrets now.
 - Reply scrub: truncated model emoji bytes rendered as `?` on phones. Replies drop malformed sequences before send.
+- Model rotation: 2 consecutive failures on the same model rotate through fallbacks (super → lightning → ultra → nano-omni), cycling back to primary. Primary switched to kimi-k3 for better in-character compliance.
+- Wall-clock deadline: every NIM HTTP request spawns a worker thread with an atomic done flag. The parent returns Timeout after 300s even if the socket read blocks forever.
+- `POST /whatsapp/inject`: auth-required fire-and-forget endpoint to run a full agent turn and send the reply to any chat. 202 ack, background thread.
+- `max_tokens: 32768` in every request. Models no longer truncate mid-thought on complex prompts.
+- No-refusal instruction: Barvis answers playful, edgy, and flirty prompts from allowlisted group members instead of going silent.
 
 ## Sender attribution
 
