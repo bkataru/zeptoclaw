@@ -323,6 +323,54 @@ fn whatsappOnQr(event: zeptoclaw.channels.whatsapp.types.QrEvent) anyerror!void 
 /// Static send_fn for OutboundProcessor: bridges to the global WhatsApp channel.
 /// Memory: Returns caller-owned message_id string (duped by channel.sendMessage);
 /// caller frees with `g_whatsapp_alloc.free`.
+/// Inject a synthetic agent turn into a WhatsApp chat: run the full pipeline
+/// (system prompt, memory recall, tools, send) and return the reply. Called by
+/// POST /whatsapp/inject. Auth-required at the HTTP layer.
+fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt: []const u8) anyerror![]const u8 {
+    const cfg = g_whatsapp_cfg orelse return error.NotConnected;
+    const session = g_whatsapp_session orelse return error.NotConnected;
+    const ws_dir_const: ?[]const u8 = zeptoclaw.openclaw_compat.resolveWorkspaceDir(allocator) catch null;
+    defer if (ws_dir_const) |wd| allocator.free(wd);
+
+    const sys_prompt: ?[]const u8 = workspace_system_prompt(allocator) catch null;
+    defer if (sys_prompt) |sp| allocator.free(sp);
+
+    var extra = std.ArrayList(u8).empty;
+    defer extra.deinit(allocator);
+    extra.appendSlice(allocator, zeptoclaw.channels.whatsapp.engagement.LANGUAGE_INSTRUCTIONS) catch {};
+    extra.appendSlice(allocator, "\nYou are in WhatsApp chat `") catch {};
+    extra.appendSlice(allocator, chat_id) catch {};
+    extra.appendSlice(allocator, "`. This is an injected turn from the operator.\n") catch {};
+    const is_group = std.mem.indexOf(u8, chat_id, "@g.us") != null;
+    if (is_group) extra.appendSlice(allocator, "Group chat: the current message starts with `[sender name]:` and that name IS who is speaking.\n") catch {};
+
+    var nim_client = NIMClient.init(allocator, cfg);
+    defer nim_client.deinit();
+    var agent = try zeptoclaw.agent.loop.Agent.init(allocator, &nim_client, 64);
+    defer agent.deinit();
+    if (ws_dir_const) |wd| agent.setWorkspace(wd);
+    if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
+    agent.setSessionId(chat_id);
+    const reply = try agent.runTurn(prompt, .{
+        .system_prompt = sys_prompt,
+        .extra_context = extra.items,
+        .max_iters = 200,
+    });
+    if (reply.len == 0) return allocator.dupe(u8, "(silent)");
+
+    // Sign and send via the real WhatsApp channel.
+    const signed = zeptoclaw.channels.whatsapp.engagement.appendSignature(allocator, reply) catch reply;
+    defer if (signed.ptr != reply.ptr) allocator.free(signed);
+    _ = gatewaySendMessage(chat_id, signed) catch |err| {
+        std.log.err("[inject] send failed: {}", .{err});
+        return err;
+    };
+    std.log.info("[inject] sent to {s}: {s}", .{ chat_id, signed });
+    memory.journalAppend(allocator, "out", chat_id, signed, if (is_group) "Barvis" else null);
+    session.recordTranscript(chat_id, "Barvis", signed);
+    return reply;
+}
+
 fn gatewaySendMessage(to: []const u8, text: []const u8) anyerror![]const u8 {
     const channel = g_whatsapp_channel orelse return error.NotConnected;
     return channel.sendMessage(to, text);
@@ -1065,6 +1113,7 @@ pub fn main() !void {
     server.reload_fn = &reloadWhatsAppFromDisk;
     server.heal_fn = &healWhatsAppSignal;
     server.health_extra_fn = &whatsappHealthJson;
+    server.inject_fn = &injectWhatsAppTurn;
 
     global_server = &server;
     const act = std.os.linux.Sigaction{

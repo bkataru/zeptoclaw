@@ -482,57 +482,61 @@ pub fn deinit(self: *NIMClient) void {
     /// exit; no shared mutable state after spawn.
     fn postOnceWithDeadline(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
         const deadline_sec: u64 = @divFloor(self.timeout_ms, 1000);
-        const WorkerResult = struct {
+        const WorkerCtx = struct {
             done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
             ok: bool = false,
             resp: types.ChatCompletionResponse = undefined,
             err: types.ProviderError = error.Timeout,
+            client: NIMClient,
+            body: []const u8,
+            alloc: std.mem.Allocator,
         };
-        // Heap-allocate so the detached thread always has a valid pointer.
-        const wr = self.allocator.create(WorkerResult) catch return error.Network;
-        const body_copy = self.allocator.dupe(u8, body) catch {
-            self.allocator.destroy(wr);
-            return error.Network;
+        // Heap-allocate context so the detached thread always has a valid pointer.
+        const ctx = self.allocator.create(WorkerCtx) catch return error.Network;
+        ctx.* = .{
+            .client = NIMClient.initWithBaseUrl(self.allocator, self.api_key, self.model, self.base_url),
+            .body = self.allocator.dupe(u8, body) catch {
+                self.allocator.destroy(ctx);
+                return error.Network;
+            },
+            .alloc = self.allocator,
         };
-        // Worker gets its own client to avoid data races on connection pool.
-        var worker_client = NIMClient.initWithBaseUrl(self.allocator, self.api_key, self.model, self.base_url);
         const thread = std.Thread.spawn(.{}, struct {
-            fn run(wc: *NIMClient, bc: []const u8, w: *WorkerResult, alloc: std.mem.Allocator) void {
+            fn run(c: *WorkerCtx) void {
                 defer {
-                    alloc.free(bc);
-                    wc.deinit();
-                    // Signal done LAST so the parent sees the result.
-                    w.done.store(1, .release);
+                    c.alloc.free(c.body);
+                    c.client.deinit();
+                    c.done.store(1, .release);
                 }
-                if (wc.postOnce(bc)) |resp| {
-                    w.resp = resp;
-                    w.ok = true;
+                if (c.client.postOnce(c.body)) |resp| {
+                    c.resp = resp;
+                    c.ok = true;
                 } else |err| {
-                    w.err = err;
+                    c.err = err;
                 }
             }
-        }.run, .{ &worker_client, body_copy, wr, self.allocator }) catch {
-            self.allocator.free(body_copy);
-            worker_client.deinit();
-            self.allocator.destroy(wr);
+        }.run, .{ctx}) catch {
+            self.allocator.free(ctx.body);
+            ctx.client.deinit();
+            self.allocator.destroy(ctx);
             return error.Network;
         };
-        _ = thread; // detached below or joined
-        // Poll wall clock.
+        // Poll wall clock; break early if the thread signals done.
         var elapsed: u64 = 0;
         while (elapsed < deadline_sec) : (elapsed += 1) {
             sleepMs(1000);
-            if (wr.done.load(.acquire) != 0) break;
+            if (ctx.done.load(.acquire) != 0) break;
         }
-        if (wr.done.load(.acquire) != 0) {
-            defer self.allocator.destroy(wr);
-            if (wr.ok) return wr.resp;
-            return wr.err;
+        if (ctx.done.load(.acquire) != 0) {
+            thread.join();
+            defer self.allocator.destroy(ctx);
+            if (ctx.ok) return ctx.resp;
+            return ctx.err;
         }
-        // Deadline exceeded — the thread owns wr and will free body_copy
-        // and deinit its client when NVIDIA eventually responds or RSTs.
-        // We leak the WorkerResult alloc intentionally (one pointer per
-        // hung request, cleaned up on process exit).
+        // Deadline exceeded. Detach the thread — it owns ctx and will clean
+        // up when NVIDIA eventually responds. The ctx allocation leaks
+        // (one per hung request, cleaned on process exit).
+        thread.detach();
         std.log.warn("[nim] postOnce wall-clock deadline {d}s exceeded; returning Timeout", .{deadline_sec});
         return error.Timeout;
     }

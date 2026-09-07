@@ -27,6 +27,10 @@ pub const HttpServer = struct {
     reload_fn: ?*const fn () anyerror!void = null,
     heal_fn: ?*const fn () anyerror!void = null,
     health_extra_fn: ?*const fn (allocator: std.mem.Allocator) anyerror![]u8 = null,
+    /// Inject a synthetic turn into a WhatsApp chat: run the full agent
+    /// pipeline (system prompt, memory, tools) and send the reply. Set by
+    /// gateway_server at startup. Returns the reply text (caller owns).
+    inject_fn: ?*const fn (allocator: std.mem.Allocator, chat_id: []const u8, prompt: []const u8) anyerror![]const u8 = null,
 
     const WebSocketClient = struct {
         address: std.Io.net.IpAddress,
@@ -277,6 +281,8 @@ fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
             try self.handleAgentRun(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/exec/approve") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleExecApprove(stream, request.body);
+        } else if (std.mem.eql(u8, request.path, "/whatsapp/inject") and std.mem.eql(u8, request.method, "POST")) {
+            try self.handleWhatsAppInject(stream, request.body);
         } else if (std.mem.eql(u8, request.path, "/reload") and std.mem.eql(u8, request.method, "POST")) {
             try self.handleReload(stream);
         } else if (std.mem.eql(u8, request.path, "/whatsapp/heal") and std.mem.eql(u8, request.method, "POST")) {
@@ -680,6 +686,42 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
         };
         defer self.allocator.free(reply);
         var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        defer response.deinit(self.allocator);
+        try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"reply\":");
+        try response.append(self.allocator, '"');
+        for (reply) |c| {
+            switch (c) {
+                '"' => try response.appendSlice(self.allocator, "\\\""),
+                '\\' => try response.appendSlice(self.allocator, "\\\\"),
+                '\n' => try response.appendSlice(self.allocator, "\\n"),
+                else => try response.append(self.allocator, c),
+            }
+        }
+        try response.appendSlice(self.allocator, "\"}\r\n");
+        try compat.streamWriteAll(stream, response.items);
+    }
+    /// POST /whatsapp/inject — run a full agent turn and send the reply to a
+    /// WhatsApp chat. Body: {"chat_id":"...@g.us","prompt":"[Ravi]: ..."}
+    /// Auth-required. Returns {"ok":true,"reply":"..."}.
+    fn handleWhatsAppInject(self: *HttpServer, stream: std.Io.net.Stream, body: []const u8) !void {
+        const inject = self.inject_fn orelse {
+            try self.sendErrorResponse(stream, 503, "Service Unavailable", "inject not wired");
+            return;
+        };
+        const chat_id = jsonFieldString(body, "chat_id") orelse {
+            try self.sendErrorResponse(stream, 400, "Bad Request", "missing chat_id");
+            return;
+        };
+        const prompt = jsonFieldString(body, "prompt") orelse {
+            try self.sendErrorResponse(stream, 400, "Bad Request", "missing prompt");
+            return;
+        };
+        const reply = inject(self.allocator, chat_id, prompt) catch |err| {
+            try self.sendErrorResponse(stream, 500, "Inject Error", @errorName(err));
+            return;
+        };
+        defer self.allocator.free(reply);
+        var response = std.ArrayList(u8).empty;
         defer response.deinit(self.allocator);
         try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"reply\":");
         try response.append(self.allocator, '"');
