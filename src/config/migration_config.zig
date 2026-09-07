@@ -57,6 +57,8 @@ pub const OpenClawConfig = struct {
             pub const ModelConfig = struct {
                 primary: []const u8,
                 fallbacks: []const []const u8 = &.{},
+                max_tokens: ?u32 = null,
+                timeout_ms: ?u32 = null,
             };
 
             pub const ImageModelConfig = struct {
@@ -81,6 +83,7 @@ pub const OpenClawConfig = struct {
                 mentionPatterns: []const []const u8 = &.{},
             };
         };
+
     };
 
     pub const Gateway = struct {
@@ -399,7 +402,8 @@ pub const ConfigLoader = struct {
             .image_model = image_model,
             .max_iterations = 10,
             .temperature = 0.7,
-            .max_tokens = 4096,
+            .max_tokens = openclaw.agents.defaults.model.max_tokens orelse 32768,
+            .nim_timeout_ms = openclaw.agents.defaults.model.timeout_ms orelse 300000,
             .gateway_port = openclaw.gateway.port,
             .gateway_mode = gateway_mode,
             .gateway_bind = gateway_bind,
