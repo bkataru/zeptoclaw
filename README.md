@@ -6,10 +6,14 @@
 
 ## Build Status
 
-**0.8.0** (2026-09-07). Native WhatsApp is the only transport. `zig build test --summary all`: 481 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.9.0** (2026-09-07). Native WhatsApp is the only transport. `zig build test --summary all`: 481 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
+- **Privacy prefix** (0.9.0): bare `~` or `~ ` hides text and media from Barvis. Journal keeps real text; model/transcript/cache never see it
+- **Identity guard** (0.9.0): Barvis never names the model or provider
+- **Config fix** (0.9.0): file model settings no longer overwritten by env defaults. max_tokens and timeout flow correctly
+- **Observability** (0.9.0): per-request model, timing, tokens; turn summary; startup config dump
 - **Model rotation** (0.8.0): 2 fails on a model → rotate to the next fallback. Primary: kimi-k3, fallbacks: super → lightning → ultra → nano-omni
 - **32k token budget** (0.8.0): `max_tokens: 32768` in every request. No more truncated thoughts
 - **Wall-clock deadline** (0.8.0): NIM requests time out at 300s even if the socket blocks. Fixes hung turns
@@ -62,7 +66,7 @@
 | Metric | Value |
 |--------|-------|
 | **Zig source files** | 119 |
-| **Lines of code** | ~47.6k in `src/` |
+| **Lines of code** | ~47.7k in `src/` |
 | **Build errors** | 0 |
 | **Tests** | 484 (481 pass, 3 skip) |
 | **Binaries** | 6 |
@@ -515,10 +519,10 @@ MIT - Same as the rest of the Claw family.
 
 ## History
 
-August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. 0.5.x adds LID-group phone delivery, sender attribution, sticky DM subscriptions, and wake word in peer DMs. 0.6.0 adds ranked memory recall with auto-preload, a vision circuit breaker, repeat-greeting fix, and an explicit presence state machine. 0.7.x adds voice-note transcription, clip description, idle expiry, a no-secrets reply rule, reply scrub, and media retry parity. 0.8.0 adds model rotation on failure, kimi-k3 as primary, 32k token budget, wall-clock NIM deadlines, the inject endpoint, and a no-refusal instruction. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
+August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and added pending turns, burst coalesce, vision, and parser fuzz. September 2026 made the native client the sole transport, with a usync fix, a LID self-chat fix, and retry-receipt recovery. 0.4.0 adds group @mention triggers, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, and self-heal re-pair. 0.5.x adds LID-group phone delivery, sender attribution, sticky DM subscriptions, and wake word in peer DMs. 0.6.0 adds ranked memory recall with auto-preload, a vision circuit breaker, repeat-greeting fix, and an explicit presence state machine. 0.7.x adds voice-note transcription, clip description, idle expiry, a no-secrets reply rule, reply scrub, and media retry parity. 0.8.0 adds model rotation on failure, kimi-k3 as primary, 32k token budget, wall-clock NIM deadlines, the inject endpoint, and a no-refusal instruction. 0.9.0 adds the privacy prefix, identity guard, config-loading fix, and full observability. History was rewritten once to drop live tokens and junk blobs; clones follow current `main`.
 
 ---
 
-**Status:** v0.8.0 tagged. Model rotation, kimi-k3 primary, 32k tokens, wall-clock deadlines, inject endpoint, no refusals. Media retry parity, voice/video tools, idle expiry, no secrets, clean replies. Memory recall with auto-preload, vision breaker, presence FSM. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair.
+**Status:** v0.9.0 tagged. Privacy prefix, identity guard, config fix, observability. Model rotation, kimi-k3 primary, 32k tokens, wall-clock deadlines, inject endpoint, no refusals. Media retry parity, voice/video tools, idle expiry, no secrets, clean replies. Memory recall with auto-preload, vision breaker, presence FSM. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

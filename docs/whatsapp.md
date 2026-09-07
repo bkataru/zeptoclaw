@@ -23,6 +23,8 @@ Config `dmPolicy=allowlist` + `allowFrom` E.164 list. LID self-chat (`...@lid`) 
 
 The `exec` tool only runs on an operator `fromMe` message in self-chat. A wake-word turn in a peer DM runs without `exec`.
 
+Privacy prefix: bare `~` or `~ ` (tilde-space) hides a message from Barvis. The journal keeps the real text; the model context, session history, transcript, burst buffer, and media cache never see it. An image/audio/video caption starting with `~` suppresses the media attachment too. Strikethrough `~word~` and `~~text~~` pass through.
+
 `POST /reload` on the gateway hot-reloads `allowFrom`, `dmPolicy`, and `groupPolicy` without a restart.
 
 ## Pairing and store

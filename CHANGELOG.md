@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-09-07
+
+### WhatsApp
+
+- Privacy prefix: bare `~` or `~ ` (tilde-space) hides messages from Barvis. Journal keeps the real text (operator audit); model context, session history, transcript, burst buffer, and media cache never see it. Image/audio/video captions starting with `~` suppress the media attachment too. Strikethrough `~word~` and `~~text~~` pass through.
+- Identity guard: Barvis never names the underlying model, provider, or API. Deflects with personality.
+- Config loading fixed: env config no longer overwrites file model settings when `NVIDIA_MODEL` is not set. `max_tokens` and `nim_timeout_ms` now flow from the config file through merge.
+- Full observability: startup logs primary model, fallback count, max_tokens, timeout. Every NIM request logs model, attempt, req_ms, turn_ms, tok_in, tok_out. Turn summary logs total seconds and reply length.
+
 ## 0.8.0 - 2026-09-07
 
 ### WhatsApp
