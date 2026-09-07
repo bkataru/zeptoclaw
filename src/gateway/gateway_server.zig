@@ -438,12 +438,19 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const body_src: []const u8 = if (eff_msg.body.len > 0) eff_msg.body else std.fmt.bufPrint(&body_scratch, "[{s}]", .{@tagName(eff_msg.message_type)}) catch @tagName(eff_msg.message_type);
     const body_copy = try g_whatsapp_alloc.dupe(u8, body_src);
     defer g_whatsapp_alloc.free(body_copy);
+    // Privacy prefix: "~ " (tilde + space) hides the message from Barvis.
+    // Checked before media remember so the attachment never enters the cache
+    // (a later non-tilde message in the same DM won't resurrect it via
+    // loadLast). Journal keeps the real text + media path (operator audit);
+    // model context, transcript, burst buffer, session history, and media
+    // cache never see it.
+    const is_redacted = body_copy.len >= 2 and body_copy[0] == '~' and body_copy[1] == ' ';
     var journal_body = body_copy;
     var journal_body_owned = false;
     if (eff_msg.media_path) |mp| {
         if (mp.len > 0) {
             const mime = if (eff_msg.media_type) |mt| mt else "image";
-            zeptoclaw.channels.whatsapp.inbound_media.remember(g_whatsapp_alloc, chat_id_copy, mime, mp);
+            if (!is_redacted) zeptoclaw.channels.whatsapp.inbound_media.remember(g_whatsapp_alloc, chat_id_copy, mime, mp);
             if (std.fmt.allocPrint(g_whatsapp_alloc, "{s} [image {s}]", .{ body_copy, mp })) |jb| {
                 journal_body = jb;
                 journal_body_owned = true;
@@ -452,11 +459,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     }
     defer if (journal_body_owned) g_whatsapp_alloc.free(journal_body);
     if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
-    // Privacy prefix: "~ " (tilde + space) hides the message from Barvis.
-    // Bare ~word~ is WhatsApp strikethrough and must not trigger this.
-    // Journal keeps the real text (operator audit); model context, transcript,
-    // burst buffer, and session history never see it.
-    if (body_copy.len >= 2 and body_copy[0] == '~' and body_copy[1] == ' ') {
+    if (is_redacted) {
         std.log.info("[whatsapp] redacted by sender (~ prefix) chat={s}", .{chat_id_copy});
         g_whatsapp_mu.unlock(compat.getIo());
         return;
