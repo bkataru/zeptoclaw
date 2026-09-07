@@ -440,7 +440,7 @@ pub fn deinit(self: *NIMClient) void {
         var attempt: u32 = 0;
         while (true) : (attempt += 1) {
             paceForRpm();
-            if (self.postOnce(body)) |resp| {
+            if (self.postOnceWithDeadline(body)) |resp| {
                 noteSuccess();
                 return resp;
             } else |err| switch (err) {
@@ -473,6 +473,68 @@ pub fn deinit(self: *NIMClient) void {
                 },
             }
         }
+    }
+
+    /// Wall-clock enforced wrapper: spawns postOnce in a dedicated thread
+    /// with its own NIMClient clone and joins with a hard deadline. If the
+    /// thread doesn't return in time (NVIDIA accepted TCP but went silent),
+    /// returns Timeout. The orphaned thread owns its clone and frees it on
+    /// exit; no shared mutable state after spawn.
+    fn postOnceWithDeadline(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
+        const deadline_sec: u64 = @divFloor(self.timeout_ms, 1000);
+        const WorkerResult = struct {
+            done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+            ok: bool = false,
+            resp: types.ChatCompletionResponse = undefined,
+            err: types.ProviderError = error.Timeout,
+        };
+        // Heap-allocate so the detached thread always has a valid pointer.
+        const wr = self.allocator.create(WorkerResult) catch return error.Network;
+        const body_copy = self.allocator.dupe(u8, body) catch {
+            self.allocator.destroy(wr);
+            return error.Network;
+        };
+        // Worker gets its own client to avoid data races on connection pool.
+        var worker_client = NIMClient.initWithBaseUrl(self.allocator, self.api_key, self.model, self.base_url);
+        const thread = std.Thread.spawn(.{}, struct {
+            fn run(wc: *NIMClient, bc: []const u8, w: *WorkerResult, alloc: std.mem.Allocator) void {
+                defer {
+                    alloc.free(bc);
+                    wc.deinit();
+                    // Signal done LAST so the parent sees the result.
+                    w.done.store(1, .release);
+                }
+                if (wc.postOnce(bc)) |resp| {
+                    w.resp = resp;
+                    w.ok = true;
+                } else |err| {
+                    w.err = err;
+                }
+            }
+        }.run, .{ &worker_client, body_copy, wr, self.allocator }) catch {
+            self.allocator.free(body_copy);
+            worker_client.deinit();
+            self.allocator.destroy(wr);
+            return error.Network;
+        };
+        _ = thread; // detached below or joined
+        // Poll wall clock.
+        var elapsed: u64 = 0;
+        while (elapsed < deadline_sec) : (elapsed += 1) {
+            sleepMs(1000);
+            if (wr.done.load(.acquire) != 0) break;
+        }
+        if (wr.done.load(.acquire) != 0) {
+            defer self.allocator.destroy(wr);
+            if (wr.ok) return wr.resp;
+            return wr.err;
+        }
+        // Deadline exceeded — the thread owns wr and will free body_copy
+        // and deinit its client when NVIDIA eventually responds or RSTs.
+        // We leak the WorkerResult alloc intentionally (one pointer per
+        // hung request, cleaned up on process exit).
+        std.log.warn("[nim] postOnce wall-clock deadline {d}s exceeded; returning Timeout", .{deadline_sec});
+        return error.Timeout;
     }
 
     fn postOnce(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
