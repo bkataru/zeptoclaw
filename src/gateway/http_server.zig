@@ -716,25 +716,37 @@ return self.allocator.dupe(u8, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
             try self.sendErrorResponse(stream, 400, "Bad Request", "missing prompt");
             return;
         };
-        const reply = inject(self.allocator, chat_id, prompt) catch |err| {
-            try self.sendErrorResponse(stream, 500, "Inject Error", @errorName(err));
+        // Dupe args and ack immediately — the agent turn runs in a detached
+        // thread so it cannot block the accept loop.
+        const chat_id_owned = self.allocator.dupe(u8, chat_id) catch {
+            try self.sendErrorResponse(stream, 500, "Internal Error", "alloc failed");
             return;
         };
-        defer self.allocator.free(reply);
-        var response = std.ArrayList(u8).empty;
-        defer response.deinit(self.allocator);
-        try response.appendSlice(self.allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"reply\":");
-        try response.append(self.allocator, '"');
-        for (reply) |c| {
-            switch (c) {
-                '"' => try response.appendSlice(self.allocator, "\\\""),
-                '\\' => try response.appendSlice(self.allocator, "\\\\"),
-                '\n' => try response.appendSlice(self.allocator, "\\n"),
-                else => try response.append(self.allocator, c),
+        const prompt_owned = self.allocator.dupe(u8, prompt) catch {
+            self.allocator.free(chat_id_owned);
+            try self.sendErrorResponse(stream, 500, "Internal Error", "alloc failed");
+            return;
+        };
+        const alloc = self.allocator;
+        const inject_fn = inject;
+        _ = std.Thread.spawn(.{}, struct {
+            fn run(a: std.mem.Allocator, ifn: *const fn (std.mem.Allocator, []const u8, []const u8) anyerror![]const u8, cid: []const u8, pr: []const u8) void {
+                defer a.free(cid);
+                defer a.free(pr);
+                const reply = ifn(a, cid, pr) catch |err| {
+                    std.log.err("[inject] failed: {s}", .{@errorName(err)});
+                    return;
+                };
+                a.free(reply);
             }
-        }
-        try response.appendSlice(self.allocator, "\"}\r\n");
-        try compat.streamWriteAll(stream, response.items);
+        }.run, .{ alloc, inject_fn, chat_id_owned, prompt_owned }) catch {
+            self.allocator.free(chat_id_owned);
+            self.allocator.free(prompt_owned);
+            try self.sendErrorResponse(stream, 500, "Internal Error", "spawn failed");
+            return;
+        };
+        const ack = "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"ok\":true}\r\n";
+        try compat.streamWriteAll(stream, ack);
     }
 
     fn handleWhatsAppHeal(self: *HttpServer, stream: std.Io.net.Stream) !void {
