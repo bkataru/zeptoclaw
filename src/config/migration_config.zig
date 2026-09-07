@@ -198,7 +198,8 @@ pub const ZeptoClawConfig = struct {
     max_iterations: u32,
     temperature: f32,
     max_tokens: u32,
-    nim_timeout_ms: u32 = 120000,
+    nim_timeout_ms: u32 = 300000,
+    env_model_explicit: bool = false,
     gateway_port: u32,
     gateway_mode: []const u8,
     gateway_bind: []const u8,
@@ -438,8 +439,11 @@ pub const ConfigLoader = struct {
             return err;
         };
 
-        const model = compat.getEnvVarOwned(self.allocator, "NVIDIA_MODEL") catch
-            try self.allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
+        var env_model_explicit = true;
+        const model = compat.getEnvVarOwned(self.allocator, "NVIDIA_MODEL") catch blk: {
+            env_model_explicit = false;
+            break :blk try self.allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b");
+        };
 
         const image_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_IMAGE_MODEL") catch
             try self.allocator.dupe(u8, "stable-diffusion-3.5-large");
@@ -531,6 +535,7 @@ pub const ConfigLoader = struct {
             .workspace = workspace,
             .max_concurrent = 4,
             .source = .env,
+            .env_model_explicit = env_model_explicit,
             .whatsapp_enabled = whatsapp_enabled,
             .whatsapp_native = std.mem.eql(u8, compat.getEnvVarOwned(self.allocator, "WHATSAPP_NATIVE") catch "true", "true"),
             .whatsapp_auth_dir = whatsapp_auth_dir,
@@ -631,19 +636,28 @@ pub const ConfigLoader = struct {
         }
         // Apply env config if available (overrides file)
         if (env_config) |ec| {
+            // API key always overrides from env (it's the secret source).
             self.allocator.free(result.api_key);
-            self.allocator.free(result.primary_model);
-            for (result.fallback_models) |m| self.allocator.free(m);
-            self.allocator.free(result.fallback_models);
-            self.allocator.free(result.image_model);
+            result.api_key = try self.allocator.dupe(u8, ec.api_key);
+            // Model fields only override when NVIDIA_MODEL was explicitly set.
+            // Otherwise the file config (kimi-k3, fallbacks, 32k tokens, 300s)
+            // wins over the env loader's hardcoded ultra defaults.
+            if (ec.env_model_explicit) {
+                self.allocator.free(result.primary_model);
+                for (result.fallback_models) |m| self.allocator.free(m);
+                self.allocator.free(result.fallback_models);
+                self.allocator.free(result.image_model);
+                result.primary_model = try self.allocator.dupe(u8, ec.primary_model);
+                result.fallback_models = try self.dupeSlice(ec.fallback_models);
+                result.image_model = try self.allocator.dupe(u8, ec.image_model);
+                result.max_tokens = ec.max_tokens;
+                result.nim_timeout_ms = ec.nim_timeout_ms;
+            }
+            // Gateway/infra fields always override from env.
             self.allocator.free(result.gateway_mode);
             self.allocator.free(result.gateway_bind);
             self.allocator.free(result.workspace);
             if (result.gateway_auth_token) |token| self.allocator.free(token);
-            result.api_key = try self.allocator.dupe(u8, ec.api_key);
-            result.primary_model = try self.allocator.dupe(u8, ec.primary_model);
-            result.fallback_models = try self.dupeSlice(ec.fallback_models);
-            result.image_model = try self.allocator.dupe(u8, ec.image_model);
             result.gateway_port = ec.gateway_port;
             result.gateway_mode = try self.allocator.dupe(u8, ec.gateway_mode);
             result.gateway_bind = try self.allocator.dupe(u8, ec.gateway_bind);
@@ -655,7 +669,7 @@ pub const ConfigLoader = struct {
             result.gateway_allow_insecure_auth = ec.gateway_allow_insecure_auth;
             result.workspace = try self.allocator.dupe(u8, ec.workspace);
             result.max_concurrent = ec.max_concurrent;
-            result.source = .env;
+            result.source = if (ec.env_model_explicit) .env else result.source;
             // WhatsApp config from env - only override file's if env explicitly set (preserve legacy openclaw.json when env absent)
             if (ec.whatsapp_enabled) {
                 result.whatsapp_enabled = true;
