@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-09-07
+
+### WhatsApp
+
+- Media tools share mainline retry resilience: `chatWithRetry` retries transient errors forever and permanent ones 3 times before the breaker counts one failure. `see_image`, `hear_audio`, and `watch_video` all use it; the agent loop classifier delegates to the same function.
+
 ## 0.7.0 - 2026-09-06
 
 ### WhatsApp

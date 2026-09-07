@@ -40,7 +40,7 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - 401 logout: the client starts QR re-pair instead of leaving a dead session.
 - LID-group phone delivery: in LID-addressed groups, self PN devices mirror to LID form before the SKDM fanout. Phones drop PN-addressed targets in LID groups.
 - Repeat greetings: the rolling transcript once held inbound lines only, so every turn looked like the first. Outbound replies are now recorded as Barvis, and `fromMe` inbound carries the push name.
-- Vision breaker: `see_image` opens for 10 minutes after 3 straight model failures, fails fast, and tells Barvis to answer from text without repeating the outage.
+- Vision breaker: media tools open for 10 minutes after 3 straight model failures, fail fast, and tell Barvis to answer from text without repeating the outage. Since 0.7.1 all three retry first like mainline chat (transient forever, permanent 3 times) before the breaker counts a failure.
 - Voice and video: both once rode the vision path and always failed. `hear_audio` and `watch_video` send `audio_url`/`video_url` parts to the omni model instead, routed by mime.
 - Secrets in replies: Barvis once quoted a just-shared password back into the group. Replies and memory reasons must never print secrets now.
 - Reply scrub: truncated model emoji bytes rendered as `?` on phones. Replies drop malformed sequences before send.
