@@ -452,6 +452,14 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     }
     defer if (journal_body_owned) g_whatsapp_alloc.free(journal_body);
     if (!opts.skip_journal) journal_append(g_whatsapp_alloc, "in", chat_id_copy, journal_body, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
+    // Privacy prefix: messages starting with ~ are hidden from Barvis. The
+    // journal keeps the real text (operator audit), but the model context,
+    // transcript, burst buffer, and session history never see it.
+    if (body_copy.len > 0 and body_copy[0] == '~') {
+        std.log.info("[whatsapp] redacted by sender (~ prefix) chat={s}", .{chat_id_copy});
+        g_whatsapp_mu.unlock(compat.getIo());
+        return;
+    }
     session.addMessage(eff_msg.*) catch {};
 
     // Skip our own outbound echo (self-chat fromMe replies). Exact or prefix match.
