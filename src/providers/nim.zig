@@ -95,6 +95,7 @@ pub const NIMClient = struct {
     model: []const u8,
     base_url: []const u8,
     timeout_ms: u32,
+    fallback_models: []const []const u8 = &.{},
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
@@ -106,6 +107,7 @@ pub const NIMClient = struct {
             .model = cfg.nim_model,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = cfg.nim_timeout_ms,
+            .fallback_models = cfg.fallback_models,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
@@ -120,6 +122,7 @@ pub const NIMClient = struct {
             .model = model_id,
             .base_url = DEFAULT_BASE_URL,
             .timeout_ms = cfg.nim_timeout_ms,
+            .fallback_models = cfg.fallback_models,
             .client = std.http.Client{ .allocator = allocator, .io = compat.getIo() },
         };
     }
@@ -438,14 +441,29 @@ pub fn deinit(self: *NIMClient) void {
         const body = out.written();
 
         var attempt: u32 = 0;
+        var model_idx: usize = 0;
+        const primary = self.model;
         while (true) : (attempt += 1) {
             paceForRpm();
             if (self.postOnceWithDeadline(body)) |resp| {
                 noteSuccess();
                 return resp;
             } else |err| switch (err) {
-                error.RateLimit, error.Timeout, error.Network => {
-                    std.log.warn("[nim] {} attempt {d}; will keep retrying until this request succeeds", .{ err, attempt + 1 });
+                error.RateLimit, error.Timeout, error.Network, error.InvalidResponse => {
+                    // Rotate to next fallback model after every 2 consecutive
+                    // failures on the same model (one retry, then move on).
+                    if (attempt > 0 and attempt % 2 == 0 and self.fallback_models.len > 0) {
+                        const next = self.fallback_models[model_idx % self.fallback_models.len];
+                        std.log.warn("[nim] rotating model {s} -> {s} after {d} failures", .{ self.model, next, attempt });
+                        self.setModel(next);
+                        model_idx += 1;
+                        // After exhausting all fallbacks, cycle back to primary.
+                        if (model_idx > self.fallback_models.len) {
+                            self.setModel(primary);
+                            model_idx = 0;
+                        }
+                    }
+                    std.log.warn("[nim] {s} attempt {d} on {s}; retrying", .{ @errorName(err), attempt + 1, self.model });
                     sleepAfterFailure();
                 },
                 else => {
