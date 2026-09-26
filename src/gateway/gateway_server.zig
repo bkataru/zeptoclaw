@@ -366,6 +366,10 @@ fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt:
     // (that model is text-only and 400s every see_image call).
     agent.setVisionModel(cfg.getVisionModel());
     agent.setSessionId(chat_id);
+    // Injected turns get the same stuck-turn accounting: an operator-injected
+    // turn can wedge exactly like an inbound one.
+    const watch_token = if (turnWatch()) |w| w.begin(chat_id) else 0;
+    defer if (watch_token != 0) if (turnWatch()) |w| w.end(watch_token);
     const reply = agent.runTurn(prompt, .{
         .system_prompt = sys_prompt,
         .extra_context = extra.items,
