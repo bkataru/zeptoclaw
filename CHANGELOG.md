@@ -17,6 +17,7 @@
 ### Changed
 
 - Primary model is `z-ai/glm-5.3-flash`.
+- Model rotation is per-request recovery again. A turn that rotated to a fallback left the client parked on that fallback, so after one slow turn every later turn ran on a weaker model (live chats spent days on `nvidia/nemotron-3-super-120b-a12b`). The primary is restored before the request returns, and a rejected payload rotates before its budget is spent.
 
 ## 0.9.0 - 2026-09-07
 

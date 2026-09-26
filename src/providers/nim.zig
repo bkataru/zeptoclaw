@@ -223,6 +223,22 @@ pub fn deinit(self: *NIMClient) void {
         return self.chatWithTools(messages, null);
     }
 
+    /// Step to the next fallback model, cycling back to `primary` once the list
+    /// is exhausted. Rotation is per-request recovery: the caller restores the
+    /// primary before returning so one bad turn cannot downgrade every later
+    /// turn to a weaker model.
+    fn rotateModel(self: *NIMClient, model_idx: *usize, primary: []const u8, attempt: u32) void {
+        if (self.fallback_models.len == 0) return;
+        const next = self.fallback_models[model_idx.* % self.fallback_models.len];
+        std.log.warn("[nim] rotating model {s} -> {s} after {d} failures", .{ self.model, next, attempt });
+        self.setModel(next);
+        model_idx.* += 1;
+        if (model_idx.* > self.fallback_models.len) {
+            self.setModel(primary);
+            model_idx.* = 0;
+        }
+    }
+
     /// Memory: Caller owns returned ChatCompletionResponse. `messages` and `tools` are borrowed.
     pub fn chatWithTools(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
         // Build request body as JSON string
@@ -471,32 +487,27 @@ pub fn deinit(self: *NIMClient) void {
                 const tok_out = resp.usage.completion_tokens;
                 std.log.info("[nim] ok model={s} attempt={d} req={d}ms turn={d}ms tok_in={d} tok_out={d}", .{ self.model, attempt + 1, req_ms, turn_ms, tok_in, tok_out });
                 noteSuccess();
+                self.setModel(primary);
                 return resp;
             } else |err| switch (err) {
                 error.RateLimit, error.Timeout, error.Network, error.InvalidResponse => {
-                    // A rejected payload (4xx) fails identically forever. Rotate
-                    // through the fallbacks, then give up so the caller can answer
-                    // from what it already has instead of wedging the turn and
-                    // swallowing every later message via coalescing.
+                    // A rejected payload fails identically however often it is
+                    // retried, so it gets a bounded budget and a rotation first
+                    // (a text-only model rejecting an image is model-specific).
+                    // Giving up lets the caller answer from what it already has
+                    // instead of wedging the turn and swallowing every later
+                    // message via coalescing.
                     if (!isTransientErr(err)) {
                         permanent += 1;
-                        if (permanent > MAX_PERMANENT_ATTEMPTS) {
+                        self.rotateModel(&model_idx, primary, attempt);
+                        if (permanent >= MAX_PERMANENT_ATTEMPTS) {
                             std.log.err("[nim] {s} rejected {d} times on model={s}; abandoning request", .{ @errorName(err), permanent, self.model });
+                            self.setModel(primary);
                             return err;
                         }
-                    }
-                    // Rotate to next fallback model after every 2 consecutive
-                    // failures on the same model (one retry, then move on).
-                    if (attempt > 0 and attempt % 2 == 0 and self.fallback_models.len > 0) {
-                        const next = self.fallback_models[model_idx % self.fallback_models.len];
-                        std.log.warn("[nim] rotating model {s} -> {s} after {d} failures", .{ self.model, next, attempt });
-                        self.setModel(next);
-                        model_idx += 1;
-                        // After exhausting all fallbacks, cycle back to primary.
-                        if (model_idx > self.fallback_models.len) {
-                            self.setModel(primary);
-                            model_idx = 0;
-                        }
+                    } else if (attempt > 0 and attempt % 2 == 0) {
+                        // Transient: one retry, then move to the next model.
+                        self.rotateModel(&model_idx, primary, attempt);
                     }
                     const fail_ms = (compat.timestamp() - req_start) * 1000;
                     std.log.warn("[nim] {s} attempt={d} model={s} req={d}ms; retrying", .{ @errorName(err), attempt + 1, self.model, fail_ms });
