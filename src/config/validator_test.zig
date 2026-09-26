@@ -9,6 +9,7 @@ pub fn createValidTestConfig(allocator: std.mem.Allocator) !ZeptoClawConfig {
         .primary_model = try allocator.dupe(u8, "thinkingmachines/inkling"),
         .fallback_models = try allocator.alloc([]const u8, 0),
         .image_model = try allocator.dupe(u8, "stable-diffusion-3.5-large"),
+        .vision_model = try allocator.dupe(u8, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"),
         .max_iterations = 10,
         .temperature = 0.7,
         .max_tokens = 1024,

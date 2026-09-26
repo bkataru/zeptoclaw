@@ -19,6 +19,7 @@ fn makeTestConfig(allocator: std.mem.Allocator, api_key: []const u8, model: []co
     const whatsapp_group_policy = try allocator.dupe(u8, "allowlist");
     const whatsapp_allow_from = try allocator.alloc([]const u8, 0);
     const whatsapp_group_activation_commands = try allocator.alloc([]const u8, 0);
+    const vision_model = try allocator.dupe(u8, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
 
     return Config{
         .allocator = allocator,
@@ -29,6 +30,7 @@ fn makeTestConfig(allocator: std.mem.Allocator, api_key: []const u8, model: []co
         .max_tokens = 1,
         .fallback_models = fallback_models,
         .image_model = image_model,
+        .vision_model = vision_model,
         .gateway_port = 18789,
         .gateway_mode = gateway_mode,
         .gateway_bind = gateway_bind,

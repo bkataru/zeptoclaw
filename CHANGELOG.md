@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-09-26
+
+### Fixed
+
+- Turns no longer wedge on a rejected request. A model that returns HTTP 400 for a payload (for example a text-only model handed an image) retried the identical body forever inside one tool call, so the turn never finished and every later message coalesced behind it. Permanent failures (4xx, unparseable body) now get 3 attempts, while 5xx, timeouts, and network errors keep retrying without limit.
+- The media tools no longer dispatch to a text-only model. `setVisionModel` was wired to `fallbackModels[0]`, so `see_image` sent base64 images to `nvidia/nemotron-3-super-120b-a12b` and got HTTP 400 on every call.
+
+### Added
+
+- `agents.defaults.visionModel.primary` names the multimodal model used by `see_image`, `hear_audio`, and `watch_video` (default `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, overridable with `NVIDIA_VISION_MODEL`). The startup dump prints it.
+- Media cache cap: the oldest files in `{auth_dir}/media` are evicted once the directory passes 1GB, and `last-image` pointers to evicted files are dropped. The cache had reached 667MB in five days.
+
+### Changed
+
+- Primary model is `z-ai/glm-5.3-flash`.
+
 ## 0.9.0 - 2026-09-07
 
 ### WhatsApp

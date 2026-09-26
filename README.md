@@ -6,7 +6,7 @@
 
 ## Build Status
 
-**0.9.0** (2026-09-07). Native WhatsApp is the only transport. `zig build test --summary all`: 481 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.9.1** (2026-09-26). Native WhatsApp is the only transport. `zig build test --summary all`: 483 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
@@ -14,7 +14,10 @@
 - **Identity guard** (0.9.0): Barvis never names the model or provider
 - **Config fix** (0.9.0): file model settings no longer overwritten by env defaults. max_tokens and timeout flow correctly
 - **Observability** (0.9.0): per-request model, timing, tokens; turn summary; startup config dump
-- **Model rotation** (0.8.0): 2 fails on a model → rotate to the next fallback. Primary: kimi-k3, fallbacks: super → lightning → ultra → nano-omni
+- **Model rotation** (0.8.0): 2 fails on a model → rotate to the next fallback. Primary: glm-5.3-flash, fallbacks: super → lightning → ultra → nano-omni
+- **Vision model** (0.9.1): `agents.defaults.visionModel.primary` names the multimodal model the media tools use. Never falls back to a text-only model
+- **Bounded permanent retries** (0.9.1): 4xx gives up after 3 attempts (5xx still retries forever). A rejected payload can no longer wedge a turn
+- **Media cache cap** (0.9.1): oldest media evicted once the cache passes 1GB
 - **32k token budget** (0.8.0): `max_tokens: 32768` in every request. No more truncated thoughts
 - **Wall-clock deadline** (0.8.0): NIM requests time out at 300s even if the socket blocks. Fixes hung turns
 - **`POST /whatsapp/inject`** (0.8.0): auth-required fire-and-forget endpoint to inject a turn into any chat
@@ -523,6 +526,6 @@ August 2026 wired WhatsApp through `runTurn`, hardened the inbound ledger, and a
 
 ---
 
-**Status:** v0.9.0 tagged. Privacy prefix, identity guard, config fix, observability. Model rotation, kimi-k3 primary, 32k tokens, wall-clock deadlines, inject endpoint, no refusals. Media retry parity, voice/video tools, idle expiry, no secrets, clean replies. Memory recall with auto-preload, vision breaker, presence FSM. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair.
+**Status:** v0.9.1 tagged. Vision model config, bounded permanent retries, media cache cap. Privacy prefix, identity guard, config fix, observability. Model rotation, glm-5.3-flash primary, 32k tokens, wall-clock deadlines, inject endpoint, no refusals. Media retry parity, voice/video tools, idle expiry, no secrets, clean replies. Memory recall with auto-preload, vision breaker, presence FSM. Native-only WhatsApp transport, group @mention trigger, outbound edits/revokes, group retry SKDM resends, own-phone group delivery, self-heal re-pair.
 
 **Related:** [Barvis on Moltbook](https://www.moltbook.com/u/barvis_da_jarvis)

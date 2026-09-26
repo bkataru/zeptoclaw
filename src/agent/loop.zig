@@ -61,7 +61,10 @@ pub const TurnOpts = struct {
     video_mime: ?[]const u8 = null,
 };
 
-const DEFAULT_VISION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+const migration_config = @import("../config/migration_config.zig");
+/// Single source of truth: the config layer owns this default so the gateway
+/// and the Agent cannot drift apart on which model sees images.
+const DEFAULT_VISION_MODEL = migration_config.DEFAULT_VISION_MODEL;
 
 pub const Agent = struct {
     allocator: std.mem.Allocator,
@@ -288,9 +291,10 @@ pub const Agent = struct {
         return NIMClient.isTransientErr(err);
     }
 
-    /// Permanent errors get 3 attempts, then propagate so the caller can
-    /// answer gracefully instead of wedging the turn forever.
-    pub const MAX_PERMANENT_RETRIES: u32 = 3;
+    /// Permanent errors get a bounded budget, then propagate so the caller can
+    /// answer gracefully instead of wedging the turn forever. Shares the
+    /// provider's constant so the two layers cannot drift.
+    pub const MAX_PERMANENT_RETRIES: u32 = NIMClient.MAX_PERMANENT_ATTEMPTS;
 
     fn chatUntilDone(self: *Agent, defs: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
         var n: u32 = 0;

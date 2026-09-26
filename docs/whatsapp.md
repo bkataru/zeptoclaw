@@ -46,7 +46,10 @@ Text DM and group send/receive both work end to end. `sendText` auto-routes to g
 - Voice and video: both once rode the vision path and always failed. `hear_audio` and `watch_video` send `audio_url`/`video_url` parts to the omni model instead, routed by mime.
 - Secrets in replies: Barvis once quoted a just-shared password back into the group. Replies and memory reasons must never print secrets now.
 - Reply scrub: truncated model emoji bytes rendered as `?` on phones. Replies drop malformed sequences before send.
-- Model rotation: 2 consecutive failures on the same model rotate through fallbacks (super → lightning → ultra → nano-omni), cycling back to primary. Primary switched to kimi-k3 for better in-character compliance.
+- Model rotation: 2 consecutive failures on the same model rotate through fallbacks (super → lightning → ultra → nano-omni), cycling back to primary. Primary switched to glm-5.3-flash in 0.9.1.
+- Vision model: `see_image`, `hear_audio`, and `watch_video` dispatch to `agents.defaults.visionModel.primary` (default `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`). Setting it to a text-only model makes every media call return HTTP 400.
+- Permanent failures: a 4xx (rejected payload) is retried 3 times, then the error propagates so the turn finishes and Barvis answers from what it has. 5xx and timeouts still retry without limit. Before 0.9.1 a 4xx retried forever inside a single `see_image` call and the turn never finished.
+- Media cache: `{auth_dir}/media` is capped at 1GB; oldest files are evicted at startup and `last-image` pointers to evicted files are dropped.
 - Wall-clock deadline: every NIM HTTP request spawns a worker thread with an atomic done flag. The parent returns Timeout after 300s even if the socket read blocks forever.
 - `POST /whatsapp/inject`: auth-required fire-and-forget endpoint to run a full agent turn and send the reply to any chat. 202 ack, background thread.
 - `max_tokens: 32768` in every request. Models no longer truncate mid-thought on complex prompts.

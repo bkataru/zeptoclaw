@@ -69,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
         .primary_model = cfg.nim_model,
         .fallback_models = cfg.fallback_models,
         .image_model = cfg.image_model,
+        .vision_model = cfg.vision_model,
         .max_iterations = cfg.max_iterations,
         .temperature = cfg.temperature,
         .max_tokens = cfg.max_tokens,

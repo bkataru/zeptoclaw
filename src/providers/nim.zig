@@ -100,6 +100,12 @@ pub const NIMClient = struct {
     client: std.http.Client,
     const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
+    /// Permanent failures (4xx, unparseable body) get a bounded budget before
+    /// the error propagates. Transient failures (Timeout, RateLimit, Network)
+    /// still retry without limit — the server being slow is not a reason to
+    /// drop a turn, a rejected payload is.
+    pub const MAX_PERMANENT_ATTEMPTS: u32 = 3;
+
     /// Memory: Caller owns returned NIMClient; call `deinit()` to free http.Client resources.
     pub fn init(allocator: std.mem.Allocator, cfg: config_module.Config) NIMClient {
         return .{
@@ -205,7 +211,7 @@ pub fn deinit(self: *NIMClient) void {
                 sleepAfterFailure();
                 if (!isTransientErr(err)) {
                     bad += 1;
-                    if (bad >= 3) return err;
+                    if (bad >= MAX_PERMANENT_ATTEMPTS) return err;
                 }
             }
         }
@@ -454,6 +460,7 @@ pub fn deinit(self: *NIMClient) void {
         var model_idx: usize = 0;
         const primary = self.model;
         const turn_start = compat.timestamp();
+        var permanent: u32 = 0;
         while (true) : (attempt += 1) {
             paceForRpm();
             const req_start = compat.timestamp();
@@ -467,6 +474,17 @@ pub fn deinit(self: *NIMClient) void {
                 return resp;
             } else |err| switch (err) {
                 error.RateLimit, error.Timeout, error.Network, error.InvalidResponse => {
+                    // A rejected payload (4xx) fails identically forever. Rotate
+                    // through the fallbacks, then give up so the caller can answer
+                    // from what it already has instead of wedging the turn and
+                    // swallowing every later message via coalescing.
+                    if (!isTransientErr(err)) {
+                        permanent += 1;
+                        if (permanent > MAX_PERMANENT_ATTEMPTS) {
+                            std.log.err("[nim] {s} rejected {d} times on model={s}; abandoning request", .{ @errorName(err), permanent, self.model });
+                            return err;
+                        }
+                    }
                     // Rotate to next fallback model after every 2 consecutive
                     // failures on the same model (one retry, then move on).
                     if (attempt > 0 and attempt % 2 == 0 and self.fallback_models.len > 0) {
@@ -579,6 +597,20 @@ pub fn deinit(self: *NIMClient) void {
         return error.Timeout;
     }
 
+    /// 5xx is the provider having a bad time: transient, so it retries without
+    /// limit. 4xx is our payload being rejected: permanent, so it gets a bounded
+    /// budget — retrying a rejected body forever is what wedged turns before.
+    pub fn statusToProviderError(status: std.http.Status) types.ProviderError {
+        return switch (status) {
+            .unauthorized => types.ProviderError.Auth,
+            .too_many_requests => types.ProviderError.RateLimit,
+            else => if (status.class() == .server_error)
+                types.ProviderError.Network
+            else
+                types.ProviderError.InvalidResponse,
+        };
+    }
+
     fn postOnce(self: *NIMClient, body: []const u8) types.ProviderError!types.ChatCompletionResponse {
         const start_ns = compat.timestamp(); // fallback
         const overall_timeout_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms;
@@ -634,11 +666,7 @@ pub fn deinit(self: *NIMClient) void {
             const ebytes = ereader.allocRemaining(self.allocator, .limited(512)) catch "";
             defer if (ebytes.len > 0) self.allocator.free(ebytes);
             std.log.warn("[nim] HTTP {s} from model {s}: {s}", .{ @tagName(response.head.status), self.model, ebytes });
-            return switch (response.head.status) {
-                .unauthorized => types.ProviderError.Auth,
-                .too_many_requests => types.ProviderError.RateLimit,
-                else => types.ProviderError.InvalidResponse,
-            };
+            return statusToProviderError(response.head.status);
         }
 
         // Read response body
@@ -684,6 +712,20 @@ pub fn tryParseCompletion(allocator: std.mem.Allocator, bytes: []const u8) !std.
     return std.json.parseFromSlice(types.ChatCompletionResponse, allocator, bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 }
 
+test "status mapping keeps 5xx transient and 4xx permanent" {
+    // A rejected payload (400) must be classified permanent so its retries stay
+    // bounded; an unavailable provider (5xx) must stay transient so it retries.
+    try std.testing.expectEqual(types.ProviderError.InvalidResponse, NIMClient.statusToProviderError(.bad_request));
+    try std.testing.expectEqual(types.ProviderError.InvalidResponse, NIMClient.statusToProviderError(.forbidden));
+    try std.testing.expectEqual(types.ProviderError.InvalidResponse, NIMClient.statusToProviderError(.not_found));
+    try std.testing.expectEqual(types.ProviderError.RateLimit, NIMClient.statusToProviderError(.too_many_requests));
+    try std.testing.expectEqual(types.ProviderError.Auth, NIMClient.statusToProviderError(.unauthorized));
+    try std.testing.expectEqual(types.ProviderError.Network, NIMClient.statusToProviderError(.internal_server_error));
+    try std.testing.expectEqual(types.ProviderError.Network, NIMClient.statusToProviderError(.bad_gateway));
+    try std.testing.expect(NIMClient.isTransientErr(NIMClient.statusToProviderError(.service_unavailable)));
+    try std.testing.expect(!NIMClient.isTransientErr(NIMClient.statusToProviderError(.bad_request)));
+}
+
 const TestConfig = config_module.Config;
 
 test "NIMClient initialization" {
@@ -698,7 +740,8 @@ test "NIMClient initialization" {
         .nim_timeout_ms = 12345,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-    .gateway_port = 18789,
+    .vision_model = "test-vision-model",
+.gateway_port = 18789,
     .gateway_mode = "local",
     .gateway_bind = "lan",
     .gateway_auth_token = null,
@@ -738,7 +781,8 @@ test "NIMClient initWithModel" {
         .nim_timeout_ms = 12345,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -792,7 +836,8 @@ test "NIMClient setModel" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -832,7 +877,8 @@ test "NIMClient getModel" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -869,7 +915,8 @@ test "NIMClient getApiKey" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -906,7 +953,8 @@ test "NIMClient getBaseUrl" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -946,7 +994,8 @@ test "NIMClient deinit does not crash" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -981,7 +1030,8 @@ test "NIMClient handles empty API key" {
         .max_tokens = 1024,
         .fallback_models = &.{},
         .image_model = "test-image-model",
-        .gateway_port = 18789,
+        .vision_model = "test-vision-model",
+.gateway_port = 18789,
         .gateway_mode = "local",
         .gateway_bind = "lan",
         .gateway_auth_token = null,
@@ -1028,7 +1078,8 @@ test "NIMClient model name flexibility" {
             .max_tokens = 1024,
             .fallback_models = &.{},
             .image_model = "test-image-model",
-            .gateway_port = 18789,
+            .vision_model = "test-vision-model",
+.gateway_port = 18789,
             .gateway_mode = "local",
             .gateway_bind = "lan",
             .gateway_auth_token = null,

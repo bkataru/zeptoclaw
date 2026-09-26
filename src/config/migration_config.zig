@@ -1,6 +1,11 @@
 const std = @import("std");
 const compat = @import("../compat.zig");
 
+/// Model the media tools (`see_image`, `hear_audio`, `watch_video`) dispatch to.
+/// Must be multimodal: pointing these tools at a text-only model makes every
+/// call return HTTP 400 and (before the retry budget existed) wedged the turn.
+pub const DEFAULT_VISION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
 /// Configuration source priority: CLI > env > file > defaults
 pub const ConfigSource = enum {
     cli,
@@ -48,6 +53,7 @@ pub const OpenClawConfig = struct {
         pub const AgentDefaults = struct {
             model: ModelConfig,
             imageModel: ImageModelConfig,
+            visionModel: ?VisionModelConfig = null,
             models: std.json.Value = .null,
             workspace: []const u8 = "/tmp/zeptoclaw",
             compaction: Compaction,
@@ -62,6 +68,13 @@ pub const OpenClawConfig = struct {
             };
 
             pub const ImageModelConfig = struct {
+                primary: []const u8,
+                fallbacks: []const []const u8 = &.{},
+            };
+
+            /// Optional: configs written before the vision model existed must
+            /// keep parsing, so this is nullable and defaults to the omni model.
+            pub const VisionModelConfig = struct {
                 primary: []const u8,
                 fallbacks: []const []const u8 = &.{},
             };
@@ -195,6 +208,7 @@ pub const ZeptoClawConfig = struct {
     primary_model: []const u8,
     fallback_models: [][]const u8,
     image_model: []const u8,
+    vision_model: []const u8,
     max_iterations: u32,
     temperature: f32,
     max_tokens: u32,
@@ -230,6 +244,7 @@ pub const ZeptoClawConfig = struct {
         }
         self.allocator.free(self.fallback_models);
         self.allocator.free(self.image_model);
+        self.allocator.free(self.vision_model);
         self.allocator.free(self.gateway_mode);
         self.allocator.free(self.gateway_bind);
         self.allocator.free(self.workspace);
@@ -370,6 +385,9 @@ pub const ConfigLoader = struct {
         // Extract image model
         const image_model = try self.allocator.dupe(u8, openclaw.agents.defaults.imageModel.primary);
 
+        // Extract vision model; absent in configs written before it existed.
+        const vision_model = try self.allocator.dupe(u8, if (openclaw.agents.defaults.visionModel) |vm| vm.primary else DEFAULT_VISION_MODEL);
+
         // Extract gateway config
         const gateway_mode = try self.allocator.dupe(u8, openclaw.gateway.mode);
         const gateway_bind = try self.allocator.dupe(u8, openclaw.gateway.bind);
@@ -401,6 +419,7 @@ pub const ConfigLoader = struct {
             .primary_model = primary_model,
             .fallback_models = fallback_models,
             .image_model = image_model,
+            .vision_model = vision_model,
             .max_iterations = 10,
             .temperature = 0.7,
             .max_tokens = openclaw.agents.defaults.model.max_tokens orelse 32768,
@@ -447,6 +466,9 @@ pub const ConfigLoader = struct {
 
         const image_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_IMAGE_MODEL") catch
             try self.allocator.dupe(u8, "stable-diffusion-3.5-large");
+
+        const vision_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_VISION_MODEL") catch
+            try self.allocator.dupe(u8, DEFAULT_VISION_MODEL);
 
         const gateway_port_str = compat.getEnvVarOwned(self.allocator, "GATEWAY_PORT") catch "18789";
         const gateway_port = std.fmt.parseInt(u32, gateway_port_str, 10) catch 18789;
@@ -523,6 +545,7 @@ pub const ConfigLoader = struct {
             .primary_model = model,
             .fallback_models = default_fallback_env,
             .image_model = image_model,
+            .vision_model = vision_model,
             .max_iterations = 10,
             .temperature = 0.7,
             .max_tokens = 4096,
@@ -565,6 +588,7 @@ pub const ConfigLoader = struct {
             .primary_model = try self.allocator.dupe(u8, "nvidia/nemotron-3-ultra-550b-a55b"),
             .fallback_models = default_fallback_models,
             .image_model = try self.allocator.dupe(u8, "stable-diffusion-3.5-large"),
+            .vision_model = try self.allocator.dupe(u8, DEFAULT_VISION_MODEL),
             .max_iterations = 10,
             .temperature = 0.7,
             .max_tokens = 4096,
@@ -596,6 +620,7 @@ pub const ConfigLoader = struct {
             for (result.fallback_models) |m| self.allocator.free(m);
             self.allocator.free(result.fallback_models);
             self.allocator.free(result.image_model);
+            self.allocator.free(result.vision_model);
             self.allocator.free(result.gateway_mode);
             self.allocator.free(result.gateway_bind);
             self.allocator.free(result.workspace);
@@ -609,6 +634,7 @@ pub const ConfigLoader = struct {
             result.primary_model = try self.allocator.dupe(u8, mutable_fc.primary_model);
             result.fallback_models = try self.dupeSlice(mutable_fc.fallback_models);
             result.image_model = try self.allocator.dupe(u8, mutable_fc.image_model);
+            result.vision_model = try self.allocator.dupe(u8, mutable_fc.vision_model);
             result.gateway_port = mutable_fc.gateway_port;
             result.gateway_mode = try self.allocator.dupe(u8, mutable_fc.gateway_mode);
             result.gateway_bind = try self.allocator.dupe(u8, mutable_fc.gateway_bind);
@@ -642,16 +668,18 @@ pub const ConfigLoader = struct {
             self.allocator.free(result.api_key);
             result.api_key = try self.allocator.dupe(u8, ec.api_key);
             // Model fields only override when NVIDIA_MODEL was explicitly set.
-            // Otherwise the file config (kimi-k3, fallbacks, 32k tokens, 300s)
+            // Otherwise the file config (primary, fallbacks, 32k tokens, 300s)
             // wins over the env loader's hardcoded ultra defaults.
             if (ec.env_model_explicit) {
                 self.allocator.free(result.primary_model);
                 for (result.fallback_models) |m| self.allocator.free(m);
                 self.allocator.free(result.fallback_models);
                 self.allocator.free(result.image_model);
+                self.allocator.free(result.vision_model);
                 result.primary_model = try self.allocator.dupe(u8, ec.primary_model);
                 result.fallback_models = try self.dupeSlice(ec.fallback_models);
                 result.image_model = try self.allocator.dupe(u8, ec.image_model);
+                result.vision_model = try self.allocator.dupe(u8, ec.vision_model);
                 result.max_tokens = ec.max_tokens;
                 result.nim_timeout_ms = ec.nim_timeout_ms;
             }

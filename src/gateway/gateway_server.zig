@@ -353,7 +353,9 @@ fn injectWhatsAppTurn(allocator: std.mem.Allocator, chat_id: []const u8, prompt:
     var agent = try zeptoclaw.agent.loop.Agent.init(allocator, &nim_client, 64);
     defer agent.deinit();
     if (ws_dir_const) |wd| agent.setWorkspace(wd);
-    if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
+    // Vision goes to the configured multimodal model, never fallbackModels[0]
+    // (that model is text-only and 400s every see_image call).
+    agent.setVisionModel(cfg.getVisionModel());
     agent.setSessionId(chat_id);
     const reply = agent.runTurn(prompt, .{
         .system_prompt = sys_prompt,
@@ -700,7 +702,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         };
         defer agent.deinit();
         if (ws_dir_const) |wd| agent.setWorkspace(wd);
-        if (cfg.getFallbackModels().len > 0) agent.setVisionModel(cfg.getFallbackModels()[0]);
+        // Vision goes to the configured multimodal model, never fallbackModels[0]
+    // (that model is text-only and 400s every see_image call).
+    agent.setVisionModel(cfg.getVisionModel());
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
         var bad_turns: u32 = 0;
@@ -1150,6 +1154,10 @@ pub fn main() !void {
     _ = std.os.linux.sigaction(.TERM, &act, null);
     defer server.deinit();
 
+    // Media accumulates ~25MB/day live; keep the cache bounded at startup
+    // rather than discovering a full disk mid-conversation.
+    if (cfg.whatsapp_enabled) _ = zeptoclaw.channels.whatsapp.inbound_media.enforceCacheLimit(allocator, zeptoclaw.channels.whatsapp.inbound_media.CACHE_LIMIT_BYTES);
+
     // Print startup information
     std.debug.print("\n", .{});
     std.debug.print("==============================\n", .{});
@@ -1166,9 +1174,10 @@ pub fn main() !void {
     std.debug.print("  Primary model: {s}\n", .{cfg.nim_model});
     std.debug.print("  Fallbacks: {d} models\n", .{cfg.fallback_models.len});
     for (cfg.fallback_models, 0..) |fb, i| std.debug.print("    [{d}] {s}\n", .{ i, fb });
+    std.debug.print("  Vision model: {s}\n", .{cfg.getVisionModel()});
     std.debug.print("  max_tokens: {d}\n", .{cfg.max_tokens});
     std.debug.print("  timeout_ms: {d}\n", .{cfg.nim_timeout_ms});
-    std.log.info("[gateway] primary={s} fallbacks={d} max_tokens={d} timeout={d}ms", .{ cfg.nim_model, cfg.fallback_models.len, cfg.max_tokens, cfg.nim_timeout_ms });
+    std.log.info("[gateway] primary={s} fallbacks={d} vision={s} max_tokens={d} timeout={d}ms", .{ cfg.nim_model, cfg.fallback_models.len, cfg.getVisionModel(), cfg.max_tokens, cfg.nim_timeout_ms });
     std.debug.print("API Endpoints:\n", .{});
     std.debug.print("  GET  /health          - Health check\n", .{});
     std.debug.print("  GET  /status          - Gateway status\n", .{});

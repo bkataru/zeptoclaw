@@ -16,6 +16,7 @@ pub const Config = struct {
     // New fields for multi-provider support
     fallback_models: [][]const u8,
     image_model: []const u8,
+    vision_model: []const u8,
     gateway_port: u32,
     gateway_mode: []const u8,
     gateway_bind: []const u8,
@@ -54,6 +55,7 @@ pub const Config = struct {
 .nim_timeout_ms = zepto_config.nim_timeout_ms,
             .fallback_models = zepto_config.fallback_models,
             .image_model = zepto_config.image_model,
+            .vision_model = zepto_config.vision_model,
             .gateway_port = zepto_config.gateway_port,
             .gateway_mode = zepto_config.gateway_mode,
             .gateway_bind = zepto_config.gateway_bind,
@@ -94,6 +96,7 @@ pub const Config = struct {
             .nim_timeout_ms = zepto_config.nim_timeout_ms,
             .fallback_models = zepto_config.fallback_models,
             .image_model = zepto_config.image_model,
+            .vision_model = zepto_config.vision_model,
             .gateway_port = zepto_config.gateway_port,
             .gateway_mode = zepto_config.gateway_mode,
             .gateway_bind = zepto_config.gateway_bind,
@@ -136,6 +139,7 @@ pub const Config = struct {
 .nim_timeout_ms = zepto_config.nim_timeout_ms,
             .fallback_models = zepto_config.fallback_models,
             .image_model = zepto_config.image_model,
+            .vision_model = zepto_config.vision_model,
             .gateway_port = zepto_config.gateway_port,
             .gateway_mode = zepto_config.gateway_mode,
             .gateway_bind = zepto_config.gateway_bind,
@@ -175,6 +179,7 @@ pub const Config = struct {
 .nim_timeout_ms = zepto_config.nim_timeout_ms,
             .fallback_models = zepto_config.fallback_models,
             .image_model = zepto_config.image_model,
+            .vision_model = zepto_config.vision_model,
             .gateway_port = zepto_config.gateway_port,
             .gateway_mode = zepto_config.gateway_mode,
             .gateway_bind = zepto_config.gateway_bind,
@@ -208,6 +213,7 @@ pub const Config = struct {
         }
         a.free(self.fallback_models);
         a.free(self.image_model);
+        a.free(self.vision_model);
         a.free(self.gateway_mode);
         a.free(self.gateway_bind);
         if (self.gateway_auth_token) |token| {
@@ -240,6 +246,11 @@ pub const Config = struct {
     /// Get the image model ID
     pub fn getImageModel(self: *const Config) []const u8 {
         return self.image_model;
+    }
+
+    /// Get the multimodal model the media tools dispatch to
+    pub fn getVisionModel(self: *const Config) []const u8 {
+        return self.vision_model;
     }
 
     /// Check if configuration was loaded from a file
@@ -369,6 +380,7 @@ test "Config getPrimaryModel" {
         .max_tokens = zepto_config.max_tokens,
         .fallback_models = zepto_config.fallback_models,
         .image_model = zepto_config.image_model,
+        .vision_model = zepto_config.vision_model,
         .gateway_port = zepto_config.gateway_port,
         .gateway_mode = zepto_config.gateway_mode,
         .gateway_bind = zepto_config.gateway_bind,
