@@ -13,6 +13,7 @@
 
 - `agents.defaults.visionModel.primary` names the multimodal model used by `see_image`, `hear_audio`, and `watch_video` (default `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, overridable with `NVIDIA_VISION_MODEL`). The startup dump prints it.
 - Media cache cap: the oldest files in `{auth_dir}/media` are evicted once the directory passes 1GB, and `last-image` pointers to evicted files are dropped. The cache had reached 667MB in five days.
+- Stuck-turn watchdog: a turn that never finishes is invisible from the outside (the socket stays up, inbound keeps being journalled, replies just stop), which is how the retry loop above ran unnoticed for over a week. A background sweep now logs `[whatsapp] turn stuck` once per 10 minutes per turn (threshold via `ZEPTO_SLOW_TURN_S`, default 600s), and `/health` reports `turns.in_flight`, `turns.slow`, and `turns.oldest_age_s`.
 
 ### Changed
 

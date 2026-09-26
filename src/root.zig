@@ -99,6 +99,7 @@ pub const gateway = struct {
     pub const session_store = @import("gateway/session_store.zig");
     pub const http_server = @import("gateway/http_server.zig");
     pub const control_ui = @import("gateway/control_ui.zig");
+    pub const turn_watch = @import("gateway/turn_watch.zig");
 };
 
 // Skills
@@ -171,6 +172,7 @@ comptime {
         _ = autonomous.agent_framework;
         _ = gateway.token_auth;
         _ = gateway.session_store;
+        _ = gateway.turn_watch;
         _ = channels.whatsapp.config;
         _ = channels.whatsapp.pending;
         _ = channels.whatsapp.inbound_media;

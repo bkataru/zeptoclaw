@@ -14,6 +14,7 @@ const AutonomousAgent = zeptoclaw.autonomous.agent_framework.AutonomousAgent;
 const StateStore = zeptoclaw.autonomous.state_store.StateStore;
 const MoltbookClient = zeptoclaw.autonomous.moltbook_client.MoltbookClient;
 const RateLimiter = zeptoclaw.autonomous.rate_limiter.RateLimiter;
+const turn_watch = zeptoclaw.gateway.turn_watch;
 
 // WhatsApp types
 const WhatsAppChannel = zeptoclaw.channels.whatsapp.WhatsAppChannel;
@@ -38,6 +39,14 @@ var g_whatsapp_outbound: ?*OutboundProcessor = null;
 var g_whatsapp_cfg: ?Config = null;
 var g_whatsapp_alloc: std.mem.Allocator = undefined;
 var g_whatsapp_mu: std.Io.Mutex = .init;
+// Stuck-turn registry shared by every turn thread and the watchdog thread.
+var g_turn_watch: turn_watch.Watch = undefined;
+var g_turn_watch_live: bool = false;
+
+fn turnWatch() ?*turn_watch.Watch {
+    if (!g_turn_watch_live) return null;
+    return &g_turn_watch;
+}
 var g_last_turn_chat: [256]u8 = undefined;
 var g_last_turn_chat_len: usize = 0;
 var g_last_turn_body: [512]u8 = undefined;
@@ -581,6 +590,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     defer if (sys_prompt) |sp| g_whatsapp_alloc.free(sp);
 
     const turn_start = compat.timestamp();
+    // Registered for the whole generate-and-send attempt (including retries) so
+    // a turn that never finishes is visible to the watchdog and /health.
+    const watch_token = if (turnWatch()) |w| w.begin(chat_id_copy) else 0;
+    defer if (watch_token != 0) if (turnWatch()) |w| w.end(watch_token);
     const reply_text: []const u8 = blk: {
         var msgs_list = std.ArrayList(zeptoclaw.providers.types.Message).initCapacity(g_whatsapp_alloc, 8) catch {
             break :blk fallback_reply(g_whatsapp_alloc, body_copy, cfg.nim_model) catch "barvis ack";
@@ -966,7 +979,10 @@ fn whatsappHealthJson(allocator: std.mem.Allocator) ![]u8 {
         jid = jid_buf[0..snap.jid_len];
     }
     const connected_s: []const u8 = if (connected) "true" else "false";
-    return std.fmt.allocPrint(allocator, "{{\"status\":\"healthy\",\"whatsapp\":{{\"connected\":{s},\"self_jid\":\"{s}\",\"last_inbound_unix\":{d}}}}}", .{ connected_s, jid, g_last_inbound_unix });
+    // A turn in flight far past the threshold means replies are queueing
+    // behind it; surface it instead of letting it look healthy.
+    const ts = if (turnWatch()) |w| w.stats() else turn_watch.Stats{};
+    return std.fmt.allocPrint(allocator, "{{\"status\":\"healthy\",\"whatsapp\":{{\"connected\":{s},\"self_jid\":\"{s}\",\"last_inbound_unix\":{d}}},\"turns\":{{\"in_flight\":{d},\"slow\":{d},\"oldest_age_s\":{d}}}}}", .{ connected_s, jid, g_last_inbound_unix, ts.in_flight, ts.slow, ts.oldest_age_s });
 }
 
 pub fn main() !void {
@@ -1153,6 +1169,20 @@ pub fn main() !void {
     _ = std.os.linux.sigaction(.INT, &act, null);
     _ = std.os.linux.sigaction(.TERM, &act, null);
     defer server.deinit();
+
+    // Stuck turns are invisible from the outside: the socket stays up and
+    // inbound keeps being journalled while replies stop. One wedged turn ran
+    // for eight days unnoticed, so warn in the journal and report on /health.
+    g_turn_watch = turn_watch.Watch.init(allocator);
+    g_turn_watch.loadWarnThreshold(allocator);
+    g_turn_watch_live = true;
+    defer {
+        g_turn_watch_live = false;
+        g_turn_watch.deinit();
+    }
+    _ = std.Thread.spawn(.{}, turn_watch.run, .{ &g_turn_watch, 60 }) catch |err| {
+        std.log.warn("[whatsapp] stuck-turn watchdog failed to start: {}", .{err});
+    };
 
     // Media accumulates ~25MB/day live; keep the cache bounded at startup
     // rather than discovering a full disk mid-conversation.

@@ -6,7 +6,7 @@
 
 ## Build Status
 
-**0.9.1** (2026-09-26). Native WhatsApp is the only transport. `zig build test --summary all`: 483 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.9.1** (2026-09-26). Native WhatsApp is the only transport. `zig build test --summary all`: 485 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
 
 ## Recent Updates
 
@@ -18,6 +18,7 @@
 - **Vision model** (0.9.1): `agents.defaults.visionModel.primary` names the multimodal model the media tools use. Never falls back to a text-only model
 - **Bounded permanent retries** (0.9.1): 4xx gives up after 3 attempts (5xx still retries forever). A rejected payload can no longer wedge a turn
 - **Media cache cap** (0.9.1): oldest media evicted once the cache passes 1GB
+- **Stuck-turn watchdog** (0.9.1): logs `[whatsapp] turn stuck` every 10 min for a turn that never finishes, and `/health` reports turns in flight, slow, and the oldest age
 - **32k token budget** (0.8.0): `max_tokens: 32768` in every request. No more truncated thoughts
 - **Wall-clock deadline** (0.8.0): NIM requests time out at 300s even if the socket blocks. Fixes hung turns
 - **`POST /whatsapp/inject`** (0.8.0): auth-required fire-and-forget endpoint to inject a turn into any chat
