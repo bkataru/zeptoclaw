@@ -123,17 +123,28 @@ pub fn validateBasicAuth(header: ?[]const u8, expected_username: []const u8, exp
     }
 }
 
-/// Validate HMAC token (simple string comparison for webhook tokens)
-/// Note: OpenClaw uses direct string comparison, not actual HMAC
+/// Validate webhook token with a constant-time comparison.
+/// Note: OpenClaw uses direct string comparison, not actual HMAC.
 pub fn validateWebhookToken(header: ?[]const u8, expected_token: []const u8) AuthError!void {
     if (header == null) return error.MissingHeader;
 
-    const token = header.?;
-
-    // Use constant-time comparison to prevent timing attacks
-    if (!std.mem.eql(u8, token, expected_token)) {
+    // Constant-time comparison to prevent timing attacks
+    if (!constantTimeEql(header.?, expected_token)) {
         return error.InvalidToken;
     }
+}
+
+/// Byte-slice equality with no early exit on a content mismatch.
+/// `std.crypto.timing_safe.eql` takes a fixed-size array, and the header
+/// arrives as a runtime-length slice, so a length difference is folded
+/// into the result instead.
+fn constantTimeEql(a: []const u8, b: []const u8) bool {
+    var diff: u8 = if (a.len != b.len) 1 else 0;
+    const n = @min(a.len, b.len);
+    for (a[0..n], b[0..n]) |x, y| {
+        diff |= x ^ y;
+    }
+    return diff == 0;
 }
 
 // ============================================================================
@@ -326,9 +337,9 @@ test "validateBasicAuth - valid credentials" {
     const credentials = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ username, password });
     defer std.testing.allocator.free(credentials);
 
-    const encoded = try std.base64.standard.Encoder.encode(&std.heap.page_allocator, credentials);
-    defer std.heap.page_allocator.free(encoded);
-
+    const enc = std.base64.standard.Encoder;
+    var enc_buf: [64]u8 = undefined;
+    const encoded = enc.encode(&enc_buf, credentials);
     const header = try std.fmt.allocPrint(std.testing.allocator, "Basic {s}", .{encoded});
     defer std.testing.allocator.free(header);
 
@@ -350,4 +361,12 @@ test "validateWebhookToken - invalid token" {
         error.InvalidToken,
         validateWebhookToken("wrongtoken", "714096ee11b030c51a65c0e8b0dc6c567c0f507bc7c03284540465385f11bec6"),
     );
+}
+
+test "constantTimeEql" {
+    try std.testing.expect(constantTimeEql("", ""));
+    try std.testing.expect(constantTimeEql("token123", "token123"));
+    try std.testing.expect(!constantTimeEql("token123", "token124"));
+    try std.testing.expect(!constantTimeEql("token", "token123"));
+    try std.testing.expect(!constantTimeEql("", "x"));
 }

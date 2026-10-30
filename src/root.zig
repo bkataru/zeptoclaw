@@ -177,12 +177,13 @@ comptime {
         _ = channels.whatsapp.pending;
         _ = channels.whatsapp.inbound_media;
         // Whole-file imports: field extraction (`@import("x.zig").Type`) does
-        // not register that file's `test` blocks. These four were silently
-        // absent from `zig build test` until this list included them.
+        // not register that file's `test` blocks. Whole-file imports below
+        // keep those tests registered in `zig build test`.
         _ = @import("channels/whatsapp/inbound.zig");
         _ = @import("channels/whatsapp/session.zig");
         _ = @import("channels/whatsapp/outbound.zig");
         _ = @import("channels/whatsapp/access_control.zig");
+        _ = @import("services/http_utils.zig");
         _ = channels.whatsapp.native.noise_crypto;
         _ = channels.whatsapp.native.noise_handshake;
         _ = channels.whatsapp.native.ws_client;
