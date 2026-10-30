@@ -39,6 +39,9 @@ var g_whatsapp_outbound: ?*OutboundProcessor = null;
 var g_whatsapp_cfg: ?Config = null;
 var g_whatsapp_alloc: std.mem.Allocator = undefined;
 var g_whatsapp_mu: std.Io.Mutex = .init;
+var g_replay_mu: std.Io.Mutex = .init;
+var g_replay_inflight: std.StringHashMap(void) = undefined;
+var g_replay_inflight_init: bool = false;
 // Stuck-turn registry shared by every turn thread and the watchdog thread.
 var g_turn_watch: turn_watch.Watch = undefined;
 var g_turn_watch_live: bool = false;
@@ -139,6 +142,9 @@ fn sigHandler(sig: std.os.linux.SIG) callconv(.c) void {
     if (global_server.shutdown_requested.load(.seq_cst) == false) {
         global_server.shutdown_requested.store(true, .seq_cst);
     }
+    global_server.stop();
+    if (g_whatsapp_channel) |ch| ch.requestStop();
+    zeptoclaw.providers.nim.setShutdown();
 }
 
 /// Compose the Barvis system prompt from the openclaw-compatible workspace files,
@@ -280,6 +286,10 @@ fn recent_history_context(alloc: std.mem.Allocator, session: *WhatsAppSession, c
 /// Connection status handler (top-level fn for onConnection).
 fn replayPendingTurns() void {
     const pending = zeptoclaw.channels.whatsapp.pending;
+    if (!g_replay_inflight_init) {
+        g_replay_inflight = std.StringHashMap(void).init(g_whatsapp_alloc);
+        g_replay_inflight_init = true;
+    }
     const rows = pending.load(g_whatsapp_alloc) catch return;
     defer {
         for (rows) |*row| row.deinit(g_whatsapp_alloc);
@@ -287,7 +297,28 @@ fn replayPendingTurns() void {
     }
     if (rows.len == 0) return;
     std.log.info("[whatsapp] replaying {d} unacked inbound turn(s)", .{rows.len});
+    const now = compat.timestamp();
     for (rows) |row| {
+        if (pending.isStale(row.at, now)) {
+            std.log.info("[whatsapp] replay skip stale id={s} at={?}", .{ row.id, row.at });
+            pending.ack(g_whatsapp_alloc, row.id);
+            continue;
+        }
+        g_replay_mu.lock(compat.getIo()) catch continue;
+        const dup = g_replay_inflight.contains(row.id);
+        if (!dup) {
+            g_replay_inflight.put(row.id, {}) catch {};
+        }
+        g_replay_mu.unlock(compat.getIo());
+        if (dup) {
+            std.log.info("[whatsapp] replay skip inflight id={s}", .{row.id});
+            continue;
+        }
+        defer {
+            g_replay_mu.lock(compat.getIo()) catch {};
+            defer g_replay_mu.unlock(compat.getIo());
+            _ = g_replay_inflight.remove(row.id);
+        }
         var msg = zeptoclaw.channels.whatsapp.types.WhatsAppMessage.init(g_whatsapp_alloc) catch continue;
         defer msg.deinit();
         g_whatsapp_alloc.free(msg.id);
@@ -303,12 +334,16 @@ fn replayPendingTurns() void {
         msg.from_me = row.from_me;
         msg.chat_type = if (row.direct) .direct else .group;
         std.log.info("[whatsapp] replay id={s} chat={s}", .{ row.id, row.chat_id });
-        handleWhatsAppTurn(msg, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
+        const reply_sent = handleWhatsAppTurn(msg, .{
+            .skip_journal = true,
+            .skip_inbound = true,
+            .skip_dup_window = true,
+            .is_replay = true,
+        }) catch |err| {
             std.log.err("[whatsapp] replay failed: {}", .{err});
+            continue;
         };
-        // Ack even if the agent is still retrying. Otherwise a 408 loop keeps
-        // this row forever and every reconnect starts another NIM turn.
-        pending.ack(g_whatsapp_alloc, row.id);
+        if (reply_sent) pending.ack(g_whatsapp_alloc, row.id);
     }
 }
 
@@ -407,17 +442,18 @@ const TurnOpts = struct {
     skip_journal: bool = false,
     skip_inbound: bool = false,
     skip_dup_window: bool = false,
+    is_replay: bool = false,
 };
 
 fn whatsappOnMessage(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage) anyerror!void {
     g_last_inbound_unix = compat.timestamp();
-    return handleWhatsAppTurn(msg, .{});
+    _ = try handleWhatsAppTurn(msg, .{});
 }
 
-fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, opts: TurnOpts) anyerror!void {
-    const session = g_whatsapp_session orelse return;
-    const inbound = g_whatsapp_inbound orelse return;
-    const cfg = g_whatsapp_cfg orelse return;
+fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, opts: TurnOpts) anyerror!bool {
+    const session = g_whatsapp_session orelse return false;
+    const inbound = g_whatsapp_inbound orelse return false;
+    const cfg = g_whatsapp_cfg orelse return false;
 
     std.log.info("[whatsapp] inbound chatId={s} from={s} senderE164={s} body={s} fromMe={} chatType={s}", .{
         msg.chat_id, msg.sender_jid, msg.sender_e164 orelse "?", msg.body, msg.from_me, @tagName(msg.chat_type),
@@ -429,21 +465,21 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         const proc = inbound.process(msg) catch |err| {
             std.log.err("[whatsapp] inbound.process failed: {}", .{err});
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         };
         if (!proc.allowed) {
             std.log.info("[whatsapp] inbound denied reason={s} chat={s}", .{ proc.reason orelse "?", msg.chat_id });
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         }
         break :blk proc.message orelse {
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         };
     };
     if (eff_msg.body.len == 0 and !eff_msg.keepEmptyBody()) {
         g_whatsapp_mu.unlock(compat.getIo());
-        return;
+        return false;
     }
 
     // Always listen: persist inbound even when we choose not to speak.
@@ -480,7 +516,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     if (is_redacted) {
         std.log.info("[whatsapp] redacted by sender (~ prefix) chat={s}", .{chat_id_copy});
         g_whatsapp_mu.unlock(compat.getIo());
-        return;
+        return false;
     }
     session.addMessage(eff_msg.*) catch {};
 
@@ -493,7 +529,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         if (echo) {
             std.log.info("[whatsapp] skip own echo", .{});
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         }
     }
 
@@ -542,12 +578,12 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
         .skip_peer_from_me => {
             std.log.info("[whatsapp] skip fromMe peer DM chat={s}", .{chat_id_copy});
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         },
         .listening => {
             std.log.info("[whatsapp] listening only (unsubscribed) chat={s}", .{chat_id_copy});
             g_whatsapp_mu.unlock(compat.getIo());
-            return;
+            return false;
         },
         .run => {},
     }
@@ -556,10 +592,10 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     if (slot.busy and !opts.skip_inbound) {
         const pid = if (eff_msg.id.len > 0) eff_msg.id else chat_id_copy;
         burstPush(chat_id_copy, pid, body_copy, eff_msg.from_me, if (eff_msg.chat_type == .group) groupSenderLabel(eff_msg) else null);
-        zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pid, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
+        zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pid, chat_id_copy, body_copy, eff_msg.from_me, is_dm, compat.timestamp());
         std.log.info("[whatsapp] coalesce while generating chat={s} n={d} body={s}", .{ chat_id_copy, slot.n, body_copy });
         g_whatsapp_mu.unlock(compat.getIo());
-        return;
+        return false;
     }
 
     const now_ms = compat.timestamp() * 1000;
@@ -570,7 +606,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     if (!opts.skip_dup_window and same_chat and same_body and now_ms - g_last_turn_ms < 20_000) {
         std.log.info("[whatsapp] skip duplicate turn chat={s}", .{eff_msg.chat_id});
         g_whatsapp_mu.unlock(compat.getIo());
-        return;
+        return false;
     }
     slot.busy = true;
     const nchat = @min(eff_msg.chat_id.len, g_last_turn_chat.len);
@@ -584,7 +620,7 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const pending_src = if (eff_msg.id.len > 0) eff_msg.id else chat_id_copy;
     const pending_id = try g_whatsapp_alloc.dupe(u8, pending_src);
     defer g_whatsapp_alloc.free(pending_id);
-    zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pending_id, chat_id_copy, body_copy, eff_msg.from_me, is_dm);
+    zeptoclaw.channels.whatsapp.pending.enqueue(g_whatsapp_alloc, pending_id, chat_id_copy, body_copy, eff_msg.from_me, is_dm, compat.timestamp());
     g_whatsapp_mu.unlock(compat.getIo());
 
     const ws_dir_const = zeptoclaw.openclaw_compat.resolveWorkspaceDir(g_whatsapp_alloc) catch null;
@@ -724,86 +760,71 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     agent.setVisionModel(cfg.getVisionModel());
         agent.setSessionId(chat_id_copy);
         std.log.info("[whatsapp] generating reply via {s} (agent loop) for: {s}", .{ cfg.nim_model, prompt });
-        var bad_turns: u32 = 0;
-        const reply = while (true) {
-            var mime_buf: [64]u8 = [_]u8{0} ** 64;
-            var vision_path: ?[]u8 = null;
-            var vision_mime: []const u8 = "image/jpeg";
-            var audio_path: ?[]u8 = null;
-            var audio_mime: []const u8 = "audio/ogg";
-            var video_path: ?[]u8 = null;
-            var video_mime: []const u8 = "video/mp4";
-            // Route attached media by kind: voice notes to hear_audio, clips to
-            // watch_video, everything else to see_image. Previously all media
-            // rode the vision path, so voice notes and videos always failed there.
-            const routeMedia = struct {
-                fn isAudio(mime: []const u8) bool {
-                    return std.mem.startsWith(u8, mime, "audio") or std.mem.indexOf(u8, mime, "ogg") != null or std.mem.indexOf(u8, mime, "opus") != null;
-                }
-                fn isVideo(mime: []const u8, path: []const u8) bool {
-                    if (std.mem.startsWith(u8, mime, "video")) return true;
-                    if (std.mem.endsWith(u8, path, ".mp4") or std.mem.endsWith(u8, path, ".mov") or std.mem.endsWith(u8, path, ".webm")) return true;
-                    return false;
-                }
-            };
-            if (eff_msg.media_path) |mp| {
-                if (mp.len > 0) {
-                    const mt = if (eff_msg.media_type) |t| t else "image/jpeg";
-                    if (routeMedia.isVideo(mt, mp)) {
-                        video_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
-                        video_mime = mt;
-                    } else if (routeMedia.isAudio(mt)) {
-                        audio_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
-                        audio_mime = mt;
-                    } else {
-                        vision_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
-                        vision_mime = mt;
-                    }
-                }
-            } else if (is_dm) {
-                if (zeptoclaw.channels.whatsapp.inbound_media.loadLast(g_whatsapp_alloc, chat_id_copy, &mime_buf)) |p| {
-                    const mt = std.mem.sliceTo(mime_buf[0..], 0);
-                    if (routeMedia.isVideo(mt, p)) {
-                        video_path = p;
-                        video_mime = if (mt.len > 0) mt else "video/mp4";
-                    } else if (routeMedia.isAudio(mt)) {
-                        audio_path = p;
-                        audio_mime = if (mt.len > 0) mt else "audio/ogg";
-                    } else {
-                        vision_path = p;
-                        vision_mime = if (mt.len > 0) mt else "image/jpeg";
-                    }
+        var mime_buf: [64]u8 = [_]u8{0} ** 64;
+        var vision_path: ?[]u8 = null;
+        var vision_mime: []const u8 = "image/jpeg";
+        var audio_path: ?[]u8 = null;
+        var audio_mime: []const u8 = "audio/ogg";
+        var video_path: ?[]u8 = null;
+        var video_mime: []const u8 = "video/mp4";
+        const routeMedia = struct {
+            fn isAudio(mime: []const u8) bool {
+                return std.mem.startsWith(u8, mime, "audio") or std.mem.indexOf(u8, mime, "ogg") != null or std.mem.indexOf(u8, mime, "opus") != null;
+            }
+            fn isVideo(mime: []const u8, path: []const u8) bool {
+                if (std.mem.startsWith(u8, mime, "video")) return true;
+                if (std.mem.endsWith(u8, path, ".mp4") or std.mem.endsWith(u8, path, ".mov") or std.mem.endsWith(u8, path, ".webm")) return true;
+                return false;
+            }
+        };
+        if (eff_msg.media_path) |mp| {
+            if (mp.len > 0) {
+                const mt = if (eff_msg.media_type) |t| t else "image/jpeg";
+                if (routeMedia.isVideo(mt, mp)) {
+                    video_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                    video_mime = mt;
+                } else if (routeMedia.isAudio(mt)) {
+                    audio_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                    audio_mime = mt;
+                } else {
+                    vision_path = g_whatsapp_alloc.dupe(u8, mp) catch null;
+                    vision_mime = mt;
                 }
             }
-            defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
-            defer if (audio_path) |ap| g_whatsapp_alloc.free(ap);
-            defer if (video_path) |vp| g_whatsapp_alloc.free(vp);
-            if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is available. Call the see_image tool if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
-            if (audio_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent voice note from this same chat is available. Call the hear_audio tool if the user is talking about audio, a voice note, or what was said. Transcribe, then answer. Do not invent words you did not hear.\n") catch {};
-            if (video_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent video from this same chat is available. Call the watch_video tool if the user is talking about a video or clip. Describe what happens. Do not invent details you cannot see.\n") catch {};
-            break agent.runTurn(prompt, .{
-                .system_prompt = sys_prompt,
-                .extra_context = extra.items,
-                .max_iters = 200,
-                .image_path = vision_path,
-                .image_mime = if (vision_path != null) vision_mime else null,
-                .audio_path = audio_path,
-                .audio_mime = if (audio_path != null) audio_mime else null,
-                .video_path = video_path,
-                .video_mime = if (video_path != null) video_mime else null,
-            }) catch |err| {
-                const transient = err == error.Timeout or err == error.RateLimit or err == error.Network;
-                if (!transient) {
-                    bad_turns += 1;
-                    if (bad_turns >= 3) {
-                        std.log.err("[whatsapp] agent run failed permanently ({}) after {d} tries; answering with fallback", .{ err, bad_turns });
-                        break fallback_reply(g_whatsapp_alloc, body_copy, cfg.nim_model) catch "";
-                    }
+        } else if (is_dm) {
+            if (zeptoclaw.channels.whatsapp.inbound_media.loadLast(g_whatsapp_alloc, chat_id_copy, &mime_buf)) |p| {
+                const mt = std.mem.sliceTo(mime_buf[0..], 0);
+                if (routeMedia.isVideo(mt, p)) {
+                    video_path = p;
+                    video_mime = if (mt.len > 0) mt else "video/mp4";
+                } else if (routeMedia.isAudio(mt)) {
+                    audio_path = p;
+                    audio_mime = if (mt.len > 0) mt else "audio/ogg";
+                } else {
+                    vision_path = p;
+                    vision_mime = if (mt.len > 0) mt else "image/jpeg";
                 }
-                std.log.err("[whatsapp] agent run failed: {}; keeping inbound, backing off", .{err});
-                zeptoclaw.providers.nim.sleepAfterFailure();
-                continue;
-            };
+            }
+        }
+        defer if (vision_path) |vp| g_whatsapp_alloc.free(vp);
+        defer if (audio_path) |ap| g_whatsapp_alloc.free(ap);
+        defer if (video_path) |vp| g_whatsapp_alloc.free(vp);
+        if (vision_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent image from this same chat is available. Call the see_image tool if the user is talking about a photo, outfit, or 'her top'. Do not invent details you cannot see.\n") catch {};
+        if (audio_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent voice note from this same chat is available. Call the hear_audio tool if the user is talking about audio, a voice note, or what was said. Transcribe, then answer. Do not invent words you did not hear.\n") catch {};
+        if (video_path != null) extra.appendSlice(g_whatsapp_alloc, "\nA recent video from this same chat is available. Call the watch_video tool if the user is talking about a video or clip. Describe what happens. Do not invent details you cannot see.\n") catch {};
+        const reply = agent.runTurn(prompt, .{
+            .system_prompt = sys_prompt,
+            .extra_context = extra.items,
+            .max_iters = 200,
+            .image_path = vision_path,
+            .image_mime = if (vision_path != null) vision_mime else null,
+            .audio_path = audio_path,
+            .audio_mime = if (audio_path != null) audio_mime else null,
+            .video_path = video_path,
+            .video_mime = if (video_path != null) video_mime else null,
+        }) catch |err| {
+            std.log.err("[whatsapp] agent run failed: {}; answering with fallback", .{err});
+            break :blk fallback_reply(g_whatsapp_alloc, body_copy, cfg.nim_model) catch "";
         };
         break :blk reply;
     };
@@ -815,9 +836,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     defer if (clean_text.ptr != reply_text.ptr) g_whatsapp_alloc.free(clean_text);
     if (clean_text.len == 0) {
         std.log.info("[whatsapp] silent/leave; not sending", .{});
-        zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
+        if (!opts.is_replay) zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
         try drainBurstOrClear(chat_id_copy, is_dm, opts);
-        return;
+        return false;
     }
 
     const signed_text = zeptoclaw.channels.whatsapp.engagement.appendSignature(g_whatsapp_alloc, clean_text) catch clean_text;
@@ -852,8 +873,9 @@ fn handleWhatsAppTurn(msg: zeptoclaw.channels.whatsapp.types.WhatsAppMessage, op
     const rlen = @min(signed_text.len, g_last_reply_buf.len);
     @memcpy(g_last_reply_buf[0..rlen], signed_text[0..rlen]);
     g_last_reply_len = rlen;
-    zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
+    if (!opts.is_replay) zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, pending_id);
     try drainBurstOrClear(chat_id_copy, is_dm, opts);
+    return true;
 }
 
 fn drainBurstOrClear(chat_id: []const u8, is_dm: bool, opts: TurnOpts) anyerror!void {
@@ -916,12 +938,14 @@ fn drainBurstOrClear(chat_id: []const u8, is_dm: bool, opts: TurnOpts) anyerror!
     follow.sender_jid = g_whatsapp_alloc.dupe(u8, chat_id) catch return;
     follow.from_me = any_from_me;
     follow.chat_type = if (is_dm) .direct else .group;
-    handleWhatsAppTurn(follow, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
+    const _burst_sent = handleWhatsAppTurn(follow, .{ .skip_journal = true, .skip_inbound = true, .skip_dup_window = true }) catch |err| {
         std.log.err("[whatsapp] burst follow-up failed: {}", .{err});
         try g_whatsapp_mu.lock(compat.getIo());
         burstSlot(chat_id).busy = false;
         g_whatsapp_mu.unlock(compat.getIo());
+        return;
     };
+    _ = _burst_sent;
     var a: usize = 0;
     while (a < n) : (a += 1) {
         zeptoclaw.channels.whatsapp.pending.ack(g_whatsapp_alloc, owned_ids[a]);
@@ -1241,8 +1265,8 @@ pub fn main() !void {
     std.debug.print("  GET  /gateway/incidents - View recent incidents\n", .{});
     std.debug.print("\n", .{});
     std.debug.print("Authentication:\n", .{});
-    std.debug.print("  Main Token: {s}\n", .{main_token});
-    std.debug.print("  Workspace Token: {s}\n", .{workspace_token});
+    std.debug.print("  Main Token: configured (redacted)\n", .{});
+    std.debug.print("  Workspace Token: configured (redacted)\n", .{});
     std.debug.print("\n", .{});
     std.debug.print("Use X-Auth-Token header for authentication\n", .{});
     std.debug.print("\n", .{});
@@ -1263,6 +1287,8 @@ pub fn main() !void {
 
     // Start the server
     try server.start();
+
+    if (g_whatsapp_channel) |ch| ch.disconnect() catch {};
 
     if (server.autonomous_agent) |agent| {
         agent.state_store.save() catch |err| {

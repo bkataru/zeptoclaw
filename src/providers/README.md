@@ -56,10 +56,10 @@ The `src/providers` package implements LLM provider integration for Zeptoclaw: s
 - `provider_pool.zig:ModelPool.getTextModels` — Excludes entries with `supports_vision == true`.
 - `nim.zig:NIMClient.isTransientErr` — Only `Timeout`, `RateLimit`, and `Network` are transient; auth and invalid response are not.
 - `nim.zig:NIMClient.statusToProviderError` — Maps 401 to auth, 429 to rate limit, 5xx class to `Network`, other non-OK to `InvalidResponse`.
-- `nim.zig:NIMClient.chatWithTools` — On success calls `setModel(primary)` to restore the configured primary model id for subsequent requests.
+- `nim.zig:NIMClient.chatWithTools` — Wrapper restores `setModel(primary)` on every return (success and error, incl. first-attempt 401) via `defer`.
 - `nim.zig:NIMClient.rotateModel` — After exhausting `fallback_models`, resets model to `primary` and clears rotation index (per-request recovery).
 - `nim.zig:NIMClient.chatWithRetry` — Loops forever: transient errors retry without cap; non-transient errors increment a counter and return after `MAX_PERMANENT_ATTEMPTS` (3).
-- `nim.zig:NIMClient.chatWithTools` — Retries transient failures without permanent cap; non-transient failures rotate model then abandon after 3 permanent failures, restoring `primary` before return; every second transient attempt may rotate model.
+- `nim.zig:NIMClient.chatWithTools` — Retries transient failures without permanent cap; non-transient failures rotate model then abandon after 3 permanent failures. Before POST the serialized body is trimmed to `MAX_REQUEST_BYTES` (32768) by dropping trailing message units (a `tool_calls` message with its `tool` results together); the protected prefix (system + through last `user` message) is never dropped and is sent as-is if alone over the cap.
 - `stream_nim.zig:StreamNIMClient.streamCompletion` — Non-OK HTTP status maps to `Auth`, `RateLimit`, or `InvalidResponse`; cancel token load `true` yields `Cancelled`.
 - `types.zig:MessageRole.fromString` — Matching is case-sensitive; unknown strings return null.
 
@@ -77,7 +77,7 @@ The `src/providers` package implements LLM provider integration for Zeptoclaw: s
 - `provider_pool.zig:ModelPool.deinit` — Frees all model strings and the model map.
 - `provider_pool.zig:ModelPool.getModelsByPriority` / `getModelsByTier` / `getTextModels` / `getImageModels` — Allocate caller-owned pointer slices.
 - `nim.zig:sleepAfterFailure` / `noteSuccess` / `paceForRpm` — Mutate global `g_nim_backoff_s`, `g_nim_min_gap_s`, and `g_nim_last_s` under `g_nim_pace_mu`; sleep via `nanosleep`.
-- `nim.zig:NIMClient.chatWithTools` — Performs HTTP POST to `base_url`; logs info on success and warn on retry; calls `sleepAfterFailure` and may `setModel` for rotation or restore.
+- `nim.zig:NIMClient.chatWithTools` — Performs HTTP POST to `base_url`; logs info on success and warn on retry; calls `sleepAfterFailure` and may `setModel` for rotation or restore. `setShutdown()`/`shutdownRequested()`: `sleepAfterFailure` and `postOnceWithDeadline` return early once set.
 - `nim.zig:NIMClient.postOnceWithDeadline` — Spawns a worker thread, may detach on timeout (logged warn); allocates worker context and body copy.
 - `nim.zig:NIMClient.postOnce` — Network I/O, logs HTTP error bodies, allocates and parses response into caller-owned `ChatCompletionResponse`.
 - `nim.zig:deinit` — Destroys embedded `std.http.Client`.

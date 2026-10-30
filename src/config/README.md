@@ -20,7 +20,7 @@ Loads and merges ZeptoClaw runtime settings from OpenClaw-shaped JSON files, env
 
 - `migration_config.zig:ConfigLoader` — Full `load` calls `validateConfig`, which requires non-empty `api_key` and `primary_model`, `gateway_port` in 1–65535, positive `nim_timeout_ms`, `max_concurrent`, `max_iterations`, `max_tokens`, non-empty `workspace`, and `temperature` in 0.0–1.0 inclusive.
 - `migration_config.zig:ConfigLoader` — `loadForPairing` merges file/default config only (no env, no API-key validation) so WhatsApp QR pairing works without `NVIDIA_API_KEY`.
-- `migration_config.zig:ConfigLoader` — Env model fields override file only when `NVIDIA_MODEL` was explicitly set (`env_model_explicit`); API key and gateway/infra fields still prefer env when present.
+- `migration_config.zig:ConfigLoader` — Env model fields override file only when `NVIDIA_MODEL` was explicitly set (`env_model_explicit`); the vision model overrides on its own gate (`env_vision_explicit`, set when `NVIDIA_VISION_MODEL` is present) and never drags primary/fallbacks/budget/timeout along. API key and gateway/infra fields still prefer env when present.
 - `migration_config.zig:ConfigLoader` — Default config file probe order: home `.zeptoclaw/config.json`, then legacy `.openclaw/openclaw.json` paths, then cwd `./zeptoclaw.json` and `./config.json`.
 - `validator.zig:validate` — Same shape checks as loader validation for core fields; `temperature` allowed 0.0–2.0 inclusive; WhatsApp `whatsapp_debounce_ms` must be 0 or ≥ 100; `whatsapp_media_max_mb` must be > 0.
 

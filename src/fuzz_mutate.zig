@@ -81,7 +81,7 @@ fn oneShot(a: std.mem.Allocator, r: std.Random, mut: []const u8) void {
     } else |_| {}
 
     const path = "/tmp/zeptoclaw-fuzz-pending.jsonl";
-    pending.enqueueAt(a, path, "id", "15555550101@lid", mut, r.boolean(), true);
+    pending.enqueueAt(a, path, "id", "15555550101@lid", mut, r.boolean(), true, null);
     if (pending.loadFrom(a, path)) |rows| {
         for (rows) |*row| row.deinit(a);
         a.free(rows);

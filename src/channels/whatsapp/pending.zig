@@ -8,12 +8,23 @@ const MAX_ID: usize = 256;
 const MAX_CHAT: usize = 256;
 const MAX_ROWS: usize = 32;
 
+pub const REPLAY_MAX_AGE_S: i64 = 600;
+
+var g_file_mu: std.Io.Mutex = .init;
+
+pub fn isStale(at: ?i64, now: i64) bool {
+    const t = at orelse return true;
+    if (t > now) return true;
+    return now - t >= REPLAY_MAX_AGE_S;
+}
+
 pub const PendingTurn = struct {
     id: []u8,
     chat_id: []u8,
     body: []u8,
     from_me: bool,
     direct: bool,
+    at: ?i64 = null,
 
     pub fn deinit(self: *PendingTurn, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -76,7 +87,7 @@ fn jsonEscape(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn encodeLine(allocator: std.mem.Allocator, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool) ![]u8 {
+fn encodeLine(allocator: std.mem.Allocator, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool, at: ?i64) ![]u8 {
     const id_e = try jsonEscape(allocator, id);
     defer allocator.free(id_e);
     const chat_e = try jsonEscape(allocator, chat_id);
@@ -84,6 +95,16 @@ fn encodeLine(allocator: std.mem.Allocator, id: []const u8, chat_id: []const u8,
     const clipped = if (body.len > MAX_BODY) body[0..MAX_BODY] else body;
     const body_e = try jsonEscape(allocator, clipped);
     defer allocator.free(body_e);
+    if (at) |ts| {
+        return std.fmt.allocPrint(allocator, "{{\"id\":{s},\"chat_id\":{s},\"body\":{s},\"from_me\":{},\"direct\":{},\"at\":{d}}}\n", .{
+            id_e,
+            chat_e,
+            body_e,
+            from_me,
+            direct,
+            ts,
+        });
+    }
     return std.fmt.allocPrint(allocator, "{{\"id\":{s},\"chat_id\":{s},\"body\":{s},\"from_me\":{},\"direct\":{}}}\n", .{
         id_e,
         chat_e,
@@ -106,6 +127,14 @@ fn jsonBool(obj: std.json.Value, key: []const u8) bool {
     return switch (v) {
         .bool => |b| b,
         else => false,
+    };
+}
+
+fn jsonInt(obj: std.json.Value, key: []const u8) ?i64 {
+    const v = obj.object.get(key) orelse return null;
+    return switch (v) {
+        .integer => |n| n,
+        else => null,
     };
 }
 
@@ -134,6 +163,7 @@ pub fn loadFrom(allocator: std.mem.Allocator, path: []const u8) ![]PendingTurn {
             .body = try allocator.dupe(u8, body[0..@min(body.len, MAX_BODY)]),
             .from_me = jsonBool(parsed.value, "from_me"),
             .direct = jsonBool(parsed.value, "direct"),
+            .at = jsonInt(parsed.value, "at"),
         };
         errdefer row.deinit(allocator);
         try list.append(allocator, row);
@@ -142,7 +172,9 @@ pub fn loadFrom(allocator: std.mem.Allocator, path: []const u8) ![]PendingTurn {
     return list.toOwnedSlice(allocator);
 }
 
-pub fn enqueueAt(allocator: std.mem.Allocator, path: []const u8, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool) void {
+pub fn enqueueAt(allocator: std.mem.Allocator, path: []const u8, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool, at: ?i64) void {
+    g_file_mu.lock(compat.getIo()) catch return;
+    defer g_file_mu.unlock(compat.getIo());
     const existing = loadFrom(allocator, path) catch return;
     defer {
         for (existing) |*p| p.deinit(allocator);
@@ -156,17 +188,19 @@ pub fn enqueueAt(allocator: std.mem.Allocator, path: []const u8, id: []const u8,
     const keep_from: usize = if (existing.len + 1 > MAX_ROWS) existing.len + 1 - MAX_ROWS else 0;
     var i: usize = keep_from;
     while (i < existing.len) : (i += 1) {
-        const line = encodeLine(allocator, existing[i].id, existing[i].chat_id, existing[i].body, existing[i].from_me, existing[i].direct) catch continue;
+        const line = encodeLine(allocator, existing[i].id, existing[i].chat_id, existing[i].body, existing[i].from_me, existing[i].direct, existing[i].at) catch continue;
         defer allocator.free(line);
         out.appendSlice(allocator, line) catch return;
     }
-    const add = encodeLine(allocator, id, chat_id, body, from_me, direct) catch return;
+    const add = encodeLine(allocator, id, chat_id, body, from_me, direct, at) catch return;
     defer allocator.free(add);
     out.appendSlice(allocator, add) catch return;
     writeAll(path, out.items);
 }
 
 pub fn ackAt(allocator: std.mem.Allocator, path: []const u8, id: []const u8) void {
+    g_file_mu.lock(compat.getIo()) catch return;
+    defer g_file_mu.unlock(compat.getIo());
     const existing = loadFrom(allocator, path) catch return;
     defer {
         for (existing) |*p| p.deinit(allocator);
@@ -176,17 +210,17 @@ pub fn ackAt(allocator: std.mem.Allocator, path: []const u8, id: []const u8) voi
     defer out.deinit(allocator);
     for (existing) |p| {
         if (std.mem.eql(u8, p.id, id)) continue;
-        const line = encodeLine(allocator, p.id, p.chat_id, p.body, p.from_me, p.direct) catch continue;
+        const line = encodeLine(allocator, p.id, p.chat_id, p.body, p.from_me, p.direct, p.at) catch continue;
         defer allocator.free(line);
         out.appendSlice(allocator, line) catch return;
     }
     writeAll(path, out.items);
 }
 
-pub fn enqueue(allocator: std.mem.Allocator, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool) void {
+pub fn enqueue(allocator: std.mem.Allocator, id: []const u8, chat_id: []const u8, body: []const u8, from_me: bool, direct: bool, at: ?i64) void {
     const path = filePath(allocator) catch return;
     defer allocator.free(path);
-    enqueueAt(allocator, path, id, chat_id, body, from_me, direct);
+    enqueueAt(allocator, path, id, chat_id, body, from_me, direct, at);
 }
 
 pub fn ack(allocator: std.mem.Allocator, id: []const u8) void {
@@ -244,9 +278,9 @@ test "enqueue ack load filters id" {
     const a = std.testing.allocator;
     const path = "/tmp/zeptoclaw-pending-turns-test.jsonl";
     writeAll(path, "");
-    enqueueAt(a, path, "m1", "190@lid", "i like ur top", true, true);
-    enqueueAt(a, path, "m1", "190@lid", "dup", true, true);
-    enqueueAt(a, path, "m2", "190@lid", "hi barvis", true, true);
+    enqueueAt(a, path, "m1", "190@lid", "i like ur top", true, true, 1000);
+    enqueueAt(a, path, "m1", "190@lid", "dup", true, true, 1000);
+    enqueueAt(a, path, "m2", "190@lid", "hi barvis", true, true, 1001);
     const rows = try loadFrom(a, path);
     defer {
         for (rows) |*p| p.deinit(a);
@@ -292,8 +326,8 @@ test "pending round-trip ack" {
     const a = std.testing.allocator;
     const path = "/tmp/zeptoclaw-pending-roundtrip.jsonl";
     writeAll(path, "");
-    enqueueAt(a, path, "id-a", "15555550101@lid", "alpha", true, true);
-    enqueueAt(a, path, "id-b", "15555550101@lid", "beta", false, true);
+    enqueueAt(a, path, "id-a", "15555550101@lid", "alpha", true, true, null);
+    enqueueAt(a, path, "id-b", "15555550101@lid", "beta", false, true, null);
     ackAt(a, path, "id-a");
     const left = try loadFrom(a, path);
     defer {
@@ -303,4 +337,57 @@ test "pending round-trip ack" {
     try std.testing.expectEqual(@as(usize, 1), left.len);
     try std.testing.expectEqualStrings("id-b", left[0].id);
     try std.testing.expectEqualStrings("beta", left[0].body);
+}
+
+test "pending round-trip with at" {
+    const a = std.testing.allocator;
+    const path = "/tmp/zeptoclaw-pending-at-test.jsonl";
+    writeAll(path, "");
+    const ts: i64 = 1_700_000_000;
+    enqueueAt(a, path, "id-at", "15555550101@lid", "hello", true, true, ts);
+    const rows = try loadFrom(a, path);
+    defer {
+        for (rows) |*row| row.deinit(a);
+        a.free(rows);
+    }
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqual(ts, rows[0].at.?);
+}
+
+test "pending rewrite preserves at" {
+    const a = std.testing.allocator;
+    const path = "/tmp/zeptoclaw-pending-at-preserve.jsonl";
+    writeAll(path, "");
+    const ts: i64 = 1_700_000_001;
+    enqueueAt(a, path, "keep", "190@lid", "one", true, true, ts);
+    enqueueAt(a, path, "add", "190@lid", "two", true, true, ts + 1);
+    ackAt(a, path, "keep");
+    const left = try loadFrom(a, path);
+    defer {
+        for (left) |*row| row.deinit(a);
+        a.free(left);
+    }
+    try std.testing.expectEqual(@as(usize, 1), left.len);
+    try std.testing.expectEqual(ts + 1, left[0].at.?);
+}
+
+test "pending old line without at parses null" {
+    const a = std.testing.allocator;
+    const path = "/tmp/zeptoclaw-pending-no-at.jsonl";
+    writeAll(path, "{\"id\":\"old\",\"chat_id\":\"190@lid\",\"body\":\"x\",\"from_me\":true,\"direct\":true}\n");
+    const rows = try loadFrom(a, path);
+    defer {
+        for (rows) |*row| row.deinit(a);
+        a.free(rows);
+    }
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expect(rows[0].at == null);
+}
+
+test "isStale boundary cases" {
+    const now: i64 = 1_000_000;
+    try std.testing.expect(isStale(null, now));
+    try std.testing.expect(isStale(now + 1, now));
+    try std.testing.expect(isStale(now - REPLAY_MAX_AGE_S, now));
+    try std.testing.expect(!isStale(now - REPLAY_MAX_AGE_S + 1, now));
 }

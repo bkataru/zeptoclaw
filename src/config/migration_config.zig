@@ -214,6 +214,7 @@ pub const ZeptoClawConfig = struct {
     max_tokens: u32,
     nim_timeout_ms: u32 = 300000,
     env_model_explicit: bool = false,
+    env_vision_explicit: bool = false,
     gateway_port: u32,
     gateway_mode: []const u8,
     gateway_bind: []const u8,
@@ -467,8 +468,11 @@ pub const ConfigLoader = struct {
         const image_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_IMAGE_MODEL") catch
             try self.allocator.dupe(u8, "stable-diffusion-3.5-large");
 
-        const vision_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_VISION_MODEL") catch
-            try self.allocator.dupe(u8, DEFAULT_VISION_MODEL);
+        var vision_explicit = true;
+        const vision_model = compat.getEnvVarOwned(self.allocator, "NVIDIA_VISION_MODEL") catch blk: {
+            vision_explicit = false;
+            break :blk try self.allocator.dupe(u8, DEFAULT_VISION_MODEL);
+        };
 
         const gateway_port_str = compat.getEnvVarOwned(self.allocator, "GATEWAY_PORT") catch "18789";
         const gateway_port = std.fmt.parseInt(u32, gateway_port_str, 10) catch 18789;
@@ -559,6 +563,7 @@ pub const ConfigLoader = struct {
             .max_concurrent = 4,
             .source = .env,
             .env_model_explicit = env_model_explicit,
+            .env_vision_explicit = vision_explicit,
             .whatsapp_enabled = whatsapp_enabled,
             .whatsapp_native = std.mem.eql(u8, compat.getEnvVarOwned(self.allocator, "WHATSAPP_NATIVE") catch "true", "true"),
             .whatsapp_auth_dir = whatsapp_auth_dir,
@@ -675,13 +680,15 @@ pub const ConfigLoader = struct {
                 for (result.fallback_models) |m| self.allocator.free(m);
                 self.allocator.free(result.fallback_models);
                 self.allocator.free(result.image_model);
-                self.allocator.free(result.vision_model);
                 result.primary_model = try self.allocator.dupe(u8, ec.primary_model);
                 result.fallback_models = try self.dupeSlice(ec.fallback_models);
                 result.image_model = try self.allocator.dupe(u8, ec.image_model);
-                result.vision_model = try self.allocator.dupe(u8, ec.vision_model);
                 result.max_tokens = ec.max_tokens;
                 result.nim_timeout_ms = ec.nim_timeout_ms;
+            }
+            if (ec.env_vision_explicit) {
+                self.allocator.free(result.vision_model);
+                result.vision_model = try self.allocator.dupe(u8, ec.vision_model);
             }
             // Gateway/infra fields always override from env.
             self.allocator.free(result.gateway_mode);
@@ -837,4 +844,61 @@ test "validateConfig rejects empty primary model" {
     std.testing.allocator.free(cfg.primary_model);
     cfg.primary_model = try std.testing.allocator.dupe(u8, "");
     try std.testing.expectError(error.MissingPrimaryModel, loader.validateConfig(cfg));
+}
+
+test "mergeConfigs env NVIDIA_VISION_MODEL overrides vision only" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+
+    var file = try loader.mergeConfigs(null, null, null);
+    defer file.deinit();
+    allocator.free(file.primary_model);
+    file.primary_model = try allocator.dupe(u8, "file-primary");
+    allocator.free(file.vision_model);
+    file.vision_model = try allocator.dupe(u8, "file-vision");
+    file.max_tokens = 8192;
+    file.nim_timeout_ms = 120_000;
+
+    var env = try loader.mergeConfigs(null, null, null);
+    defer env.deinit();
+    env.env_model_explicit = false;
+    env.env_vision_explicit = true;
+    allocator.free(env.vision_model);
+    env.vision_model = try allocator.dupe(u8, "vision-from-env-only");
+
+    var merged = try loader.mergeConfigs(file, env, null);
+    defer merged.deinit();
+
+    try std.testing.expectEqualStrings("file-primary", merged.primary_model);
+    try std.testing.expectEqualStrings("vision-from-env-only", merged.vision_model);
+    try std.testing.expectEqual(@as(u32, 8192), merged.max_tokens);
+    try std.testing.expectEqual(@as(u32, 120_000), merged.nim_timeout_ms);
+}
+
+test "mergeConfigs env NVIDIA_MODEL overrides model fields not vision alone" {
+    const allocator = std.testing.allocator;
+    var loader = ConfigLoader.init(allocator);
+
+    var file = try loader.mergeConfigs(null, null, null);
+    defer file.deinit();
+    allocator.free(file.primary_model);
+    file.primary_model = try allocator.dupe(u8, "file-primary");
+    allocator.free(file.vision_model);
+    file.vision_model = try allocator.dupe(u8, "file-vision");
+    file.max_tokens = 8192;
+
+    var env = try loader.mergeConfigs(null, null, null);
+    defer env.deinit();
+    env.env_model_explicit = true;
+    env.env_vision_explicit = false;
+    allocator.free(env.primary_model);
+    env.primary_model = try allocator.dupe(u8, "env-primary");
+    env.max_tokens = 4096;
+
+    var merged = try loader.mergeConfigs(file, env, null);
+    defer merged.deinit();
+
+    try std.testing.expectEqualStrings("env-primary", merged.primary_model);
+    try std.testing.expectEqualStrings("file-vision", merged.vision_model);
+    try std.testing.expectEqual(@as(u32, 4096), merged.max_tokens);
 }

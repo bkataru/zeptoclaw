@@ -33,7 +33,7 @@ pub const WhatsAppChannel = struct {
     mutex: std.Io.Mutex,
     use_native: bool = true,
     native_client: ?*native_mod.Client = null,
-    native_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    stop_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     restart_in_flight: bool = false,
     last_restart_ms: i64 = 0,
 
@@ -56,8 +56,12 @@ pub const WhatsAppChannel = struct {
             .mutex = .init,
             .use_native = true,
             .native_client = null,
-            .native_stop = std.atomic.Value(bool).init(false),
+            .stop_requested = std.atomic.Value(bool).init(false),
         };
+    }
+
+    pub fn requestStop(self: *WhatsAppChannel) void {
+        self.stop_requested.store(true, .seq_cst);
     }
 
     /// Memory: Callee takes responsibility for the native client and duped self_jid/self_e164.
@@ -122,11 +126,10 @@ pub const WhatsAppChannel = struct {
 
     /// Disconnect from WhatsApp
     pub fn disconnect(self: *WhatsAppChannel) !void {
+        self.requestStop();
         try self.mutex.lock(self.channelIo());
         self.connected = false;
         self.mutex.unlock(self.channelIo());
-
-        self.native_stop.store(true, .seq_cst);
         if (self.native_client) |cli| cli.disconnect();
         if (self.reader_thread) |thread| {
             thread.join();
@@ -357,7 +360,7 @@ pub const WhatsAppChannel = struct {
     /// Memory: channel owns the Client until disconnect/deinit.
     fn connectNative(self: *WhatsAppChannel) !void {
         if (self.native_client != null) return;
-        self.native_stop.store(false, .seq_cst);
+        self.stop_requested.store(false, .seq_cst);
         ensureAuthDir(self.config.auth_dir);
         const store_path = try std.fmt.allocPrint(self.allocator, "{s}/native.sqlite", .{self.config.auth_dir});
         defer self.allocator.free(store_path);
@@ -385,7 +388,7 @@ pub const WhatsAppChannel = struct {
         // twice before accepting it; a genuine logout fails all three. Matches
         // Baileys/whatsmeow stop-on-logout semantics without dying on one bad stanza.
         var logout_strikes: u8 = 0;
-        while (!self.native_stop.load(.seq_cst)) {
+        while (!self.stop_requested.load(.seq_cst)) {
             const cli = self.native_client orelse return;
             cli.connect("") catch |err| {
                 std.log.warn("[whatsapp] native connect failed: {}", .{err});
@@ -395,7 +398,7 @@ pub const WhatsAppChannel = struct {
             };
             backoff_ms = 2000;
             var immediate = false;
-            inner: while (!self.native_stop.load(.seq_cst)) {
+            inner: while (!self.stop_requested.load(.seq_cst)) {
                 const ev = cli.poll() catch |err| {
                     std.log.warn("[whatsapp] native poll: {}", .{err});
                     self.emitDisconnected();
@@ -437,7 +440,7 @@ pub const WhatsAppChannel = struct {
                 }
             }
             cli.disconnect();
-            if (self.native_stop.load(.seq_cst)) return;
+            if (self.stop_requested.load(.seq_cst)) return;
             if (immediate) {
                 backoff_ms = 2000;
                 continue;
@@ -450,12 +453,12 @@ pub const WhatsAppChannel = struct {
     fn sleepInterruptible(self: *WhatsAppChannel, ms: u64) bool {
         var left = ms;
         while (left > 0) {
-            if (self.native_stop.load(.seq_cst)) return true;
+            if (self.stop_requested.load(.seq_cst)) return true;
             const chunk: u64 = @min(left, 100);
             _ = std.c.nanosleep(&.{ .sec = 0, .nsec = @intCast(chunk * 1_000_000) }, null);
             left -= chunk;
         }
-        return self.native_stop.load(.seq_cst);
+        return self.stop_requested.load(.seq_cst);
     }
 
     fn handleNativeQr(self: *WhatsAppChannel, codes: []const []const u8) void {
@@ -1130,6 +1133,16 @@ test "disconnect on never-connected native channel" {
     try channel.disconnect();
     try std.testing.expectEqual(false, channel.connected);
     try std.testing.expect(channel.native_client == null);
+}
+
+test "sleepInterruptible returns true immediately after requestStop" {
+    const allocator = std.testing.allocator;
+    var config = try WhatsAppConfig.init(allocator);
+    defer config.deinit();
+
+    var channel = WhatsAppChannel.init(allocator, config);
+    channel.requestStop();
+    try std.testing.expect(channel.sleepInterruptible(60_000));
 }
 
 fn testInbound(

@@ -19,6 +19,7 @@ pub const HttpServer = struct {
     control_ui_enabled: bool,
     allow_insecure_auth: bool,
     running: bool,
+    listener_closed: bool,
     websocket_clients: std.ArrayList(*WebSocketClient),
     autonomous_agent: ?*autonomous.agent_framework.AutonomousAgent,
     shutdown_requested: std.atomic.Value(bool),
@@ -70,6 +71,7 @@ pub const HttpServer = struct {
             .control_ui_enabled = control_ui_enabled,
             .allow_insecure_auth = allow_insecure_auth,
             .running = false,
+            .listener_closed = false,
             .websocket_clients = try std.ArrayList(*WebSocketClient).initCapacity(allocator, 0),
             .autonomous_agent = autonomous_agent,
             .start_time = compat.timestamp(),
@@ -82,7 +84,10 @@ pub const HttpServer = struct {
     }
 
     pub fn deinit(self: *HttpServer) void {
-        self.listener.deinit(compat.getIo());
+        if (!self.listener_closed) {
+            self.listener.deinit(compat.getIo());
+            self.listener_closed = true;
+        }
         for (self.websocket_clients.items) |client| {
             self.allocator.destroy(client);
         }
@@ -115,6 +120,10 @@ pub const HttpServer = struct {
     /// Stop the HTTP server
     pub fn stop(self: *HttpServer) void {
         self.running = false;
+        if (!self.listener_closed) {
+            self.listener.deinit(compat.getIo());
+            self.listener_closed = true;
+        }
     }
 
 fn readHttpHead(connection: std.Io.net.Stream, buffer: []u8) !usize {
@@ -920,3 +929,26 @@ fn sendErrorResponse(self: *HttpServer, stream: std.Io.net.Stream, status_code: 
         try compat.streamWriteAll(stream, response);
     }
 };
+
+test "HttpServer stop closes listener and start returns promptly" {
+    const allocator = std.testing.allocator;
+    var auth = try token_auth.TokenAuth.init(allocator, "test-main-token", "test-workspace-token");
+    defer auth.deinit();
+    var store = try session_store.SessionStore.init(allocator, "/tmp/zeptoclaw-test-sessions");
+    defer store.deinit();
+    var server = try HttpServer.init(allocator, 0, "loopback", &auth, &store, false, false, null);
+    defer server.deinit();
+
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(s: *HttpServer) void {
+            s.start() catch {};
+        }
+    }.run, .{&server});
+
+    std.Thread.sleep(50 * std.time.ns_per_ms);
+    const t0 = std.time.milliTimestamp();
+    server.stop();
+    thread.join();
+    const elapsed_ms = std.time.milliTimestamp() - t0;
+    try std.testing.expect(elapsed_ms < 2000);
+}

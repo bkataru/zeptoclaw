@@ -44,7 +44,7 @@ At startup, `gateway_server.zig:main` assigns `reload_fn` to `reloadWhatsAppFrom
 
 ### Shutdown and reload
 
-- **Graceful stop:** `gateway_server.zig:sigHandler` on `SIGINT`/`SIGTERM` sets `HttpServer.shutdown_requested`. The accept loop in `http_server.zig:start` clears `running` when accept fails and `shutdown_requested` is set; `http_server.zig:stop` sets `running = false`. After `start` returns, `gateway_server.zig:main` attempts `autonomous_agent.state_store.save()` (`gateway_server.zig:main`).
+- **Graceful stop:** `gateway_server.zig:sigHandler` on `SIGINT`/`SIGTERM` sets `HttpServer.shutdown_requested` and calls `server.stop()` (which also closes the listener so a blocked `accept` wakes), `whatsapp_channel.requestStop()` (async-signal-safe flag polled by the reader loop and `sleepInterruptible`), and `nim.setShutdown()` (checked by `sleepAfterFailure` and `postOnceWithDeadline`). Every wait returns within 5 s. After `start` returns, `gateway_server.zig:main` calls `whatsapp_channel.disconnect()` (full teardown/join) and attempts `autonomous_agent.state_store.save()` (`gateway_server.zig:main`).
 - **Reload (no process restart):** `POST /reload` invokes `reload_fn`. The wired implementation `gateway_server.zig:reloadWhatsAppFromDisk` reloads `Config` from disk and updates WhatsApp `allow_from`, DM policy, and group policy on channel, session, inbound, and outbound configs under `g_whatsapp_mu` (`gateway_server.zig:reloadWhatsAppFromDisk`).
 
 ## Interface
@@ -83,7 +83,9 @@ At startup, `gateway_server.zig:main` assigns `reload_fn` to `reloadWhatsAppFrom
 - `control_ui.zig:generateHTML` — allocates duplicated HTML via allocator (`control_ui.zig:generateHTML`).
 - `token_auth.zig:rotateMainToken` — deactivates prior main token, registers new token, updates `main_token` field (`token_auth.zig:rotateMainToken`).
 - `turn_watch.zig:run` — infinite loop with `nanosleep` and journal warnings from `sweep` (`turn_watch.zig:run`, `turn_watch.zig:sweep`).
-- `gateway_server.zig:main` — SIGINT/SIGTERM handlers, WhatsApp connect/heal/reload side effects, stuck-turn watchdog thread spawn, optional cron/memory threads, autonomous state save on shutdown path (`gateway_server.zig:main`).
+- `gateway_server.zig:main` — SIGINT/SIGTERM handlers (flag + per-layer stop calls), WhatsApp connect/heal/reload side effects, stuck-turn watchdog thread spawn, optional cron/memory threads, channel disconnect and autonomous state save on shutdown path (`gateway_server.zig:main`).
+- `gateway_server.zig:main` startup banner — prints tokens as "configured (redacted)", never the values.
+- `gateway_server.zig:replayPendingTurns` — skips rows whose `at` is missing/future/≥600 s old (ack without a model call), runs young rows under a mutex-guarded in-flight id set (single-flight across reconnect threads), and acks only after a produced reply is sent.
 - `gateway_server.zig:whatsappHealthJson` — allocates JSON including WhatsApp connection snapshot and `turn_watch.Watch.stats` (`gateway_server.zig:whatsappHealthJson`).
 
 ## Verification

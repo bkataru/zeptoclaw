@@ -49,7 +49,7 @@ Zig 0.16 agent process. `src/main.zig` is the CLI. `build.zig:build` installs `z
 - **Observability** (0.9.0): per-request model, timing, tokens; turn summary; startup config dump
 - **Model rotation** (0.8.0): 2 fails on a model → rotate to the next fallback. Primary: glm-5.3-flash, fallbacks: super → lightning → ultra → nano-omni
 - **Vision model** (0.9.1): `agents.defaults.visionModel.primary` names the multimodal model the media tools use. Never falls back to a text-only model
-- **Bounded permanent retries** (0.9.1): 4xx gives up after 3 attempts (5xx still retries forever). A rejected payload can no longer wedge a turn
+- **Single permanent budget** (post-0.9.1): one budget of 3 per text turn, owned by `NIMClient.chatWithTools`; the agent loop and the WhatsApp turn handler do not spend it again (worst case was 27 model calls). 5xx/429/timeout/network still retry unbounded and observe shutdown.
 - **Media cache cap** (0.9.1): oldest media evicted once the cache passes 1GB
 - **Stuck-turn watchdog** (0.9.1): logs `[whatsapp] turn stuck` every 10 min for a turn that never finishes, and `/health` reports turns in flight, slow, and the oldest age
 - **32k token budget** (0.8.0): `max_tokens: 32768` in every request. No more truncated thoughts
@@ -81,7 +81,7 @@ Zig 0.16 agent process. `src/main.zig` is the CLI. `build.zig:build` installs `z
 - **Agent loop on WhatsApp** (2026-08-22): gateway inbound goes through `Agent.runTurn` (workspace markdown + tools + NIM), not `NIMClient.chat` once
 - **Memory**: daily journals `~/.zeptoclaw/workspace/memory/YYYY-MM-DD.md` (full `[in]`/`[out]`, no 2000-char clip). Tools `memory_get` / `memory_search` / `memory_append` / `memory_edit`. `zeptoclaw memory update` every 30 min (decide then synthesize). `zeptoclaw memory compact` every 2 h (densify MEMORY.md, does not dump journals)
 - **WhatsApp reliability**: inbound ledger (wire id + 3 min fingerprint), LID/`fromMe` allowlist DMs, handler off the poll thread, auto-reconnect on disconnect (not `loggedOut`)
-- **Pending turns**: `pending-turns.jsonl` under `sessions/whatsapp/`. Enqueue before NIM, ack after send or silent `listen`/`leave`. Replay on `connection status=connected` after SIGKILL
+- **Pending turns**: `pending-turns.jsonl` under `sessions/whatsapp/`, each row stamped with `at` (unix seconds) once at enqueue. Replay on `connection status=connected` after SIGKILL skips rows that are missing/future/≥600 s old (deleted, model never called), runs young rows single-flight per id, and acks only after a produced reply is sent.
 - **Burst coalesce**: while NIM is in flight for a chat, later messages on that JID merge into one follow-up turn (cap 16). First reply still answers the starter message
 - **Inbound images**: download to `sessions/whatsapp/media/`, last-image per JID, attach as NIM `image_url` on that chat's later turns (4MB cap)
 - **Same-chat journal hydrate**: `dailyContext` injects today's + yesterday's lines matching `] (chat_id):` so a restart still has thread
@@ -422,7 +422,7 @@ Native multi-device client (Zig). Pair with `zeptoclaw whatsapp pair`. Session s
 
 Replay is **message id + fingerprint** (`chatId|fromMe|body`), with a 3-minute same-body skip - not a mute window after connect. Wake word is **barvis** except allowlisted DMs / LID self-chat. `leave` unsubscribes a chat until the next barvis.
 
-Pending turns replay on WhatsApp `connected`. Burst messages while NIM is in flight merge into a follow-up. Same-JID inbound images attach as NIM vision. Journals hydrate same-chat history after restart.
+Pending turns replay on WhatsApp `connected` with the 600 s age rule and per-id single-flight; a skipped row is not written to the seen ledger. Burst messages while NIM is in flight merge into a follow-up. Same-JID inbound images attach as NIM vision. Journals hydrate same-chat history after restart.
 
 ## Cloudflare Worker
 

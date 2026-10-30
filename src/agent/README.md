@@ -52,7 +52,7 @@ The `src/agent` package implements the Zeptoclaw conversational agent: NVIDIA NI
 - `loop.zig:Agent.run` — Single-turn alias calling `runTurn` with default opts.
 - `loop.zig:Agent.runTurn` — Tool-use loop until text reply, silent, or leave.
 - `loop.zig:Agent.isTransient` — Whether a provider error should be retried indefinitely.
-- `loop.zig:Agent.MAX_PERMANENT_RETRIES` — Cap on retries for non-transient provider errors.
+- `loop.zig:shouldRetryChatError` — Policy helper: transient provider errors retry, permanent errors end the turn (the permanent budget of 3 lives in `NIMClient.chatWithTools`; the agent loop does not spend it again).
 - `loop.zig:sanitizeReply` — Drops invalid UTF-8 from model replies for display.
 - `memory.zig:Civil` — Gregorian date (year, month, day).
 - `memory.zig:civilFromUnixDays` — Converts Unix day count to `Civil`.
@@ -120,7 +120,7 @@ The `src/agent` package implements the Zeptoclaw conversational agent: NVIDIA NI
 - `cron.zig:runLoop` — No-op when `intervalSecs()` is 0; cron turn uses `max_iters` 4.
 - `loop.zig:TurnOpts` — Default `max_iters` 200.
 - `loop.zig:Agent.runTurn` — At `max_iters`, subsequent chat calls omit tool definitions; empty choices or blank assistant text retries with backoff.
-- `loop.zig:Agent.chatUntilDone` — Transient provider errors retry forever; non-transient errors stop after `MAX_PERMANENT_RETRIES`.
+- `loop.zig:Agent.chatUntilDone` — Transient provider errors retry without cap; the first permanent (non-transient) error is returned immediately.
 - `loop.zig:hydrateToolCallsFromContent` — Text JSON tool calls get unique `text-tool-{n}` ids.
 - `loop.zig:sanitizeUtf8` — Tool results replaced with U+FFFD on invalid UTF-8 before NIM history.
 - `loop.zig:sanitizeReply` — Invalid UTF-8 code units dropped (not replaced) in outbound replies.

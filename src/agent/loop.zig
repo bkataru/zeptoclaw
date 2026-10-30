@@ -291,22 +291,20 @@ pub const Agent = struct {
         return NIMClient.isTransientErr(err);
     }
 
-    /// Permanent errors get a bounded budget, then propagate so the caller can
-    /// answer gracefully instead of wedging the turn forever. Shares the
-    /// provider's constant so the two layers cannot drift.
-    pub const MAX_PERMANENT_RETRIES: u32 = NIMClient.MAX_PERMANENT_ATTEMPTS;
+    /// Whether `chatUntilDone` should retry after a provider error. Permanent
+    /// failures propagate immediately; the text turn's bounded budget lives in
+    /// `NIMClient.chatWithTools`, not here.
+    pub fn shouldRetryChatError(err: types.ProviderError) bool {
+        return isTransient(err);
+    }
 
     fn chatUntilDone(self: *Agent, defs: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
         var n: u32 = 0;
-        var bad: u32 = 0;
         while (true) : (n += 1) {
             if (self.nim_client.chatWithTools(self.session.getHistory(), defs)) |resp| return resp else |err| {
+                if (!shouldRetryChatError(err)) return err;
                 std.log.warn("[agent] {} — keeping turn, retry {d}", .{ err, n + 1 });
                 nim.sleepAfterFailure();
-                if (!isTransient(err)) {
-                    bad += 1;
-                    if (bad >= MAX_PERMANENT_RETRIES) return err;
-                }
             }
         }
     }
@@ -485,6 +483,13 @@ test "isTransient splits retryable from fatal" {
     try std.testing.expect(!Agent.isTransient(error.InvalidResponse));
     try std.testing.expect(!Agent.isTransient(error.Auth));
     try std.testing.expect(!Agent.isTransient(error.ParseError));
+}
+
+test "shouldRetryChatError retries transient only" {
+    try std.testing.expect(Agent.shouldRetryChatError(error.Timeout));
+    try std.testing.expect(Agent.shouldRetryChatError(error.Network));
+    try std.testing.expect(!Agent.shouldRetryChatError(error.Auth));
+    try std.testing.expect(!Agent.shouldRetryChatError(error.InvalidResponse));
 }
 
 test "hydrateToolCallsFromContent parses exec json" {

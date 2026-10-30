@@ -43,10 +43,11 @@ Wire protocol, encryption, and SQLite session storage live under [./native/READM
 - `outbound.zig:SendResult` — `success`, `message_ids` slice, `chunk_count`.
 - `outbound.zig:MarkdownTableConverter` — Standalone markdown table to plain text converter.
 - `pairing.zig:runPairing` — CLI entry: config for pairing, QR flow, `runNativePairForeground`, restart hint.
-- `pending.zig:PendingTurn` — Owned `id`, `chat_id`, `body` buffers plus `from_me` and `direct` flags.
+- `pending.zig:PendingTurn` — Owned `id`, `chat_id`, `body` buffers plus `from_me`, `direct` flags and `at` (unix-seconds enqueue time, null when absent).
 - `pending.zig:filePath` — Resolves `pending-turns.jsonl` under `WHATSAPP_AUTH_DIR` or default home path.
-- `pending.zig:loadFrom` — Parses JSONL lines into owned `PendingTurn` slice capped at `MAX_ROWS`.
-- `pending.zig:enqueueAt` — Rewrites file skipping duplicate id and enforcing `MAX_ROWS` FIFO.
+- `pending.zig:loadFrom` — Parses JSONL lines into owned `PendingTurn` slice capped at `MAX_ROWS`; `"at"` parsed as integer, missing/non-integer reads as null.
+- `pending.zig:REPLAY_MAX_AGE_S` / `pending.zig:isStale` — 600 s replay age rule: missing, future, or `now-at >= 600` is stale.
+- `pending.zig:enqueueAt` — Rewrites file under `g_file_mu`, skipping duplicate id, enforcing `MAX_ROWS` FIFO, preserving each existing row's `at`; the new row gets the caller's `at`.
 - `pending.zig:ackAt` — Rewrites file omitting row matching id.
 - `pending.zig:enqueue` — `enqueueAt` at default `filePath`.
 - `pending.zig:ack` — `ackAt` at default `filePath`.

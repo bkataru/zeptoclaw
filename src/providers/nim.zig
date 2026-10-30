@@ -28,6 +28,22 @@ const NIM_MIN_GAP_S: i64 = 2;
 const NIM_BACKOFF_MIN_S: u64 = 2;
 const NIM_BACKOFF_MAX_S: u64 = 180;
 
+var g_nim_shutdown: std.atomic.Value(bool) = .init(false);
+
+pub fn setShutdown() void {
+    g_nim_shutdown.store(true, .seq_cst);
+}
+
+pub fn shutdownRequested() bool {
+    return g_nim_shutdown.load(.seq_cst);
+}
+
+pub const MAX_REQUEST_BYTES: usize = 32768;
+
+/// When set (tests only), `chatWithToolsInner` returns this error before any HTTP.
+var g_test_force_chat_err: ?types.ProviderError = null;
+var g_test_rotate_to: ?[]const u8 = null;
+
 pub fn nextBackoff(current: u64) u64 {
     const doubled = if (current > NIM_BACKOFF_MAX_S / 2) NIM_BACKOFF_MAX_S else current * 2;
     return @max(NIM_BACKOFF_MIN_S, @min(NIM_BACKOFF_MAX_S, doubled));
@@ -48,6 +64,7 @@ fn jitterMs(base_s: u64) u64 {
 /// Wait after a failed NVIDIA call. Doubles the backoff (capped). Does not give up.
 pub fn sleepAfterFailure() void {
     if (@import("builtin").is_test) return;
+    if (shutdownRequested()) return;
     var wait_s: u64 = NIM_BACKOFF_MIN_S;
     g_nim_pace_mu.lock(compat.getIo()) catch {
         wait_s = g_nim_backoff_s;
@@ -239,9 +256,78 @@ pub fn deinit(self: *NIMClient) void {
         }
     }
 
-    /// Memory: Caller owns returned ChatCompletionResponse. `messages` and `tools` are borrowed.
-    pub fn chatWithTools(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
-        // Build request body as JSON string
+    fn protectedPrefixCount(messages: []const types.Message) usize {
+        var last_user: ?usize = null;
+        for (messages, 0..) |m, i| {
+            if (m.role == .user) last_user = i;
+        }
+        if (last_user) |lu| return lu + 1;
+        if (messages.len > 0 and messages[0].role == .system) return 1;
+        return 0;
+    }
+
+    fn dropLastUnit(messages: []const types.Message, end: usize) usize {
+        if (end == 0) return 0;
+        const idx = end - 1;
+        const m = messages[idx];
+        if (m.tool_calls != null) return idx;
+        return idx;
+    }
+
+    fn fixDanglingToolCalls(messages: []const types.Message, end: usize) usize {
+        var k = end;
+        while (k > 0) {
+            var shrink: ?usize = null;
+            outer: for (messages[0..k], 0..) |msg, i| {
+                if (msg.tool_calls) |calls| {
+                    for (calls) |call| {
+                        var has_result = false;
+                        for (messages[0..k]) |t| {
+                            if (t.role != .tool) continue;
+                            if (t.tool_call_id) |tcid| {
+                                if (std.mem.eql(u8, tcid, call.id)) has_result = true;
+                            }
+                        }
+                        if (!has_result) {
+                            shrink = i;
+                            break :outer;
+                        }
+                    }
+                }
+            }
+            if (shrink) |s| {
+                k = s;
+                continue;
+            }
+            break;
+        }
+        return k;
+    }
+
+    fn trimMessageKeepCount(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition, cap: usize) !usize {
+        if (messages.len == 0) return 0;
+        const full = try self.buildChatRequestBody(messages, tools);
+        defer self.allocator.free(full);
+        if (full.len <= cap) return messages.len;
+
+        const prot = protectedPrefixCount(messages);
+        const prot_body = try self.buildChatRequestBody(messages[0..prot], tools);
+        defer self.allocator.free(prot_body);
+        if (prot_body.len > cap) return messages.len;
+
+        var end = messages.len;
+        while (end > prot) {
+            end = dropLastUnit(messages, end);
+            end = fixDanglingToolCalls(messages, end);
+            const body = try self.buildChatRequestBody(messages[0..end], tools);
+            defer self.allocator.free(body);
+            if (body.len <= cap) return end;
+        }
+        return prot;
+    }
+
+    /// Memory: Caller owns returned JSON body; `messages` and `tools` are borrowed.
+    fn buildChatRequestBody(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) ![]u8 {
         var out = std.Io.Writer.Allocating.init(self.allocator);
         defer out.deinit();
 
@@ -250,227 +336,118 @@ pub fn deinit(self: *NIMClient) void {
             .options = .{},
         };
 
-        stringifier.beginObject() catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
-        stringifier.objectField("model") catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
-        stringifier.write(self.model) catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
+        stringifier.beginObject() catch return error.OutOfMemory;
+        stringifier.objectField("model") catch return error.OutOfMemory;
+        stringifier.write(self.model) catch return error.OutOfMemory;
 
-        // Add messages
-        stringifier.objectField("messages") catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
-        stringifier.beginArray() catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
+        stringifier.objectField("messages") catch return error.OutOfMemory;
+        stringifier.beginArray() catch return error.OutOfMemory;
         for (messages) |msg| {
-            stringifier.beginObject() catch |err| return switch (err) {
-                error.WriteFailed => types.ProviderError.Network,
-            };
-            stringifier.objectField("role") catch |err| return switch (err) {
-                error.WriteFailed => types.ProviderError.Network,
-            };
-            stringifier.write(msg.role.toString()) catch |err| return switch (err) {
-                error.WriteFailed => types.ProviderError.Network,
-            };
-            if (msg.image_data_url != null or msg.audio_data_url != null or msg.video_data_url != null) {
-                stringifier.objectField("content") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.beginArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.beginObject() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.objectField("type") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.write("text") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.objectField("text") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.write(msg.content orelse "") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.endObject() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                if (msg.image_data_url) |url| {
-                    writeMediaUrlPart(&stringifier, "image_url", url) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                }
-                if (msg.audio_data_url) |url| {
-                    writeMediaUrlPart(&stringifier, "audio_url", url) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                }
-                if (msg.video_data_url) |url| {
-                    writeMediaUrlPart(&stringifier, "video_url", url) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                }
-                stringifier.endArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-            } else if (msg.content) |content| {
-                stringifier.objectField("content") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.write(content) catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-            } else if (msg.role == .tool or msg.tool_calls != null) {
-                // NVIDIA validates tool-role and tool_calls-bearing messages
-                // against a strict untagged enum: a MISSING content field
-                // matches no variant (400). Empty string always validates.
-                stringifier.objectField("content") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.write("") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-            }
-            if (msg.tool_call_id) |tcid| {
-                stringifier.objectField("tool_call_id") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.write(tcid) catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-            }
-            if (msg.tool_calls) |calls| {
-                stringifier.objectField("tool_calls") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.beginArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                for (calls) |call| {
-                    stringifier.beginObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("id") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(call.id) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("type") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(call.@"type") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("function") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.beginObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("name") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(call.function.name) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("arguments") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(call.function.arguments) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.endObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.endObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                }
-                stringifier.endArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-            }
-            stringifier.endObject() catch |err| return switch (err) {
-                error.WriteFailed => types.ProviderError.Network,
-            };
+            try self.writeChatMessageJson(&stringifier, msg);
         }
-        stringifier.endArray() catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
+        stringifier.endArray() catch return error.OutOfMemory;
         if (tools) |tool_list| {
             if (tool_list.len > 0) {
-                stringifier.objectField("tools") catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
-                stringifier.beginArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
+                stringifier.objectField("tools") catch return error.OutOfMemory;
+                stringifier.beginArray() catch return error.OutOfMemory;
                 for (tool_list) |t| {
-                    stringifier.beginObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("type") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write("function") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("function") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.beginObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("name") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(t.name) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("description") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(t.description) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.objectField("parameters") catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.write(t.parameters) catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.endObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
-                    stringifier.endObject() catch |err| return switch (err) {
-                        error.WriteFailed => types.ProviderError.Network,
-                    };
+                    stringifier.beginObject() catch return error.OutOfMemory;
+                    stringifier.objectField("type") catch return error.OutOfMemory;
+                    stringifier.write("function") catch return error.OutOfMemory;
+                    stringifier.objectField("function") catch return error.OutOfMemory;
+                    stringifier.beginObject() catch return error.OutOfMemory;
+                    stringifier.objectField("name") catch return error.OutOfMemory;
+                    stringifier.write(t.name) catch return error.OutOfMemory;
+                    stringifier.objectField("description") catch return error.OutOfMemory;
+                    stringifier.write(t.description) catch return error.OutOfMemory;
+                    stringifier.objectField("parameters") catch return error.OutOfMemory;
+                    stringifier.write(t.parameters) catch return error.OutOfMemory;
+                    stringifier.endObject() catch return error.OutOfMemory;
+                    stringifier.endObject() catch return error.OutOfMemory;
                 }
-                stringifier.endArray() catch |err| return switch (err) {
-                    error.WriteFailed => types.ProviderError.Network,
-                };
+                stringifier.endArray() catch return error.OutOfMemory;
             }
         }
-        // max_tokens: gives models room to think AND respond. Default 4096.
-        stringifier.objectField("max_tokens") catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
-        stringifier.write(self.max_tokens) catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
-        stringifier.endObject() catch |err| return switch (err) {
-            error.WriteFailed => types.ProviderError.Network,
-        };
+        stringifier.objectField("max_tokens") catch return error.OutOfMemory;
+        stringifier.write(self.max_tokens) catch return error.OutOfMemory;
+        stringifier.endObject() catch return error.OutOfMemory;
 
-        const body = out.written();
+        return self.allocator.dupe(u8, out.written());
+    }
+
+    fn writeChatMessageJson(self: *NIMClient, stringifier: *std.json.Stringify, msg: types.Message) !void {
+        _ = self;
+        stringifier.beginObject() catch return error.OutOfMemory;
+        stringifier.objectField("role") catch return error.OutOfMemory;
+        stringifier.write(msg.role.toString()) catch return error.OutOfMemory;
+        if (msg.image_data_url != null or msg.audio_data_url != null or msg.video_data_url != null) {
+            stringifier.objectField("content") catch return error.OutOfMemory;
+            stringifier.beginArray() catch return error.OutOfMemory;
+            stringifier.beginObject() catch return error.OutOfMemory;
+            stringifier.objectField("type") catch return error.OutOfMemory;
+            stringifier.write("text") catch return error.OutOfMemory;
+            stringifier.objectField("text") catch return error.OutOfMemory;
+            stringifier.write(msg.content orelse "") catch return error.OutOfMemory;
+            stringifier.endObject() catch return error.OutOfMemory;
+            if (msg.image_data_url) |url| {
+                try writeMediaUrlPart(stringifier, "image_url", url);
+            }
+            if (msg.audio_data_url) |url| {
+                try writeMediaUrlPart(stringifier, "audio_url", url);
+            }
+            if (msg.video_data_url) |url| {
+                try writeMediaUrlPart(stringifier, "video_url", url);
+            }
+            stringifier.endArray() catch return error.OutOfMemory;
+        } else if (msg.content) |content| {
+            stringifier.objectField("content") catch return error.OutOfMemory;
+            stringifier.write(content) catch return error.OutOfMemory;
+        } else if (msg.role == .tool or msg.tool_calls != null) {
+            stringifier.objectField("content") catch return error.OutOfMemory;
+            stringifier.write("") catch return error.OutOfMemory;
+        }
+        if (msg.tool_call_id) |tcid| {
+            stringifier.objectField("tool_call_id") catch return error.OutOfMemory;
+            stringifier.write(tcid) catch return error.OutOfMemory;
+        }
+        if (msg.tool_calls) |calls| {
+            stringifier.objectField("tool_calls") catch return error.OutOfMemory;
+            stringifier.beginArray() catch return error.OutOfMemory;
+            for (calls) |call| {
+                stringifier.beginObject() catch return error.OutOfMemory;
+                stringifier.objectField("id") catch return error.OutOfMemory;
+                stringifier.write(call.id) catch return error.OutOfMemory;
+                stringifier.objectField("type") catch return error.OutOfMemory;
+                stringifier.write(call.@"type") catch return error.OutOfMemory;
+                stringifier.objectField("function") catch return error.OutOfMemory;
+                stringifier.beginObject() catch return error.OutOfMemory;
+                stringifier.objectField("name") catch return error.OutOfMemory;
+                stringifier.write(call.function.name) catch return error.OutOfMemory;
+                stringifier.objectField("arguments") catch return error.OutOfMemory;
+                stringifier.write(call.function.arguments) catch return error.OutOfMemory;
+                stringifier.endObject() catch return error.OutOfMemory;
+                stringifier.endObject() catch return error.OutOfMemory;
+            }
+            stringifier.endArray() catch return error.OutOfMemory;
+        }
+        stringifier.endObject() catch return error.OutOfMemory;
+    }
+
+    /// Memory: Caller owns returned ChatCompletionResponse. `messages` and `tools` are borrowed.
+    pub fn chatWithTools(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
+        const primary = self.model;
+        defer self.setModel(primary);
+        return self.chatWithToolsInner(messages, tools);
+    }
+
+    fn chatWithToolsInner(self: *NIMClient, messages: []types.Message, tools: ?[]const types.ToolDefinition) types.ProviderError!types.ChatCompletionResponse {
+        if (@import("builtin").is_test) {
+            if (g_test_rotate_to) |m| self.setModel(m);
+            if (g_test_force_chat_err) |e| return e;
+        }
+        const keep = self.trimMessageKeepCount(messages, tools, MAX_REQUEST_BYTES) catch return types.ProviderError.Network;
+        const body = self.buildChatRequestBody(messages[0..keep], tools) catch return types.ProviderError.Network;
+        defer self.allocator.free(body);
 
         var attempt: u32 = 0;
         var model_idx: usize = 0;
@@ -487,7 +464,6 @@ pub fn deinit(self: *NIMClient) void {
                 const tok_out = resp.usage.completion_tokens;
                 std.log.info("[nim] ok model={s} attempt={d} req={d}ms turn={d}ms tok_in={d} tok_out={d}", .{ self.model, attempt + 1, req_ms, turn_ms, tok_in, tok_out });
                 noteSuccess();
-                self.setModel(primary);
                 return resp;
             } else |err| switch (err) {
                 error.RateLimit, error.Timeout, error.Network, error.InvalidResponse => {
@@ -502,7 +478,6 @@ pub fn deinit(self: *NIMClient) void {
                         self.rotateModel(&model_idx, primary, attempt);
                         if (permanent >= MAX_PERMANENT_ATTEMPTS) {
                             std.log.err("[nim] {s} rejected {d} times on model={s}; abandoning request", .{ @errorName(err), permanent, self.model });
-                            self.setModel(primary);
                             return err;
                         }
                     } else if (attempt > 0 and attempt % 2 == 0) {
@@ -591,6 +566,16 @@ pub fn deinit(self: *NIMClient) void {
         // Poll wall clock; break early if the thread signals done.
         var elapsed: u64 = 0;
         while (elapsed < deadline_sec) : (elapsed += 1) {
+            if (shutdownRequested()) {
+                if (ctx.done.load(.acquire) != 0) {
+                    thread.join();
+                    defer self.allocator.destroy(ctx);
+                    if (ctx.ok) return ctx.resp;
+                    return ctx.err;
+                }
+                thread.detach();
+                return error.Timeout;
+            }
             sleepMs(1000);
             if (ctx.done.load(.acquire) != 0) break;
         }
@@ -1136,4 +1121,123 @@ test "nim transient classifier" {
     try std.testing.expect(NIMClient.isTransientErr(error.Network));
     try std.testing.expect(!NIMClient.isTransientErr(error.InvalidResponse));
     try std.testing.expect(!NIMClient.isTransientErr(error.Auth));
+}
+
+const trim_test_message = @import("../agent/message.zig");
+
+fn testPad(allocator: std.mem.Allocator, n: usize) ![]u8 {
+    const s = try allocator.alloc(u8, n);
+    @memset(s, 'x');
+    return s;
+}
+
+test "shutdownRequested and sleepAfterFailure" {
+    const prev = g_nim_shutdown.load(.seq_cst);
+    defer g_nim_shutdown.store(prev, .seq_cst);
+    setShutdown();
+    try std.testing.expect(shutdownRequested());
+    sleepAfterFailure();
+}
+
+test "chatWithTools restores primary model on error return" {
+    const allocator = std.testing.allocator;
+    var client = NIMClient.initWithBaseUrl(allocator, "k", "primary-model", "http://127.0.0.1:1");
+    defer client.deinit();
+    g_test_force_chat_err = error.Auth;
+    defer g_test_force_chat_err = null;
+    var msg = try trim_test_message.userMessage(allocator, "hi");
+    defer msg.deinit(allocator);
+    var msgs = [_]types.Message{msg};
+    g_test_rotate_to = "leaked-fallback";
+    defer g_test_rotate_to = null;
+    const msgs_slice: []types.Message = &msgs;
+    const err = client.chatWithTools(msgs_slice, null) catch |e| e;
+    try std.testing.expectEqual(types.ProviderError.Auth, err);
+    try std.testing.expectEqualStrings("primary-model", client.getModel());
+}
+
+test "trimMessageKeepCount respects cap and protected prefix" {
+    const allocator = std.testing.allocator;
+    var client = NIMClient.initWithBaseUrl(allocator, "k", "m", "http://127.0.0.1:1");
+    defer client.deinit();
+    client.max_tokens = 64;
+
+    var sys = types.Message{ .role = .system, .content = try testPad(allocator, 120) };
+    defer sys.deinit(allocator);
+    const old_pad = try testPad(allocator, 400);
+    defer allocator.free(old_pad);
+    var old = try trim_test_message.userMessage(allocator, old_pad);
+    defer old.deinit(allocator);
+    var user = try trim_test_message.userMessage(allocator, "current");
+    defer user.deinit(allocator);
+    const drop_pad = try testPad(allocator, 8000);
+    defer allocator.free(drop_pad);
+    var drop = try trim_test_message.assistantMessage(allocator, drop_pad);
+    defer drop.deinit(allocator);
+
+    var msgs = [_]types.Message{ sys, old, user, drop };
+    const cap: usize = 1800;
+    const msgs_slice: []types.Message = &msgs;
+    const keep = try client.trimMessageKeepCount(msgs_slice, null, cap);
+    const body = try client.buildChatRequestBody(msgs[0..keep], null);
+    defer allocator.free(body);
+    try std.testing.expect(keep >= 3);
+    try std.testing.expect(body.len <= cap);
+    try std.testing.expectEqual(@as(usize, 3), keep);
+}
+
+test "trimMessageKeepCount sends protected prefix as-is when alone over cap" {
+    const allocator = std.testing.allocator;
+    var client = NIMClient.initWithBaseUrl(allocator, "k", "m", "http://127.0.0.1:1");
+    defer client.deinit();
+    client.max_tokens = 16;
+    var sys = types.Message{ .role = .system, .content = try testPad(allocator, 500) };
+    defer sys.deinit(allocator);
+    const user_pad = try testPad(allocator, 500);
+    defer allocator.free(user_pad);
+    var user = try trim_test_message.userMessage(allocator, user_pad);
+    defer user.deinit(allocator);
+    var msgs = [_]types.Message{ sys, user };
+    const msgs_slice: []types.Message = &msgs;
+    const keep = try client.trimMessageKeepCount(msgs_slice, null, 256);
+    try std.testing.expectEqual(msgs.len, keep);
+    const body = try client.buildChatRequestBody(&msgs, null);
+    defer allocator.free(body);
+    try std.testing.expect(body.len > 256);
+}
+
+test "trimMessageKeepCount drops tool call unit together" {
+    const allocator = std.testing.allocator;
+    var client = NIMClient.initWithBaseUrl(allocator, "k", "m", "http://127.0.0.1:1");
+    defer client.deinit();
+    client.max_tokens = 32;
+    var user = try trim_test_message.userMessage(allocator, "q");
+    defer user.deinit(allocator);
+    var asst = try trim_test_message.assistantMessage(allocator, "");
+    defer asst.deinit(allocator);
+    const call_id = try allocator.dupe(u8, "tc1");
+    asst.tool_calls = try allocator.alloc(types.ToolCall, 1);
+    asst.tool_calls.?[0] = .{
+        .id = call_id,
+        .@"type" = try allocator.dupe(u8, "function"),
+        .function = .{
+            .name = try allocator.dupe(u8, "exec"),
+            .arguments = try allocator.dupe(u8, "{}"),
+        },
+    };
+    const tool_pad = try testPad(allocator, 6000);
+    defer allocator.free(tool_pad);
+    var tool = try trim_test_message.toolResultMessage(allocator, "tc1", tool_pad);
+    defer tool.deinit(allocator);
+    const tail_pad = try testPad(allocator, 6000);
+    defer allocator.free(tail_pad);
+    var tail = try trim_test_message.assistantMessage(allocator, tail_pad);
+    defer tail.deinit(allocator);
+    var msgs = [_]types.Message{ user, asst, tool, tail };
+    const msgs_slice: []types.Message = &msgs;
+    const keep = try client.trimMessageKeepCount(msgs_slice, null, 2048);
+    try std.testing.expectEqual(@as(usize, 1), keep);
+    const body = try client.buildChatRequestBody(msgs[0..keep], null);
+    defer allocator.free(body);
+    try std.testing.expect(body.len <= 2048);
 }

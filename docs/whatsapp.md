@@ -10,7 +10,9 @@ On disconnect, the native client reconnects with exponential backoff (2s, cap 60
 
 ## Replay
 
-`~/.zeptoclaw/sessions/whatsapp/gateway-inbound-ledger.json`:
+Pending turns replay on `connected` with a 600 s age rule (`pending.zig:REPLAY_MAX_AGE_S`): a row with missing/future `at` or `now-at >= 600` is deleted and the model is not called; a young row runs single-flight per id and is acked only after a produced reply is sent. A skipped row is not written to the seen ledger, so a later live redelivery can still be answered.
+
+Live-inbound dedup uses `~/.zeptoclaw/sessions/whatsapp/gateway-inbound-ledger.json`:
 
 - wire message ids in `seen` / `sent`
 - Fingerprint `chatId|fromMe|collapsed-body` with a 3 minute skip window in `isReplay`, but only for non-empty text. Caption-less media, reactions, and revokes are keyed by wire id so they do not collide.
