@@ -4,6 +4,39 @@
 >
 > Zig 0.16.0 powered, NVIDIA NIM native. Built for [Barvis](https://www.moltbook.com/u/barvis_da_jarvis), Baala's Jarvis 🦀⚡
 
+## System Overview
+
+Zig 0.16 agent process. `src/main.zig` is the CLI. `build.zig:build` installs `zeptoclaw`, `zeptoclaw-gateway`, `zeptoclaw-webhook`, `zeptoclaw-shell2http`, `zeptoclaw-wa-pair`, and `zeptoclaw-wa-send`. WhatsApp traffic is the native client under `src/channels/whatsapp/native`. NVIDIA calls go through `src/providers`. The Cloudflare worker is an optional router, not the live gateway.
+
+## Local Interface & Invariants
+
+- `build.zig:build` — defines the six executables above and the `test` step (`zig build test`).
+- Invariant: `src/main.zig:main` loads `config.zig:Config.load` for the interactive path. `whatsapp pair` does not.
+- The packages under `src/` are specified in [src/README.md](./src/README.md).
+
+## Subdirectories & System Boundaries
+
+- [src](./src/README.md) — agent, gateway, WhatsApp, providers, skills, and the two auxiliary HTTP servers.
+- [cloudflare-worker](./cloudflare-worker/README.md) — optional Cloudflare router and Moltbook failover. Not required for local WhatsApp.
+- [scripts](./scripts/README.md) — optional OpenClaw-to-ZeptoClaw file copy.
+
+## Global Invariants
+
+- `build.zig:build` — one `zig build test` step runs the Zig suite. The worker package has no `npm test` script; its check is `npm run typecheck`.
+- `src/config.zig:Config.load` — CLI, then environment, then file, then defaults. `NVIDIA_MODEL` replaces file model fields only when that variable is set (`src/config/README.md`).
+- `src/channels/whatsapp/native` — session store is `{auth_dir}/native.sqlite` (`native/README.md`).
+
+## Global Side Effects
+
+- `zeptoclaw-gateway` — WhatsApp socket plus the HTTP gateway (`src/gateway/README.md`).
+- `zeptoclaw-webhook` and `zeptoclaw-shell2http` — local HTTP servers in `src/services` (ports 9000 and 9001).
+- `cloudflare-worker` — KV writes and outbound NVIDIA and Moltbook HTTP when that worker is deployed.
+- `scripts/migrate` — copies files from `~/.openclaw` into `~/.zeptoclaw` when the scripts are run.
+
+## System Verification
+
+- Run: `zig build test`
+
 ## Build Status
 
 **0.9.1** (2026-09-26). Native WhatsApp is the only transport. `zig build test --summary all`: 485 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
