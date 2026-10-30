@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.9.2 - 2026-10-31
+
+Seven defects fixed in one binary (design: `docs/designs/seven-open-defects-design.md`, PR #17):
+
+- **Stale replay (#1):** pending-turn rows are stamped with `at` (unix seconds, written once, preserved across rewrites, ignored by older binaries). Replay skips rows that are missing/future/≥600 s old (row deleted, model never called), runs young rows single-flight per id, and acks only after a produced reply is sent. Skipped rows are not written to the seen ledger.
+- **Single permanent budget (#2):** one budget of 3 per text turn, owned by `NIMClient.chatWithTools`; the agent loop and the WhatsApp turn handler no longer multiply it (worst case was 27 model calls). Transient errors (timeout/429/5xx/network) still retry unbounded and observe shutdown.
+- **Request body cap (#3):** the serialized request is trimmed in memory to 32768 bytes before POST; a tool call is dropped together with its results; the protected prefix (system + through the last user message) is kept even if alone over the cap.
+- **Fast SIGTERM (#4):** `sigHandler` calls `server.stop()` (closes the listener), `whatsapp.requestStop()`, and `nim.setShutdown()`; accept, the WhatsApp reader, reconnect backoff, and model waits all return within 5 s.
+- **Banner (#5):** startup banner prints tokens as configured (redacted), never the values.
+- **Vision env (#15):** `NVIDIA_VISION_MODEL` overrides only the vision model, on its own gate.
+- **Model restore (#16):** `chatWithTools` restores the constructed model on every return path, including a first-attempt 401.
+
+Also: webhook token comparison is now constant-time (`constantTimeEql`).
+
 ## 0.9.1 - 2026-09-26
 
 ### Fixed

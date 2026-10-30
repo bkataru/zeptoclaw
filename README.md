@@ -39,7 +39,7 @@ Zig 0.16 agent process. `src/main.zig` is the CLI. `build.zig:build` installs `z
 
 ## Build Status
 
-**0.9.1** (2026-09-26). Native WhatsApp is the only transport. `zig build test --summary all`: 485 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0.
+**0.9.2** (2026-10-31). Native WhatsApp is the only transport. `zig build test --summary all`: 503 pass, 3 skip without `NVIDIA_API_KEY`. Zig 0.16.0. Seven-defect fix pass: replay age rule + single-flight, single permanent budget, 32 KB request cap, fast SIGTERM, redacted banner, vision env gate, model restore (see CHANGELOG).
 
 ## Recent Updates
 
