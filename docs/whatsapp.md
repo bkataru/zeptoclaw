@@ -10,7 +10,7 @@ On disconnect, the native client reconnects with exponential backoff (2s, cap 60
 
 ## Replay
 
-`~/.zeptoclaw/sessions/whatsapp/inbound-ledger.json`:
+`~/.zeptoclaw/sessions/whatsapp/gateway-inbound-ledger.json`:
 
 - wire message ids in `seen` / `sent`
 - Fingerprint `chatId|fromMe|collapsed-body` with a 3 minute skip window in `isReplay`, but only for non-empty text. Caption-less media, reactions, and revokes are keyed by wire id so they do not collide.
